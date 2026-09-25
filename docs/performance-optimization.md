@@ -5,6 +5,7 @@ The tool runs with parallel execution enabled by default. This page covers what 
 ## Table of Contents
 
 - [Default behaviour](#default-behaviour)
+- [How workers are used](#how-workers-are-used)
 - [Tuning flags](#tuning-flags)
   - [Speed it up](#speed-it-up)
   - [Slow it down (rate-limited accounts)](#slow-it-down-rate-limited-accounts)
@@ -29,16 +30,36 @@ Expected wall-clock times:
 
 ---
 
+## How workers are used
+
+More workers only help in the check phase, and only up to the batch size:
+
+- **Checks** run in batches of `--batch-size` (default 10). A batch must finish before the next
+  one starts, so at most `min(--max-workers, --batch-size)` checks run at once, and each batch
+  waits for its slowest check. Raise both flags together; `--max-workers 16` on its own still runs
+  10 checks at a time.
+- **Instance analysis** runs one thread per instance; the analyzers for an instance run one after
+  another. Assessing one or two instances uses one or two threads here regardless of
+  `--max-workers`.
+- **Caller Journey Mapping** runs after the checks, one instance at a time, outside the worker
+  pool.
+- **Amazon Connect API quotas** are the real ceiling. Many Connect `List*`/`Describe*` APIs allow
+  only a few requests per second per account, so past a point more concurrency just produces
+  throttling and retry backoff, which makes the run slower. Run with `--verbose` and back off if
+  you see throttling warnings.
+
+In practice the biggest savings come from doing less work (`--skip-flow-analysis`,
+`--instance-id`, `--pillars`), not from more workers.
+
+---
+
 ## Tuning flags
 
 ### Speed it up
 
 ```bash
-# More workers (default: auto)
---max-workers 16
-
-# Larger batch size (default: 10)
---batch-size 20
+# More concurrent checks: raise both (concurrency = min of the two)
+--max-workers 16 --batch-size 32
 
 # Skip the 23 contact-flow content checks and ContactFlowAnalyzer API calls
 --skip-flow-analysis
@@ -58,7 +79,8 @@ amazon-connect-assessment \
   --pillars security resilience \
   --severity critical high \
   --skip-flow-analysis \
-  --max-workers 16
+  --max-workers 16 \
+  --batch-size 32
 ```
 
 ### Slow it down (rate-limited accounts)

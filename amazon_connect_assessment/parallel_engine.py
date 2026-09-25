@@ -11,7 +11,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Dict, List, Optional
 
@@ -370,7 +370,7 @@ class ParallelAssessmentEngine(AssessmentEngine):
         journey_map_entries, journey_map_status = self._compute_journey_map([])
         return AssessmentResult(
             assessment_id=assessment_id,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             account_id=account_id or "unknown",
             region=region or "unknown",
             instances=[],
@@ -420,7 +420,7 @@ class ParallelAssessmentEngine(AssessmentEngine):
 
         return AssessmentResult(
             assessment_id=assessment_id,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             account_id=account_id,
             region=region,
             instances=instances,

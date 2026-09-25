@@ -294,4 +294,11 @@ def generate_journey_findings(
             )
         )
 
+    # Per-number findings use the phone number as resource_id, so record the
+    # owning instance for reports to group and filter them by instance.
+    if instance_id:
+        for finding in findings:
+            if finding.resource_type == "PhoneNumberJourney":
+                finding.evidence["instance_id"] = instance_id
+
     return findings

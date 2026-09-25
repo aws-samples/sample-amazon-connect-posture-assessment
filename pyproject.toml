@@ -71,9 +71,8 @@ include = ["amazon_connect_assessment*"]
 [tool.setuptools.package-data]
 amazon_connect_assessment = [
     "templates/html/*.html",
-    "templates/html/partials/*.html",
-    "templates/css/*.css",
-    "templates/js/*.js",
+    "templates/app/*.js",
+    "templates/app/*.css",
     "templates/assets/*.svg",
 ]
 

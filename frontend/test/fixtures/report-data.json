@@ -1,0 +1,542 @@
+{
+  "schema_version": 1,
+  "title": "Amazon Connect Assessment Report",
+  "generated_at": "2026-01-15 10:05:00 UTC",
+  "assessment": {
+    "id": "contract-fixture",
+    "account_id": "111122223333",
+    "region": "us-east-1",
+    "timestamp": "2026-01-15 10:00:00 UTC"
+  },
+  "metadata": {
+    "tool_version": "1.0.0",
+    "execution_time": "12.5s",
+    "execution_environment": "CI",
+    "python_version": "3.12"
+  },
+  "summary": {
+    "total_checks": 2,
+    "passed_checks": 1,
+    "failed_checks": 1,
+    "error_checks": 0,
+    "skipped_checks": 0,
+    "critical_findings": 1,
+    "high_findings": 0,
+    "medium_findings": 0,
+    "low_findings": 0,
+    "not_applicable_checks": 0,
+    "registered_checks": null,
+    "journey_findings": 0
+  },
+  "stats": {
+    "total_checks": 2,
+    "registered_checks": 2,
+    "journey_findings": 0,
+    "pass_rate": 50.0,
+    "risk_score": 100,
+    "status_breakdown": {
+      "passed": 1,
+      "failed": 1,
+      "error": 0,
+      "skipped": 0,
+      "not_applicable": 0
+    },
+    "severity_breakdown": {
+      "critical": 1,
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "pillar_issues": {
+      "resilience": 0,
+      "security": 1,
+      "cost_optimization": 0,
+      "operational_excellence": 0,
+      "performance_efficiency": 0
+    },
+    "instances_assessed": 1,
+    "execution_time": 12.5,
+    "has_critical_issues": true,
+    "has_high_issues": false
+  },
+  "insights": [
+    {
+      "type": "critical",
+      "message": "Found 1 critical security or compliance issues requiring immediate attention."
+    },
+    {
+      "type": "warning",
+      "message": "Compliance rate of 50.0% indicates significant configuration issues need attention."
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": "critical",
+      "title": "Address Critical Security Issues",
+      "description": "Immediately review and remediate 1 critical findings to ensure security and compliance.",
+      "findings_count": 1
+    }
+  ],
+  "filters": {
+    "default_severity": "critical",
+    "default_status": "fail"
+  },
+  "pillars": [
+    {
+      "id": "resilience",
+      "label": "Resilience"
+    },
+    {
+      "id": "security",
+      "label": "Security"
+    },
+    {
+      "id": "cost_optimization",
+      "label": "Cost Optimization"
+    },
+    {
+      "id": "operational_excellence",
+      "label": "Operational Excellence"
+    },
+    {
+      "id": "performance_efficiency",
+      "label": "Performance Efficiency"
+    }
+  ],
+  "instances": [
+    {
+      "id": "i-0001",
+      "alias": "contact-center",
+      "display_name": "'contact-center' (i-0001)",
+      "status": "ACTIVE",
+      "identity_management_type": "SAML",
+      "inbound_calls_enabled": true,
+      "outbound_calls_enabled": false
+    }
+  ],
+  "findings": [
+    {
+      "key": "0",
+      "check_id": "RES-001",
+      "check_name": "Queues have overflow",
+      "pillar": "resilience",
+      "severity": "medium",
+      "status": "pass",
+      "resource_id": "i-0001",
+      "resource_type": "ConnectInstance",
+      "resource_label": "'contact-center' (i-0001)",
+      "instance": "contact-center",
+      "timestamp": "2026-01-15 10:00:00 UTC",
+      "description": "All queues overflow.",
+      "description_html": "<p>All queues overflow.</p>\n",
+      "remediation_html": "<p>None needed.</p>\n",
+      "structured_remediation": null,
+      "evidence": null,
+      "evidence_json": ""
+    },
+    {
+      "key": "1",
+      "check_id": "SEC-001",
+      "check_name": "Recordings use a customer-managed key",
+      "pillar": "security",
+      "severity": "critical",
+      "status": "fail",
+      "resource_id": "i-0001",
+      "resource_type": "ConnectInstance",
+      "resource_label": "'contact-center' (i-0001)",
+      "instance": "contact-center",
+      "timestamp": "2026-01-15 10:00:00 UTC",
+      "description": "Recordings use **SSE-S3**.",
+      "description_html": "<p>Recordings use <strong>SSE-S3</strong>.</p>\n",
+      "remediation_html": "",
+      "structured_remediation": {
+        "summary": "Use a customer-managed key",
+        "steps": [
+          {
+            "order": 1,
+            "instruction_html": "<p>Create a key</p>\n",
+            "command": "aws kms create-key",
+            "console_path": null
+          }
+        ],
+        "target_resources": [
+          "recordings"
+        ],
+        "references": [
+          {
+            "title": "Docs",
+            "url": "https://docs.aws.amazon.com/"
+          }
+        ],
+        "applies_if": "Recordings are enabled"
+      },
+      "evidence": {
+        "pairs": [
+          {
+            "label": "Compliant",
+            "value": {
+              "text": "false",
+              "kind": "bool"
+            }
+          }
+        ],
+        "tables": [
+          {
+            "title": "Buckets",
+            "columns": [
+              "Name",
+              "Arn"
+            ],
+            "rows": [
+              [
+                {
+                  "text": "recordings",
+                  "kind": "text"
+                },
+                {
+                  "text": "s3:recordings",
+                  "full": "arn:aws:s3:::recordings",
+                  "kind": "arn"
+                }
+              ]
+            ]
+          }
+        ],
+        "lists": [
+          {
+            "title": "Queues",
+            "items": [
+              {
+                "text": "general",
+                "kind": "text"
+              }
+            ]
+          }
+        ],
+        "sections": [
+          {
+            "title": "Limits",
+            "block": {
+              "pairs": [
+                {
+                  "label": "Checked",
+                  "value": {
+                    "text": "3",
+                    "kind": "number"
+                  }
+                }
+              ],
+              "tables": [],
+              "lists": [],
+              "sections": []
+            }
+          }
+        ]
+      },
+      "evidence_json": "{\n  \"compliant\": false,\n  \"buckets\": [\n    {\n      \"name\": \"recordings\",\n      \"arn\": \"arn:aws:s3:::recordings\"\n    }\n  ],\n  \"limits\": {\n    \"checked\": 3\n  },\n  \"queues\": [\n    \"general\"\n  ]\n}"
+    }
+  ],
+  "journey": {
+    "entries": [
+      {
+        "instance_id": "i-0001",
+        "instance_display_name": "'contact-center' (i-0001)",
+        "phone_number": "+18005550100",
+        "phone_type": "TOLL_FREE",
+        "phone_country_code": "US",
+        "phone_description": "Main line",
+        "flow_id": "flow-main",
+        "flow_name": "Main IVR",
+        "flow_type": "CONTACT_FLOW",
+        "diagram_model": {
+          "nodes": {
+            "n0": {
+              "title": "Plays: \"Welcome\"",
+              "category": "speaks",
+              "summary": "",
+              "scope": [
+                "Plays a prompt to the caller using inline static text.",
+                "Synthesizes the prompt with Amazon Polly using the flow's active voice settings.",
+                "Prompt: \"Welcome\""
+              ],
+              "ai": {},
+              "is_group": false,
+              "is_entry": true,
+              "is_primary": true,
+              "actions": [
+                {
+                  "id": "greet",
+                  "type": "MessageParticipant",
+                  "detail": "Plays: \"Welcome\""
+                }
+              ],
+              "absorbed_outcomes": []
+            },
+            "n1": {
+              "title": "Asks: \"Press 1 for sales\"",
+              "category": "chooses",
+              "summary": "",
+              "scope": [
+                "Prompts the caller before collecting input using inline static text.",
+                "Synthesizes the prompt with Amazon Polly using the flow's active voice settings.",
+                "Prompt: \"Press 1 for sales\"",
+                "Waits for a spoken response or keypad input from the caller.",
+                "Routes 1 to Waits for an agent."
+              ],
+              "ai": {},
+              "is_group": false,
+              "is_entry": false,
+              "is_primary": true,
+              "actions": [
+                {
+                  "id": "menu",
+                  "type": "GetParticipantInput",
+                  "detail": "Asks: \"Press 1 for sales\""
+                }
+              ],
+              "absorbed_outcomes": []
+            },
+            "n2": {
+              "title": "Waits for an agent",
+              "category": "waits",
+              "summary": "",
+              "scope": [
+                "Transfers the caller to the configured queue to wait for an available agent.",
+                "Uses a separate configured route when the queue is at capacity."
+              ],
+              "ai": {},
+              "is_group": false,
+              "is_entry": false,
+              "is_primary": false,
+              "actions": [
+                {
+                  "id": "queue",
+                  "type": "TransferContactToQueue",
+                  "detail": "Waits for an agent"
+                }
+              ],
+              "absorbed_outcomes": []
+            },
+            "n3": {
+              "title": "Call ends",
+              "category": "terminal",
+              "summary": "",
+              "scope": [
+                "Disconnects the voice contact; no further flow actions run for the caller."
+              ],
+              "ai": {},
+              "is_group": false,
+              "is_entry": false,
+              "is_primary": true,
+              "actions": [
+                {
+                  "id": "end",
+                  "type": "DisconnectParticipant",
+                  "detail": "Call ends"
+                }
+              ],
+              "absorbed_outcomes": []
+            }
+          },
+          "edges": {
+            "e0": {
+              "title": "Continue",
+              "source": "n0",
+              "target": "n1",
+              "route_type": "normal",
+              "summary": "",
+              "is_primary": true,
+              "is_feedback": false,
+              "outcomes": [
+                {
+                  "label": "Continue",
+                  "raw_label": "Default",
+                  "route_type": "normal",
+                  "transition_type": "default",
+                  "meaning": ""
+                }
+              ]
+            },
+            "e1": {
+              "title": "Continue",
+              "source": "n1",
+              "target": "n3",
+              "route_type": "normal",
+              "summary": "The caller did not respond before the input timer expired.",
+              "is_primary": true,
+              "is_feedback": false,
+              "outcomes": [
+                {
+                  "label": "Continue",
+                  "raw_label": "Default",
+                  "route_type": "normal",
+                  "transition_type": "default",
+                  "meaning": ""
+                },
+                {
+                  "label": "No response",
+                  "raw_label": "InputTimeLimitExceeded",
+                  "route_type": "fallback",
+                  "transition_type": "error",
+                  "meaning": "The caller did not respond before the input timer expired."
+                }
+              ]
+            },
+            "e2": {
+              "title": "1",
+              "source": "n1",
+              "target": "n2",
+              "route_type": "normal",
+              "summary": "This route is taken when the configured condition matches 1.",
+              "is_primary": false,
+              "is_feedback": false,
+              "outcomes": [
+                {
+                  "label": "1",
+                  "raw_label": "{'Operator': 'Equals', 'Operands': ['1']}",
+                  "route_type": "normal",
+                  "transition_type": "condition",
+                  "meaning": "This route is taken when the configured condition matches 1."
+                }
+              ]
+            },
+            "e3": {
+              "title": "Queue full",
+              "source": "n2",
+              "target": "n3",
+              "route_type": "exception",
+              "summary": "The destination queue cannot accept another contact.",
+              "is_primary": false,
+              "is_feedback": false,
+              "outcomes": [
+                {
+                  "label": "Queue full",
+                  "raw_label": "QueueAtCapacity",
+                  "route_type": "exception",
+                  "transition_type": "error",
+                  "meaning": "The destination queue cannot accept another contact."
+                }
+              ]
+            }
+          },
+          "primary_path": [
+            "n0",
+            "n1",
+            "n3"
+          ],
+          "original_action_count": 4,
+          "displayed_step_count": 4,
+          "layout": {
+            "canvas": {
+              "width": 1068,
+              "height": 252
+            },
+            "node_size": {
+              "width": 210,
+              "height": 72
+            },
+            "positions": {
+              "n0": {
+                "x": 24,
+                "y": 156
+              },
+              "n1": {
+                "x": 294,
+                "y": 156
+              },
+              "n2": {
+                "x": 564,
+                "y": 24
+              },
+              "n3": {
+                "x": 834,
+                "y": 156
+              }
+            },
+            "connectors": {
+              "e0": {
+                "paths": [
+                  "M 234 192.0 H 294"
+                ],
+                "arrow": "M 294 192.0 L 286 187.0 L 286 197.0 Z",
+                "is_back": false,
+                "is_jump": false
+              },
+              "e1": {
+                "paths": [
+                  "M 504 192.0 H 834"
+                ],
+                "arrow": "M 834 192.0 L 826 187.0 L 826 197.0 Z",
+                "is_back": false,
+                "is_jump": false
+              },
+              "e2": {
+                "paths": [
+                  "M 504 192.0 H 534.0 V 60.0 H 564"
+                ],
+                "arrow": "M 564 60.0 L 556 55.0 L 556 65.0 Z",
+                "is_back": false,
+                "is_jump": false
+              },
+              "e3": {
+                "paths": [
+                  "M 774 60.0 H 804.0 V 192.0 H 834"
+                ],
+                "arrow": "M 834 192.0 L 826 187.0 L 826 197.0 Z",
+                "is_back": false,
+                "is_jump": false
+              }
+            },
+            "labels": {
+              "e0": {
+                "x": 264.0,
+                "y": 156,
+                "text": "›",
+                "tooltip": "The condition under which this transition is taken."
+              },
+              "e1": {
+                "x": 669.0,
+                "y": 156,
+                "text": "›",
+                "tooltip": "The condition under which this transition is taken."
+              },
+              "e2": {
+                "x": 534.0,
+                "y": 24,
+                "text": "1",
+                "tooltip": "A branch defined on this action for a specific caller response (a key press, a recognized value, or an attribute comparison) — this is the exact label the flow's author gave that branch."
+              },
+              "e3": {
+                "x": 804.0,
+                "y": 156,
+                "text": "Queue full",
+                "tooltip": "Taken when the destination queue has already reached its maximum contacts-in-queue limit, so Amazon Connect routes the contact down this branch instead of adding it to the queue."
+              }
+            }
+          }
+        },
+        "exports": {
+          "schema_version": 1,
+          "formats": {
+            "svg": {
+              "content": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1068\" height=\"252\" viewBox=\"0 0 1068 252\" font-family=\"'Open Sans', 'Helvetica Neue', Roboto, Arial, sans-serif\"><style>.jm-connector,.jm-connector-back{fill:none;stroke:#424650;stroke-width:1.75;}.jm-connector-head,.jm-connector-back-head{fill:#424650;stroke:none;}.jm-connector-fallback,.jm-connector-fallback.jm-connector-back{fill:none;stroke:#855900;stroke-width:1.75;stroke-dasharray:6 4;}.jm-connector-fallback-head{fill:#855900;stroke:none;}.jm-connector-error,.jm-connector-error.jm-connector-back{fill:none;stroke:#db0000;stroke-width:1.75;stroke-dasharray:6 4;}.jm-connector-error-head,.jm-connector-error.jm-connector-back-head{fill:#db0000;}</style><rect x=\"0\" y=\"0\" width=\"1068\" height=\"252\" fill=\"#ffffff\" /><path class=\"jm-connector jm-connector-primary\" d=\"M 234 192.0 H 294\" /><path class=\"jm-connector-head jm-connector-primary-head\" d=\"M 294 192.0 L 286 187.0 L 286 197.0 Z\" /><path class=\"jm-connector jm-connector-primary\" d=\"M 504 192.0 H 834\" /><path class=\"jm-connector-head jm-connector-primary-head\" d=\"M 834 192.0 L 826 187.0 L 826 197.0 Z\" /><path class=\"jm-connector\" d=\"M 504 192.0 H 534.0 V 60.0 H 564\" /><path class=\"jm-connector-head\" d=\"M 564 60.0 L 556 55.0 L 556 65.0 Z\" /><path class=\"jm-connector-error\" d=\"M 774 60.0 H 804.0 V 192.0 H 834\" /><path class=\"jm-connector-error-head\" d=\"M 834 192.0 L 826 187.0 L 826 197.0 Z\" /><rect x=\"514.0\" y=\"2\" width=\"40\" height=\"18\" rx=\"9\" ry=\"9\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><text x=\"534.0\" y=\"15\" font-size=\"11\" font-weight=\"600\" text-anchor=\"middle\" fill=\"#424650\">1</text><rect x=\"758.5\" y=\"134\" width=\"91.0\" height=\"18\" rx=\"9\" ry=\"9\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><text x=\"804.0\" y=\"147\" font-size=\"11\" font-weight=\"600\" text-anchor=\"middle\" fill=\"#424650\">Queue full</text><rect x=\"24\" y=\"156\" width=\"210\" height=\"72\" rx=\"6\" ry=\"6\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><rect x=\"24\" y=\"156\" width=\"4\" height=\"72\" fill=\"#688ae8\" /><rect x=\"22\" y=\"154\" width=\"214\" height=\"76\" rx=\"8\" ry=\"8\" fill=\"none\" stroke=\"#006ce0\" stroke-width=\"2\" /><text x=\"36\" y=\"178\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.5\" fill=\"#688ae8\">Caller hears</text><text x=\"36\" y=\"194\" font-size=\"13\" font-weight=\"500\" fill=\"#0f141a\">Plays: &quot;Welcome&quot;</text><rect x=\"294\" y=\"156\" width=\"210\" height=\"72\" rx=\"6\" ry=\"6\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><rect x=\"294\" y=\"156\" width=\"4\" height=\"72\" fill=\"#8456ce\" /><text x=\"306\" y=\"178\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.5\" fill=\"#8456ce\">Caller chooses</text><text x=\"306\" y=\"194\" font-size=\"13\" font-weight=\"500\" fill=\"#0f141a\">Asks: &quot;Press 1 for sales&quot;</text><rect x=\"564\" y=\"24\" width=\"210\" height=\"72\" rx=\"6\" ry=\"6\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><rect x=\"564\" y=\"24\" width=\"4\" height=\"72\" fill=\"#e07941\" /><text x=\"576\" y=\"46\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.5\" fill=\"#e07941\">Caller waits</text><text x=\"576\" y=\"62\" font-size=\"13\" font-weight=\"500\" fill=\"#0f141a\">Waits for an agent</text><rect x=\"834\" y=\"156\" width=\"210\" height=\"72\" rx=\"6\" ry=\"6\" fill=\"#ffffff\" stroke=\"#c6c6cd\" stroke-width=\"1\" /><rect x=\"834\" y=\"156\" width=\"4\" height=\"72\" fill=\"#8c8c94\" /><text x=\"846\" y=\"178\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.5\" fill=\"#8c8c94\">Call ends</text><text x=\"846\" y=\"194\" font-size=\"13\" font-weight=\"500\" fill=\"#0f141a\">Call ends</text></svg>",
+              "media_type": "image/svg+xml;charset=utf-8",
+              "width": 1068,
+              "height": 252
+            },
+            "drawio": {
+              "content": "<mxfile host=\"app.diagrams.net\" type=\"device\" compressed=\"false\"><diagram id=\"caller-journey\" name=\"Caller Journey - Main IVR\"><mxGraphModel dx=\"1068\" dy=\"252\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"0\" pageScale=\"1\" math=\"0\" shadow=\"0\"><root><mxCell id=\"0\" /><mxCell id=\"1\" parent=\"0\" /><mxCell id=\"node-n0\" value=\"Plays: &quot;Welcome&quot;\" style=\"rounded=1;whiteSpace=wrap;html=0;align=left;verticalAlign=middle;spacingLeft=12;spacingRight=8;fontSize=13;fontStyle=0;fillColor=#ffffff;strokeColor=#006ce0;strokeWidth=2;fontColor=#0f141a;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"24\" y=\"156\" width=\"210\" height=\"72\" as=\"geometry\" /></mxCell><mxCell id=\"node-n1\" value=\"Asks: &quot;Press 1 for sales&quot;\" style=\"rounded=1;whiteSpace=wrap;html=0;align=left;verticalAlign=middle;spacingLeft=12;spacingRight=8;fontSize=13;fontStyle=0;fillColor=#ffffff;strokeColor=#c6c6cd;strokeWidth=1;fontColor=#0f141a;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"294\" y=\"156\" width=\"210\" height=\"72\" as=\"geometry\" /></mxCell><mxCell id=\"node-n2\" value=\"Waits for an agent\" style=\"rounded=1;whiteSpace=wrap;html=0;align=left;verticalAlign=middle;spacingLeft=12;spacingRight=8;fontSize=13;fontStyle=0;fillColor=#ffffff;strokeColor=#c6c6cd;strokeWidth=1;fontColor=#0f141a;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"564\" y=\"24\" width=\"210\" height=\"72\" as=\"geometry\" /></mxCell><mxCell id=\"node-n3\" value=\"Call ends\" style=\"rounded=1;whiteSpace=wrap;html=0;align=left;verticalAlign=middle;spacingLeft=12;spacingRight=8;fontSize=13;fontStyle=0;fillColor=#ffffff;strokeColor=#c6c6cd;strokeWidth=1;fontColor=#0f141a;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"834\" y=\"156\" width=\"210\" height=\"72\" as=\"geometry\" /></mxCell><mxCell id=\"edge-e0\" value=\"\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#424650;strokeWidth=2;dashed=0;dashPattern=;\" edge=\"1\" parent=\"1\" source=\"node-n0\" target=\"node-n1\"><mxGeometry relative=\"1\" as=\"geometry\" /></mxCell><mxCell id=\"edge-e1\" value=\"\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#424650;strokeWidth=2;dashed=0;dashPattern=;\" edge=\"1\" parent=\"1\" source=\"node-n1\" target=\"node-n3\"><mxGeometry relative=\"1\" as=\"geometry\" /></mxCell><mxCell id=\"edge-e2\" value=\"1\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#424650;strokeWidth=1.75;dashed=0;dashPattern=;\" edge=\"1\" parent=\"1\" source=\"node-n1\" target=\"node-n2\"><mxGeometry relative=\"1\" as=\"geometry\"><Array as=\"points\"><mxPoint x=\"534\" y=\"192\" /><mxPoint x=\"534\" y=\"60\" /></Array></mxGeometry></mxCell><mxCell id=\"edge-e3\" value=\"Queue full\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#db0000;strokeWidth=1.75;dashed=1;dashPattern=6 4;\" edge=\"1\" parent=\"1\" source=\"node-n2\" target=\"node-n3\"><mxGeometry relative=\"1\" as=\"geometry\"><Array as=\"points\"><mxPoint x=\"804\" y=\"60\" /><mxPoint x=\"804\" y=\"192\" /></Array></mxGeometry></mxCell></root></mxGraphModel></diagram></mxfile>",
+              "media_type": "application/vnd.jgraph.mxfile;charset=utf-8"
+            }
+          }
+        }
+      }
+    ],
+    "status": null
+  },
+  "execution_errors": [
+    "Throttled calling ListQueues"
+  ],
+  "raw_data": null,
+  "service_icon": "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iODBweCIgaGVpZ2h0PSI4MHB4IiB2aWV3Qm94PSIwIDAgODAgODAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SWNvbi1BcmNoaXRlY3R1cmUvNjQvQXJjaF9BbWF6b24tQ29ubmVjdF82NDwvdGl0bGU+CiAgICA8ZGVmcz4KICAgICAgICA8bGluZWFyR3JhZGllbnQgeDE9IjAlIiB5MT0iMTAwJSIgeDI9IjEwMCUiIHkyPSIwJSIgaWQ9ImxpbmVhckdyYWRpZW50LTEiPgogICAgICAgICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjQkQwODE2IiBvZmZzZXQ9IjAlIj48L3N0b3A+CiAgICAgICAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiNGRjUyNTIiIG9mZnNldD0iMTAwJSI+PC9zdG9wPgogICAgICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8L2RlZnM+CiAgICA8ZyBpZD0iSWNvbi1BcmNoaXRlY3R1cmUvNjQvQXJjaF9BbWF6b24tQ29ubmVjdF82NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9IlJlY3RhbmdsZSIgZmlsbD0idXJsKCNsaW5lYXJHcmFkaWVudC0xKSI+CiAgICAgICAgICAgIDxyZWN0IHg9IjAiIHk9IjAiIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PC9yZWN0PgogICAgICAgIDwvZz4KICAgICAgICA8cGF0aCBkPSJNNTIuMjc4LDM2LjQ2Mjk5MjggQzUxLjE3NSwzNi40NjI5OTI4IDUwLjI3OCwzNS41NjgxMjUgNTAuMjc4LDM0LjQ2Nzc0NjcgQzUwLjI3OCwzMy4zNjczNjg1IDUxLjE3NSwzMi40NzI1MDA3IDUyLjI3OCwzMi40NzI1MDA3IEM1My4zODEsMzIuNDcyNTAwNyA1NC4yNzgsMzMuMzY3MzY4NSA1NC4yNzgsMzQuNDY3NzQ2NyBDNTQuMjc4LDM1LjU2ODEyNSA1My4zODEsMzYuNDYyOTkyOCA1Mi4yNzgsMzYuNDYyOTkyOCBNNDMuMjc4LDQ2LjQzOTIyMzMgQzQyLjE3NSw0Ni40MzkyMjMzIDQxLjI3OCw0NS41NDQzNTU0IDQxLjI3OCw0NC40NDM5NzcyIEM0MS4yNzgsNDMuMzQzNTk5IDQyLjE3NSw0Mi40NDg3MzExIDQzLjI3OCw0Mi40NDg3MzExIEM0NC4zODEsNDIuNDQ4NzMxMSA0NS4yNzgsNDMuMzQzNTk5IDQ1LjI3OCw0NC40NDM5NzcyIEM0NS4yNzgsNDUuNTQ0MzU1NCA0NC4zODEsNDYuNDM5MjIzMyA0My4yNzgsNDYuNDM5MjIzMyBNMzUuMjc4LDM0LjQ2Nzc0NjcgQzM0LjE3NSwzNC40Njc3NDY3IDMzLjI3OCwzMy41NzI4Nzg5IDMzLjI3OCwzMi40NzI1MDA3IEMzMy4yNzgsMzEuMzcyMTIyNCAzNC4xNzUsMzAuNDc3MjU0NiAzNS4yNzgsMzAuNDc3MjU0NiBDMzYuMzgxLDMwLjQ3NzI1NDYgMzcuMjc4LDMxLjM3MjEyMjQgMzcuMjc4LDMyLjQ3MjUwMDcgQzM3LjI3OCwzMy41NzI4Nzg5IDM2LjM4MSwzNC40Njc3NDY3IDM1LjI3OCwzNC40Njc3NDY3IE0yNS4yNzgsNDQuNDQzOTc3MiBDMjQuMTc1LDQ0LjQ0Mzk3NzIgMjMuMjc4LDQzLjU0OTEwOTMgMjMuMjc4LDQyLjQ0ODczMTEgQzIzLjI3OCw0MS4zNDgzNTI5IDI0LjE3NSw0MC40NTM0ODUgMjUuMjc4LDQwLjQ1MzQ4NSBDMjYuMzgxLDQwLjQ1MzQ4NSAyNy4yNzgsNDEuMzQ4MzUyOSAyNy4yNzgsNDIuNDQ4NzMxMSBDMjcuMjc4LDQzLjU0OTEwOTMgMjYuMzgxLDQ0LjQ0Mzk3NzIgMjUuMjc4LDQ0LjQ0Mzk3NzIgTTUyLjI3OCwzMC40NzcyNTQ2IEM1MC4wNzIsMzAuNDc3MjU0NiA0OC4yNzgsMzIuMjY2OTkwMyA0OC4yNzgsMzQuNDY3NzQ2NyBDNDguMjc4LDM1LjUyNTIyNzIgNDguNywzNi40ODE5NDc3IDQ5LjM3NiwzNy4xOTYyNDU4IEw0NS43NDEsNDEuMzIzNDEyMyBDNDUuMDYsNDAuNzg2NjkxMSA0NC4yMTIsNDAuNDUzNDg1IDQzLjI3OCw0MC40NTM0ODUgQzQyLjg3MSw0MC40NTM0ODUgNDIuNDg1LDQwLjUzMjI5NzIgNDIuMTE0LDQwLjY0NjAyNjMgTDM4LjM4MiwzNC45NTk1NzQ5IEMzOC45MzMsMzQuMjc1MjA1NSAzOS4yNzgsMzMuNDE3MjQ5NyAzOS4yNzgsMzIuNDcyNTAwNyBDMzkuMjc4LDMwLjI3MTc0NDIgMzcuNDg0LDI4LjQ4MjAwODUgMzUuMjc4LDI4LjQ4MjAwODUgQzMzLjA3MiwyOC40ODIwMDg1IDMxLjI3OCwzMC4yNzE3NDQyIDMxLjI3OCwzMi40NzI1MDA3IEMzMS4yNzgsMzMuMzQxNDMwMyAzMS41NjUsMzQuMTM5NTI4OCAzMi4wNCwzNC43OTU5NjQ3IEwyNy41OTYsMzkuMjA4NDUxNSBDMjYuOTQsMzguNzQwNTY2MiAyNi4xNDQsMzguNDU4MjM4OSAyNS4yNzgsMzguNDU4MjM4OSBDMjMuMDcyLDM4LjQ1ODIzODkgMjEuMjc4LDQwLjI0Nzk3NDcgMjEuMjc4LDQyLjQ0ODczMTEgQzIxLjI3OCw0NC42NDk0ODc1IDIzLjA3Miw0Ni40MzkyMjMzIDI1LjI3OCw0Ni40MzkyMjMzIEMyNy40ODQsNDYuNDM5MjIzMyAyOS4yNzgsNDQuNjQ5NDg3NSAyOS4yNzgsNDIuNDQ4NzMxMSBDMjkuMjc4LDQxLjgzODE4NTggMjkuMTI5LDQxLjI2NDU1MjUgMjguODgyLDQwLjc0Njc4NjIgTDMzLjU4NiwzNi4wNzQ5MTc1IEMzNC4xMDEsMzYuMzE3MzM5OSAzNC42NzEsMzYuNDYyOTkyOCAzNS4yNzgsMzYuNDYyOTkyOCBDMzUuODEsMzYuNDYyOTkyOCAzNi4zMTYsMzYuMzU0MjUxOSAzNi43ODIsMzYuMTY1NzAxMiBMNDAuNDAzLDQxLjY4MTU1OSBDMzkuNzEsNDIuMzk5ODQ3NiAzOS4yNzgsNDMuMzcwNTM0OCAzOS4yNzgsNDQuNDQzOTc3MiBDMzkuMjc4LDQ2LjY0NDczMzYgNDEuMDcyLDQ4LjQzNDQ2OTQgNDMuMjc4LDQ4LjQzNDQ2OTQgQzQ1LjQ4NCw0OC40MzQ0Njk0IDQ3LjI3OCw0Ni42NDQ3MzM2IDQ3LjI3OCw0NC40NDM5NzcyIEM0Ny4yNzgsNDMuOTEyMjQ0MSA0Ny4xNjksNDMuNDA1NDUxNiA0Ni45NzgsNDIuOTQxNTU2OSBMNTEuMDk5LDM4LjI2MTcwNzIgQzUxLjQ3NCwzOC4zNzc0MzE1IDUxLjg2NSwzOC40NTgyMzg5IDUyLjI3OCwzOC40NTgyMzg5IEM1NC40ODQsMzguNDU4MjM4OSA1Ni4yNzgsMzYuNjY4NTAzMiA1Ni4yNzgsMzQuNDY3NzQ2NyBDNTYuMjc4LDMyLjI2Njk5MDMgNTQuNDg0LDMwLjQ3NzI1NDYgNTIuMjc4LDMwLjQ3NzI1NDYgTTU4LjcxLDUwLjQyOTcxNTQgTDQ5LjU2OCw1MC40Mjk3MTU0IEM0OS4zNTYsNTAuNDI5NzE1NCA0OS4xNSw1MC40OTY1NTYyIDQ4Ljk3OSw1MC42MjEyNTkxIEwzMy4yNzgsNjIuMDQxMDUwMSBMMzMuMjc4LDUxLjQyNzMzODUgQzMzLjI3OCw1MC44NzY2NTA2IDMyLjgzMSw1MC40Mjk3MTU0IDMyLjI3OCw1MC40Mjk3MTU0IEwyMS4wMDEsNTAuNDI5NzE1NCBDMTkuOTg5LDUwLjQyODcxNzggMTkuMTksNTAuMjM1MTc5IDE4LjU1OSw0OS44MzcxMjc0IEMxNi40NzksNDguNTI3MjQ4MyAxNCw0Ni4wMDcyNTI1IDE0LDQxLjQzODEzOSBDMTQsMzUuMzQxNjY0NSAxOC4yNTEsMzMuMzQzNDI1NiAyMC43ODYsMzIuNjkzOTczIEMyMS4yNDksMzIuNTc1MjU1OCAyMS41NjMsMzIuMTQ1MjgwMyAyMS41MzUsMzEuNjY4NDE2NSBMMjEuNDM0LDI5Ljk5NTQwMjYgQzIxLjQzNCwyNS4xNDA5Njg5IDI0Ljc4NiwxOS45MTk0MDk5IDI5LjA2NCwxOC4xMDY3Mjg4IEMzMC45ODksMTcuMjkxNjcwOCAzMi43NjgsMTYuOTY3NDQzMyAzNC4zODEsMTYuOTY3NDQzMyBDMzguOTY2LDE2Ljk2NzQ0MzMgNDIuMjA1LDE5LjU5MjE4OTUgNDMuNjE5LDIxLjAxMTgwNzEgQzQ1LjE3NCwyMi41NzMwODcyIDQ2LjM4OSwyNC41NjczMzU3IDQ3LjIyNywyNi45NDE2Nzg1IEM0Ny4zNSwyNy4yODk4NDg5IDQ3LjY1NywyNy41NDIyNDc2IDQ4LjAyMywyNy41OTYxMTkyIEM0OC4zOTIsMjcuNjQ4OTkzMiA0OC43NTYsMjcuNDk4MzUyMiA0OC45NzUsMjcuMjAxMDYwNSBDNTAuMjQ3LDI1LjQ4MDE2MDcgNTIuNDM3LDI0Ljc2MTg3MjIgNTQuNDIzLDI1LjQxMzMyIEM1Ni42NTIsMjYuMTQzNTgwMSA1Ny45MzgsMjguMzEwNDE3MyA1Ny45NiwzMS4zNjMxNDM4IEw1Ny45NTQsMzEuMzk2MDY1NCBDNTcuODcsMzEuOTM0NzgxOCA1OC4yMzQsMzIuNDQxNTc0MyA1OC43NzIsMzIuNTM0MzUzMyBDNjAuNzAzLDMyLjg2NjU2MTggNjcsMzQuNDk0NjgyNiA2Nyw0MS41MjI5MzY5IEM2Nyw0OS42OTE0NzQ0IDU4Ljk3Niw1MC40MDY3NzAxIDU4LjcxLDUwLjQyOTcxNTQgTTU5Ljk0LDMwLjczNjYzNjYgQzU5LjczNCwyNy4xMzgyMTAyIDU3LjkzOCwyNC40NjU1NzgxIDU1LjA0NywyMy41MTc4MzYyIEM1Mi43NzgsMjIuNzczNjA5NCA1MC4zMjMsMjMuMjg2Mzg3NyA0OC41MjMsMjQuNzg4ODA4IEM0Ny42MzIsMjIuNzc0NjA3MSA0Ni40NjQsMjEuMDM1NzUwMSA0NS4wMzcsMTkuNjA1MTU4NiBDNDAuNDYsMTUuMDExMTA0NSAzNC4xOTYsMTMuNzY1MDczMyAyOC4yODMsMTYuMjcwMTA0OCBDMjMuMjM4LDE4LjQwNzAxMzQgMTkuNDM0LDI0LjMwNzk1MzcgMTkuNDM2LDMwLjA1NDI2MjQgTDE5LjQ5MiwzMC45OTQwMjMzIEMxNi43NDIsMzEuODkwODg2NCAxMiwzNC40NTQ3Nzc2IDEyLDQxLjQzODEzOSBDMTIsNDcuMjA1Mzk3OCAxNS40NCw1MC4yMzMxODM3IDE3LjQ5MSw1MS41MjQxMDc5IEMxOC40NTEsNTIuMTI4NjY3NSAxOS41OTgsNTIuNDIzOTYzOSAyMSw1Mi40MjQ5NjE1IEwzMS4yNzgsNTIuNDI0OTYxNSBMMzEuMjc4LDY0LjAwMjM3NyBDMzEuMjc4LDY0LjM3ODQ4MDggMzEuNDg5LDY0LjcyMTY2MzIgMzEuODI1LDY0Ljg5MjI1NjcgQzMxLjk2Nyw2NC45NjUwODMyIDMyLjEyMyw2NSAzMi4yNzgsNjUgQzMyLjQ4Niw2NSAzMi42OTMsNjQuOTM2MTUyMSAzMi44NjcsNjQuODA5NDU0IEw0OS44OTQsNTIuNDI0OTYxNSBMNTguNzgzLDUyLjQyMjk2NjMgQzU4Ljg4NCw1Mi40MTQ5ODUzIDY5LDUxLjU2MjAxNzYgNjksNDEuNTIyOTM2OSBDNjksMzMuNzgyMzc5NyA2Mi44NTEsMzEuNDIwMDA4MyA1OS45NCwzMC43MzY2MzY2IiBpZD0iQW1hem9uLUNvbm5lY3RfSWNvbl82NF9TcXVpZCIgZmlsbD0iI0ZGRkZGRiI+PC9wYXRoPgogICAgPC9nPgo8L3N2Zz4="
+}

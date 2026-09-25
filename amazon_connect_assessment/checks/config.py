@@ -310,7 +310,6 @@ class CheckConfigurationManager:
         # Set default global settings
         config.global_settings = {
             "timeout": 300,
-            "retry_count": 3,
             "parallel_execution": True,
             "max_workers": 4,
         }
@@ -334,10 +333,6 @@ class CheckConfigurationManager:
         timeout = self._config.global_settings.get("timeout")
         if timeout is not None and (not isinstance(timeout, int) or timeout <= 0):
             errors.append("Global setting 'timeout' must be a positive integer")
-
-        retry_count = self._config.global_settings.get("retry_count")
-        if retry_count is not None and (not isinstance(retry_count, int) or retry_count < 0):
-            errors.append("Global setting 'retry_count' must be a non-negative integer")
 
         max_workers = self._config.global_settings.get("max_workers")
         if max_workers is not None and (not isinstance(max_workers, int) or max_workers <= 0):

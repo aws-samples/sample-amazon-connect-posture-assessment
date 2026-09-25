@@ -179,7 +179,7 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 Common options:
 
 ```bash
-# Assess one instance
+# Assess one instance (instance ID UUID, not alias/ARN; the run stops if it is not in --region)
 amazon-connect-assessment \
   --region us-east-1 \
   --instance-id <id> \
@@ -220,8 +220,10 @@ open reports/connect_assessment_*.html        # macOS
 xdg-open reports/connect_assessment_*.html    # Linux
 ```
 
-The HTML report is self-contained and can be viewed offline. The Caller
-Journey Map renders contact flows targeted by inbound phone numbers. See
+The HTML report is self-contained and can be viewed offline. Filter and sort
+findings in the findings table and select a row to open its evidence and
+remediation in the side panel. The Caller Journey Map renders contact flows
+targeted by inbound phone numbers; select any step or route to inspect it. See
 [report-formats.md](report-formats.md) for the output contracts.
 
 ### Publish reports to S3

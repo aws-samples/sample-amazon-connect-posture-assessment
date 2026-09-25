@@ -26,6 +26,14 @@ from amazon_connect_assessment.models import (
 from amazon_connect_assessment.report_generator import ReportGenerator
 
 
+def _report_data(html_content: str) -> dict:
+    """Parse the JSON data island the Cloudscape report UI renders from."""
+    start_tag = '<script id="report-data" type="application/json">'
+    start = html_content.index(start_tag) + len(start_tag)
+    end = html_content.index("</script>", start)
+    return json.loads(html_content[start:end])
+
+
 @pytest.fixture
 def sample_assessment_result():
     """Create a sample assessment result for testing."""
@@ -138,10 +146,103 @@ class TestReportGenerator:
         # Verify HTML content contains expected elements
         assert "<!DOCTYPE html>" in html_content
         assert "Amazon Connect Assessment Tool Report" in html_content
-        assert sample_assessment_result.assessment_id in html_content
-        assert sample_assessment_result.account_id in html_content
-        assert "Test Security Check" in html_content
-        assert "Test Resilience Check" in html_content
+        data = _report_data(html_content)
+        assert data["schema_version"] == 1
+        assert data["assessment"]["id"] == sample_assessment_result.assessment_id
+        assert data["assessment"]["account_id"] == sample_assessment_result.account_id
+        assert {f["check_name"] for f in data["findings"]} == {
+            "Test Security Check",
+            "Test Resilience Check",
+        }
+        assert data["raw_data"] is None
+
+    def test_html_report_is_self_contained(self, sample_assessment_result):
+        """The report must work offline: no external stylesheet, script, or font fetches."""
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+
+        assert "<link" not in html_content
+        assert "<script src" not in html_content
+        assert "cdn." not in html_content
+        assert "fonts.googleapis.com" not in html_content
+
+    def test_finding_view_carries_markdown_remediation_and_evidence(self, sample_assessment_result):
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        finding = next(
+            f for f in _report_data(html_content)["findings"] if f["check_id"] == "SEC-001"
+        )
+
+        assert finding["severity"] == "critical"
+        assert finding["status"] == "fail"
+        assert finding["pillar"] == "security"
+        assert finding["description_html"] == "<p>Test security finding description</p>\n"
+        assert finding["remediation_html"] == "<p>Test remediation guidance</p>\n"
+        assert finding["structured_remediation"] is None
+        assert finding["evidence"]["pairs"] == [
+            {"label": "Test key", "value": {"text": "test_value", "kind": "text"}}
+        ]
+        assert json.loads(finding["evidence_json"]) == {"test_key": "test_value"}
+
+    def test_structured_remediation_is_serialized_with_safe_urls(self, sample_assessment_result):
+        from amazon_connect_assessment.models import (
+            Remediation,
+            RemediationReference,
+            RemediationStep,
+        )
+
+        sample_assessment_result.findings[0].structured_remediation = Remediation(
+            summary="Enable encryption",
+            steps=[
+                RemediationStep(1, "Run **this**", command="aws kms create-key", console_path="KMS")
+            ],
+            target_resources=["bucket-a"],
+            references=[
+                RemediationReference("Docs", "https://docs.aws.amazon.com/connect/"),
+                RemediationReference("Evil", "javascript:alert(1)"),
+            ],
+            applies_if="Recordings are enabled",
+        )
+
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        finding = next(
+            f for f in _report_data(html_content)["findings"] if f["check_id"] == "SEC-001"
+        )
+        rem = finding["structured_remediation"]
+
+        assert finding["remediation_html"] == ""
+        assert rem["summary"] == "Enable encryption"
+        assert rem["steps"][0]["instruction_html"] == "<p>Run <strong>this</strong></p>\n"
+        assert rem["steps"][0]["command"] == "aws kms create-key"
+        assert rem["steps"][0]["console_path"] == "KMS"
+        assert rem["target_resources"] == ["bucket-a"]
+        assert rem["applies_if"] == "Recordings are enabled"
+        assert [r["url"] for r in rem["references"]] == [
+            "https://docs.aws.amazon.com/connect/",
+            "#",
+        ]
+
+    def test_findings_are_ordered_failed_first_by_severity_within_pillar(
+        self, sample_assessment_result
+    ):
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        findings = _report_data(html_content)["findings"]
+
+        # Pillar enum order (resilience before security), then failed-first.
+        assert [f["check_id"] for f in findings] == ["RES-001", "SEC-001"]
+        assert [f["key"] for f in findings] == ["0", "1"]
+
+    def test_default_filter_shows_failed_findings(self, sample_assessment_result):
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        filters = _report_data(html_content)["filters"]
+
+        assert filters["default_status"] == "fail"
+        assert filters["default_severity"] == "critical"
+
+    def test_execution_errors_are_surfaced(self, sample_assessment_result):
+        sample_assessment_result.execution_errors = ["Throttled calling ListQueues"]
+
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+
+        assert _report_data(html_content)["execution_errors"] == ["Throttled calling ListQueues"]
 
     def test_generate_json_report_includes_journey_map_data(
         self, sample_assessment_result, tmp_path
@@ -182,8 +283,9 @@ class TestReportGenerator:
         )
         instance = sample_assessment_result.instances[0]
         assert instance.instance_alias == "test-instance"
-        expected = f"&#39;{instance.instance_alias}&#39; ({instance.instance_id})"
-        assert expected in html_content
+        finding = _report_data(html_content)["findings"][0]
+        assert finding["resource_label"] == f"'{instance.instance_alias}' ({instance.instance_id})"
+        assert finding["instance"] == instance.instance_alias
 
     def test_instance_label_filter_falls_back_to_bare_id(self):
         """No alias known for a UUID -> render the bare UUID, not 'None (uuid)'."""
@@ -202,9 +304,10 @@ class TestReportGenerator:
             assessment_result=sample_assessment_result, include_raw_data=True
         )
 
-        # Verify raw data is included
-        assert "raw-data-section" in html_content
-        assert "assessment_id" in html_content  # From JSON data
+        # Verify raw data is included as a JSON document
+        raw = json.loads(_report_data(html_content)["raw_data"])
+        assert raw["assessment_id"] == sample_assessment_result.assessment_id
+        assert raw["findings"][0]["check_id"] == "SEC-001"
 
     def test_generate_csv_report_includes_instance_alias(self, sample_assessment_result):
         """
@@ -294,30 +397,6 @@ class TestReportGenerator:
         assert organized["security"][0].check_name == "Test Security Check"
         assert organized["resilience"][0].check_name == "Test Resilience Check"
 
-    def test_charts_data_generation(self, sample_assessment_result):
-        """Test charts data generation."""
-        generator = ReportGenerator()
-
-        charts_data = generator._generate_charts_data(sample_assessment_result)
-
-        # Verify status distribution chart
-        assert "status_distribution" in charts_data
-        status_chart = charts_data["status_distribution"]
-        assert "labels" in status_chart
-        assert "data" in status_chart
-        assert "colors" in status_chart
-
-        # Verify severity distribution chart
-        assert "severity_distribution" in charts_data
-        severity_chart = charts_data["severity_distribution"]
-        assert severity_chart["data"][0] == 1  # 1 critical finding
-
-        # Verify pillar breakdown
-        assert "pillar_breakdown" in charts_data
-        pillar_data = charts_data["pillar_breakdown"]
-        assert "security" in pillar_data
-        assert "resilience" in pillar_data
-
     def test_executive_summary_creation(self, sample_assessment_result):
         """Test executive summary creation."""
         generator = ReportGenerator()
@@ -335,35 +414,47 @@ class TestReportGenerator:
         critical_insight = next((i for i in insights if i["type"] == "critical"), None)
         assert critical_insight is not None
 
-    def test_filter_options_generation(self, sample_assessment_result):
-        """Test filter options generation."""
+    def test_default_filters(self, sample_assessment_result):
+        """Default filter is failed findings at the highest failing severity."""
         generator = ReportGenerator()
 
-        # _get_filter_options takes instances too now so the report can
-        # show the customer-chosen alias in the instance dropdown rather
-        # than the raw UUID. Pass the fixture's instance list through.
-        options = generator._get_filter_options(
-            sample_assessment_result.findings,
-            sample_assessment_result.instances,
+        assert generator._default_filters(sample_assessment_result.findings) == {
+            "default_severity": "critical",
+            "default_status": "fail",
+        }
+        passing = [f for f in sample_assessment_result.findings if f.status == CheckStatus.PASS]
+        assert generator._default_filters(passing) == {
+            "default_severity": "all",
+            "default_status": "all",
+        }
+
+    def test_journey_finding_instance_comes_from_evidence(self, sample_assessment_result):
+        """Per-number journey findings group under their instance, not the phone number."""
+        journey_finding = Finding(
+            check_id="journey-sec-001",
+            check_name="Journey Reaches Agent Queue Without Authentication",
+            pillar=Pillar.SECURITY,
+            severity=Severity.HIGH,
+            status=CheckStatus.FAIL,
+            resource_id="+15555550100",
+            resource_type="PhoneNumberJourney",
+            description="d",
+            remediation="r",
+            evidence={"phone_number": "+1555***0100", "instance_id": "test-instance-123"},
+            timestamp=datetime.now(),
         )
+        sample_assessment_result.findings.append(journey_finding)
+        generator = ReportGenerator()
 
-        assert "severities" in options
-        assert "statuses" in options
-        assert "pillars" in options
-        assert "instances" in options
+        data = generator._build_report_data(sample_assessment_result, include_raw_data=False)
+        view = next(f for f in data["findings"] if f["check_id"] == "journey-sec-001")
+        assert view["instance"] == "test-instance"
 
-        assert "critical" in options["severities"]
-        assert "high" in options["severities"]
-        assert "pass" in options["statuses"]
-        assert "fail" in options["statuses"]
-        assert "security" in options["pillars"]
-        assert "resilience" in options["pillars"]
-        # Instance entries are {id, label} pairs — the UUID is the option
-        # value (so filtering matches finding.resource_id), the label is
-        # the friendly alias.
-        for entry in options["instances"]:
-            assert "id" in entry
-            assert "label" in entry
+        with tempfile.TemporaryDirectory() as tmp:
+            path = generator.generate_csv_report(sample_assessment_result, tmp)
+            with open(path, encoding="utf-8") as fh:
+                row = next(line for line in fh if "journey-sec-001" in line)
+        assert "test-instance-123,test-instance" in row
 
     def test_template_filters(self, sample_assessment_result):
         """Test custom template filters."""
@@ -378,11 +469,6 @@ class TestReportGenerator:
         assert generator._format_duration(30.5) == "30.5s"
         assert generator._format_duration(90) == "1.5m"
         assert generator._format_duration(3700) == "1.0h"
-
-        # Test color functions
-        assert generator._get_severity_color("critical") == "#dc3545"
-        assert generator._get_status_color("pass") == "#28a745"
-        assert generator._get_pillar_icon("security") == "fas fa-lock"
 
 
 class TestMarkdownFilter:
@@ -437,6 +523,50 @@ class TestMarkdownFilter:
         assert "&lt;script&gt;" in out
         assert "onerror=" not in out or "&lt;img" in out  # tag is escaped
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "[x](//evil.test)",
+            "[x](ftp://example.com)",
+            "[x](/relative/path)",
+            "[x](javascript:alert(1))",
+            "[x](JaVaScRiPt:alert(1))",
+            "[x](data:text/html,hi)",
+            "<ftp://example.com>",
+            "[ref]\n\n[ref]: //evil.test",
+        ],
+    )
+    def test_disallowed_link_targets_render_as_text(self, source):
+        # Markdown HTML is injected as live markup, so only absolute
+        # http(s)/mailto links may become anchors.
+        out = ReportGenerator._render_markdown(source)
+        assert "<a " not in out
+        assert "href=" not in out
+
+    @pytest.mark.parametrize(
+        "source,href",
+        [
+            (
+                "[docs](https://docs.aws.amazon.com/connect/)",
+                "https://docs.aws.amazon.com/connect/",
+            ),
+            ("<https://example.com>", "https://example.com"),
+            ("[mail](mailto:ops@example.com)", "mailto:ops@example.com"),
+        ],
+    )
+    def test_allowed_links_open_in_new_tab(self, source, href):
+        out = ReportGenerator._render_markdown(source)
+        assert f'href="{href}"' in out
+        assert 'target="_blank"' in out
+        assert 'rel="noopener noreferrer"' in out
+
+    def test_images_render_as_alt_text_without_fetching(self):
+        # The report must stay offline and never load remote content.
+        out = ReportGenerator._render_markdown("![diagram <b>x</b>](https://example.com/x.png)")
+        assert "<img" not in out
+        assert "example.com" not in out
+        assert "diagram" in out
+
     def test_ssml_in_code_block_survives_intact(self):
         # A common pattern in the injection-check description shows an
         # SSML injection example inside a fenced code block. The angle
@@ -465,133 +595,150 @@ class TestMarkdownFilter:
         assert first is second
 
 
-class TestEvidenceRenderer:
+class TestEvidenceView:
     """
-    Evidence dicts stashed on findings get rendered by ``_render_evidence``
-    into structured HTML. The old template dumped raw JSON; this filter
-    turns the same data into a scalar definition list plus tables for any
-    list-of-dicts keys, with ARN abbreviation and hover tooltips.
+    Evidence dicts stashed on findings are structured by ``_evidence_view``
+    for the report UI: scalars become key-value pairs, list-of-dicts keys
+    become tables, list-of-scalars become lists, nested dicts become
+    sections, and ARN / long values are abbreviated with the full value kept.
     """
 
-    def test_scalar_keys_render_as_definition_list(self):
-        out = ReportGenerator._render_evidence({"hardcoded_count": 10, "flows_analyzed": 27})
-        assert '<dl class="evidence-scalars">' in out
-        assert "<dt>Hardcoded count</dt>" in out
-        assert "<dd>10</dd>" in out
-        assert "<dt>Flows analyzed</dt>" in out
-        assert "<dd>27</dd>" in out
+    def test_scalar_keys_render_as_pairs(self):
+        view = ReportGenerator._evidence_view({"hardcoded_count": 10, "flows_analyzed": 27})
+        assert view["pairs"] == [
+            {"label": "Hardcoded count", "value": {"text": "10", "kind": "number"}},
+            {"label": "Flows analyzed", "value": {"text": "27", "kind": "number"}},
+        ]
+        assert view["tables"] == view["lists"] == view["sections"] == []
 
     def test_list_of_dicts_renders_as_table(self):
-        out = ReportGenerator._render_evidence(
+        view = ReportGenerator._evidence_view(
             {
                 "hardcoded_details": [
                     {"flow": "IVR", "action_type": "TransferToFlow"},
-                    {"flow": "Sales", "action_type": "TransferToFlow"},
+                    {"flow": "Sales", "action_type": "TransferToFlow", "extra": 1},
                 ]
             }
         )
-        assert '<table class="evidence-table">' in out
-        # Column headers pulled from row keys and humanized.
-        assert "<th>Flow</th>" in out
-        assert "<th>Action type</th>" in out
-        # Cells rendered as <td> not JSON.
-        assert "<td>IVR</td>" in out
-        assert "<td>Sales</td>" in out
+        table = view["tables"][0]
+        assert table["title"] == "Hardcoded details"
+        # Column order = first row's keys, then keys later rows introduce.
+        assert table["columns"] == ["Flow", "Action type", "Extra"]
+        assert [row[0]["text"] for row in table["rows"]] == ["IVR", "Sales"]
+        assert table["rows"][0][2] == {"text": "", "kind": "text"}
 
-    def test_arn_values_are_abbreviated_with_tooltip(self):
-        out = ReportGenerator._render_evidence(
-            {
-                "hardcoded_details": [
-                    {
-                        "hardcoded_value": (
-                            "arn:aws:connect:us-east-1:819205311151:instance/"
-                            "6b050445-2dee-4475-9f78-399ad0a69aac"
-                        )
-                    }
-                ]
-            }
-        )
-        # Full ARN preserved in the tooltip so the reader can hover.
-        assert 'title="arn:aws:connect:us-east-1:819205311151' in out
-        # But the visible text is a shortened form so the table stays
-        # readable.
-        assert 'class="evidence-arn"' in out
-        assert "instance/" in out
-        # And full ARN should NOT appear as visible text between > and <.
-        # Simple guard: the visible cell text must be shorter than the
-        # full ARN.
-        assert "connect:" in out
+    def test_arn_values_are_abbreviated_with_full_value(self):
+        arn = "arn:aws:connect:us-east-1:819205311151:instance/6b050445-2dee-4475-9f78-399ad0a69aac"
+        cell = ReportGenerator._evidence_view({"instance": arn})["pairs"][0]["value"]
+        assert cell["kind"] == "arn"
+        assert cell["full"] == arn
+        assert cell["text"].startswith("connect:")
+        assert len(cell["text"]) < len(arn)
+
+    def test_long_strings_are_abbreviated(self):
+        cell = ReportGenerator._evidence_view({"prompt": "x" * 150})["pairs"][0]["value"]
+        assert cell["text"] == "x" * 99 + "\u2026"
+        assert cell["full"] == "x" * 150
 
     def test_none_and_empty_evidence_pass_through(self):
-        assert ReportGenerator._render_evidence(None) == ""
-        assert ReportGenerator._render_evidence({}) == ""
+        assert ReportGenerator._evidence_view(None) is None
+        assert ReportGenerator._evidence_view({}) is None
 
-    def test_bool_scalars_render_as_lowercase(self):
-        out = ReportGenerator._render_evidence({"auth_enabled": True, "encrypted": False})
-        assert "<dd>true</dd>" in out
-        assert "<dd>false</dd>" in out
+    def test_scalar_kinds(self):
+        pairs = ReportGenerator._evidence_view(
+            {"auth_enabled": True, "encrypted": False, "queue": None, "ids": [1, "a"]}
+        )["pairs"]
+        assert [p["value"] for p in pairs[:3]] == [
+            {"text": "true", "kind": "bool"},
+            {"text": "false", "kind": "bool"},
+            {"text": "\u2014", "kind": "null"},
+        ]
 
-    def test_null_scalar_renders_as_em_dash(self):
-        out = ReportGenerator._render_evidence({"queue": None})
-        assert "evidence-null" in out
-        assert "\u2014" in out
+    def test_list_of_scalars_renders_as_list(self):
+        view = ReportGenerator._evidence_view({"queues": ["general", "returns"], "empty": []})
+        assert view["lists"] == [
+            {
+                "title": "Queues",
+                "items": [
+                    {"text": "general", "kind": "text"},
+                    {"text": "returns", "kind": "text"},
+                ],
+            },
+            {"title": "Empty", "items": []},
+        ]
 
-    def test_nested_dict_renders_as_subsection(self):
-        out = ReportGenerator._render_evidence(
+    def test_nested_dict_renders_as_section(self):
+        view = ReportGenerator._evidence_view(
             {
                 "flows_analyzed": 10,
                 "analysis_limits": {"paths_per_flow": 100, "route_states": 20000},
             }
         )
-        assert 'class="evidence-section evidence-nested"' in out
-        assert "<dt>Paths per flow</dt>" in out
-        assert "<dd>100</dd>" in out
+        section = view["sections"][0]
+        assert section["title"] == "Analysis limits"
+        assert section["block"]["pairs"][0] == {
+            "label": "Paths per flow",
+            "value": {"text": "100", "kind": "number"},
+        }
+
+    def test_deep_nesting_falls_back_to_json(self):
+        deep: dict = {"leaf": 1}
+        for _ in range(10):
+            deep = {"level": deep}
+        view = ReportGenerator._evidence_view(deep)
+        block = view
+        for _ in range(ReportGenerator._EVIDENCE_MAX_DEPTH + 1):
+            block = block["sections"][0]["block"]
+        assert '"leaf": 1' in block["fallback"]
 
     def test_non_dict_evidence_falls_back_to_pretty_json(self):
         # A check may (mistakenly) stash a list at the top level;
-        # renderer should not crash, but produce readable JSON.
-        out = ReportGenerator._render_evidence([1, 2, 3])
-        assert 'class="evidence-json"' in out
-        assert "[" in out and "]" in out
+        # the view should not crash, but produce readable JSON.
+        view = ReportGenerator._evidence_view([1, 2, 3])
+        assert json.loads(view["fallback"]) == [1, 2, 3]
 
-    def test_html_in_values_is_escaped(self):
-        # If a flow name or attribute name contains angle brackets
-        # (unlikely but possible with adversarial content), they must
-        # be escaped rather than emitted as live HTML.
-        out = ReportGenerator._render_evidence({"note": "<script>alert(1)</script>"})
-        assert "<script>alert(1)</script>" not in out
-        assert "&lt;script&gt;" in out
+    def test_html_in_values_reaches_the_ui_as_text(self):
+        # Evidence is rendered as text by React, so markup stays inert
+        # data — and the data island escapes it so it can't end the script.
+        html_content_value = "<script>alert(1)</script>"
+        view = ReportGenerator._evidence_view({"note": html_content_value})
+        assert view["pairs"][0]["value"]["text"] == html_content_value
+        island = ReportGenerator._json_for_script(view)
+        assert "<script>" not in island
+        assert json.loads(island)["pairs"][0]["value"]["text"] == html_content_value
 
-    def test_embedded_css_and_javascript(self):
-        """Test embedded CSS and JavaScript generation."""
+    def test_report_ui_bundle_is_embedded(self, sample_assessment_result):
         generator = ReportGenerator()
 
-        css = generator._load_external_css()
-        assert len(css) > 0
-        assert "report-header" in css
-        assert "finding-card" in css
+        css = generator._load_app_asset("report-app.css")
+        js = generator._load_app_asset("report-app.js")
+        html_content = generator.generate_html_report(sample_assessment_result)
 
-        js = generator._load_external_js()
-        assert len(js) > 0
-        assert "AssessmentReportController" in js
-        assert "applyFilters" in js
+        # Cloudscape global styles + components are in the bundle.
+        assert "Open Sans" in css
+        assert "report-data" in js
+        # A missing/corrupt data island surfaces an error instead of a blank page.
+        assert "This report could not be displayed" in js
+        assert "</script" not in js.lower()
+        assert "</style" not in css.lower()
+        assert js in html_content
+        assert css in html_content
 
-    def test_embedded_css_includes_dark_journey_palette(self):
-        # Arrange
+    def test_missing_bundle_raises_actionable_error(self, tmp_path):
         generator = ReportGenerator()
+        generator._APP_DIR = tmp_path  # type: ignore[misc]
 
-        # Act
-        css = generator._load_external_css()
+        with pytest.raises(FileNotFoundError, match="npm ci && npm run build"):
+            generator._load_app_asset("report-app.js")
 
-        # Assert
-        assert "--jm-surface-canvas: #0f172a" in css
-        assert (
-            "body.dark-mode .journey-map-section .journey-map-diagram,\n"
-            "body.dark-mode .journey-map-section .jm-canvas"
-        ) in css
-        assert "body.dark-mode .journey-map-section .jm-node-speaks" in css
-        assert "body.dark-mode .journey-map-section .jm-edge-label.jm-edge-primary" in css
-        assert "body.dark-mode .journey-map-section .jm-node:focus-visible" in css
+    def test_inlined_asset_cannot_close_its_element(self, tmp_path):
+        generator = ReportGenerator()
+        generator._APP_DIR = tmp_path  # type: ignore[misc]
+        (tmp_path / "report-app.js").write_text('var s = "</ScRiPt><b>";', encoding="utf-8")
+        (tmp_path / "report-app.css").write_text("a{content:'</STYLE>'}", encoding="utf-8")
+
+        assert generator._load_app_asset("report-app.js") == 'var s = "<\\/ScRiPt><b>";'
+        assert generator._load_app_asset("report-app.css") == "a{content:'<\\/STYLE>'}"
 
     def test_save_report_with_subdirectory(self, sample_assessment_result):
         """Test saving report with subdirectory creation."""
@@ -673,15 +820,19 @@ class TestJourneyMapExportReportIntegration:
         generator = ReportGenerator()
 
         # Act
-        serialized = generator._journey_map_entries_json(sample_assessment_result)
-        decoded = json.loads(serialized)
+        html_content = generator.generate_html_report(sample_assessment_result)
+        island_start = html_content.index('<script id="report-data"')
+        island_end = html_content.index("</script>", island_start)
+        island = html_content[island_start:island_end]
 
         # Assert
-        assert "</script" not in serialized.lower()
-        assert "<script" not in serialized.lower()
-        assert decoded[0]["exports"]["formats"]["drawio"]["content"] == hostile
+        assert "<script" not in island[len("<script") :].lower()
+        decoded = _report_data(html_content)
+        assert decoded["journey"]["entries"][0]["exports"]["formats"]["drawio"]["content"] == (
+            hostile
+        )
 
-    def test_journey_map_report_keeps_inspector_reader_focused_and_provenance_hidden(
+    def test_journey_map_ships_full_inspector_model_but_not_legacy_markup(
         self, sample_assessment_result
     ):
         # Arrange
@@ -692,26 +843,13 @@ class TestJourneyMapExportReportIntegration:
                     "title": "System work · 2 internal actions",
                     "category": "processing",
                     "summary": "Groups internal actions.",
-                    "scope": [
-                        "Looks up customer data with customer-lookup",
-                        "Sets contact attributes",
-                    ],
-                    "ai": {
-                        "technology": "Amazon Lex",
-                        "identity": "CustomerServiceBot",
-                        "subtype": "V2 bot",
-                        "alias": "Production",
-                    },
+                    "scope": ["Looks up customer data with customer-lookup"],
+                    "ai": {"technology": "Amazon Lex", "identity": "CustomerServiceBot"},
                     "is_group": True,
                     "is_entry": True,
                     "is_primary": True,
                     "actions": [
-                        {"id": "lookup", "type": "InvokeLambdaFunction", "detail": "Looks up data"},
-                        {
-                            "id": "attributes",
-                            "type": "SetContactAttributes",
-                            "detail": "Sets attributes",
-                        },
+                        {"id": "lookup", "type": "InvokeLambdaFunction", "detail": "Looks up"}
                     ],
                     "absorbed_outcomes": [
                         {
@@ -719,79 +857,69 @@ class TestJourneyMapExportReportIntegration:
                             "raw_label": "NoMatchingError",
                             "route_type": "exception",
                             "transition_type": "error",
-                            "meaning": (
-                                "A configured catch-all route used only if the action fails and "
-                                "no specific error condition matches. This does not mean an error "
-                                "was observed."
-                            ),
+                            "meaning": "Catch-all.",
                             "source_action_id": "lookup",
-                            "source_action_type": "InvokeLambdaFunction",
-                            "source_action_label": "Looks up data",
                             "target_action_id": "attributes",
-                            "target_action_type": "SetContactAttributes",
-                            "target_action_label": "Sets attributes",
                         }
                     ],
                 }
             },
             "edges": {},
             "primary_path": ["n0"],
+            "layout": None,
         }
         sample_assessment_result.journey_map_entries = [entry]
-        generator = ReportGenerator()
 
         # Act
-        serialized = generator._journey_map_entries_json(sample_assessment_result)
-        decoded_route = json.loads(serialized)[0]["diagram_model"]["nodes"]["n0"][
-            "absorbed_outcomes"
-        ][0]
-        html_content = generator.generate_html_report(sample_assessment_result)
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        shipped = _report_data(html_content)["journey"]["entries"][0]
 
-        # Assert
-        assert decoded_route["source_action_id"] == "lookup"
-        assert decoded_route["source_action_label"] == "Looks up data"
-        assert decoded_route["target_action_id"] == "attributes"
-        assert decoded_route["target_action_label"] == "Sets attributes"
-        assert "Selected step or route" in html_content
-        assert "What this setup does" in html_content
-        assert "What this block does" in html_content
-        assert "journey-map-inspector-scope-heading" in html_content
-        assert "AI agent" in html_content
-        assert "Array.isArray(detail.scope)" in html_content
-        assert "detail.ai" in html_content
-        assert "detail.is_group" in html_content
-        assert "detail.actions" not in html_content
-        assert "This route ' + movement + ' from '" in html_content
-        assert "inspectorSummary.hidden = !summary" in html_content
-        assert "journey-map-inspector-details" not in html_content
-        assert "Journey role" not in html_content
-        assert "Step type" not in html_content
-        assert "Underlying Connect action(s)" not in html_content
-        assert "Route type" not in html_content
-        assert "Underlying outcome(s)" not in html_content
-        assert "Connect value:" not in html_content
-        assert "Configured internal error routes (" not in html_content
-        assert "These are configured flow rules, not observed incidents." not in html_content
-        assert "Handled inside this group" not in html_content
-        assert "Technical error (Connect value:" not in html_content
+        # Assert — the inspector shows technical detail (actions, raw Connect
+        # values, absorbed routes), so the whole model reaches the UI...
+        node = shipped["diagram_model"]["nodes"]["n0"]
+        assert node["actions"][0]["type"] == "InvokeLambdaFunction"
+        assert node["absorbed_outcomes"][0]["raw_label"] == "NoMatchingError"
+        assert node["ai"]["identity"] == "CustomerServiceBot"
+        # ...while the legacy server-rendered diagram markup is not shipped twice.
+        assert "diagram_html" not in shipped
+        # And the UI bundle carries the inspector sections that render it.
+        js = ReportGenerator()._load_app_asset("report-app.js")
+        for text in (
+            "Contact flow actions",
+            "Routes handled inside this step",
+            "Connect value",
+            "Routes out",
+        ):
+            assert text in js
+
+    def test_journey_map_empty_state_status_is_shipped(self, sample_assessment_result):
+        sample_assessment_result.journey_map_status = {
+            "reason": "no_phone_numbers",
+            "message": "No inbound phone numbers were found.",
+            "hint": "Claim a number.",
+        }
+
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        journey = _report_data(html_content)["journey"]
+
+        assert journey["entries"] == []
+        assert journey["status"]["reason"] == "no_phone_numbers"
 
     def test_journey_map_report_with_exports_renders_download_controls(
         self, sample_assessment_result
     ):
         # Arrange
         sample_assessment_result.journey_map_entries = [self._entry()]
-        generator = ReportGenerator()
 
         # Act
-        html_content = generator.generate_html_report(sample_assessment_result)
+        html_content = ReportGenerator().generate_html_report(sample_assessment_result)
+        formats = _report_data(html_content)["journey"]["entries"][0]["exports"]["formats"]
+        js = ReportGenerator()._load_app_asset("report-app.js")
 
         # Assert
-        assert 'id="journey-map-download-svg"' in html_content
-        assert 'id="journey-map-download-png"' in html_content
-        assert 'id="journey-map-download-drawio"' in html_content
-        assert 'id="journey-map-export-status"' in html_content
-        assert "safeFilenamePart" in html_content
-        assert "downloadPngExport" in html_content
+        assert set(formats) == {"svg", "drawio"}
+        for text in ("SVG image", "PNG image", "draw.io diagram", "caller-journey-"):
+            assert text in js
 
     def test_journey_map_report_export_payload_is_data_not_live_markup(
         self, sample_assessment_result
@@ -802,7 +930,7 @@ class TestJourneyMapExportReportIntegration:
 
         # Act
         html_content = generator.generate_html_report(sample_assessment_result)
-        island_start = html_content.index('<script id="journey-map-data"')
+        island_start = html_content.index('<script id="report-data"')
         island_end = html_content.index("</script>", island_start)
         island = html_content[island_start:island_end]
 

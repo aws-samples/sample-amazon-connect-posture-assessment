@@ -12,7 +12,7 @@ import platform
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .analyzers import BaseAnalyzer
@@ -140,7 +140,7 @@ class AssessmentEngine:
             checkpoint_data.update(
                 {
                     "assessment_id": self._assessment_id,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "current_step": self._current_step,
                     "total_steps": self._total_steps,
                     "execution_errors": self._execution_errors,
@@ -157,6 +157,10 @@ class AssessmentEngine:
 
         except Exception as e:
             self.logger.warning(f"Failed to save checkpoint: {str(e)}")
+
+    def has_checkpoint(self, assessment_id: str) -> bool:
+        """Return True if a readable checkpoint exists for ``assessment_id``."""
+        return self._load_checkpoint(assessment_id) is not None
 
     def _load_checkpoint(self, assessment_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -379,7 +383,7 @@ class AssessmentEngine:
             # Create final result
             result = AssessmentResult(
                 assessment_id=assessment_id,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 account_id=account_id,
                 region=region,
                 instances=analyzed_instances,
@@ -420,6 +424,35 @@ class AssessmentEngine:
 
             raise
 
+    def _list_instance_summaries(self) -> List[Dict[str, Any]]:
+        """Return every ListInstances summary in the configured region."""
+        instance_summaries: List[Dict[str, Any]] = []
+        next_token = None
+        while True:
+            kwargs = {}
+            if next_token:
+                kwargs["NextToken"] = next_token
+            response = self.aws_client_factory.list_connect_instances_resilient(**kwargs)
+            instance_summaries.extend(response.get("InstanceSummaryList", []))
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+        return instance_summaries
+
+    def _instance_not_found_message(
+        self, instance_id: str, instance_summaries: List[Dict[str, Any]]
+    ) -> str:
+        """Explain a missing --instance-id, listing what the region does contain."""
+        region = getattr(self.aws_client_factory, "region", None) or "the configured region"
+        message = f"Connect instance {instance_id} not found in {region}."
+        if not instance_summaries:
+            return f"{message} This region has no Connect instances; check --region."
+        available = ", ".join(
+            f"{s['Id']} ('{s['InstanceAlias']}')" if s.get("InstanceAlias") else s["Id"]
+            for s in instance_summaries
+        )
+        return f"{message} Instances in this region: {available}"
+
     def discover_instances(self) -> List[ConnectInstance]:
         """
         Discover Amazon Connect instances in the target account.
@@ -430,27 +463,19 @@ class AssessmentEngine:
         self.logger.debug("Starting Connect instance discovery")
 
         try:
-            # Paginate through all instances
-            instance_summaries = []
-            next_token = None
-            while True:
-                kwargs = {}
-                if next_token:
-                    kwargs["NextToken"] = next_token
-                response = self.aws_client_factory.list_connect_instances_resilient(**kwargs)
-                instance_summaries.extend(response.get("InstanceSummaryList", []))
-                next_token = response.get("NextToken")
-                if not next_token:
-                    break
+            instance_summaries = self._list_instance_summaries()
 
             # Filter to a single instance if --instance-id was provided
             target_instance_id = self.config.get("aws", {}).get("instance_id")
             if target_instance_id:
+                all_summaries = instance_summaries
                 instance_summaries = [
                     s for s in instance_summaries if s["Id"] == target_instance_id
                 ]
                 if not instance_summaries:
-                    self.logger.warning(f"Instance {target_instance_id} not found in account")
+                    error_msg = self._instance_not_found_message(target_instance_id, all_summaries)
+                    self.logger.error(error_msg)
+                    self._execution_errors.append(error_msg)
 
             instances = []
             for instance_summary in instance_summaries:
@@ -1487,6 +1512,22 @@ class AssessmentEngine:
                 validation_result["errors"].append(
                     f"Missing AWS permissions: {', '.join(perm_result.missing_permissions)}"
                 )
+
+            # Validate the --instance-id target exists before any checks run.
+            target_instance_id = self.config.get("aws", {}).get("instance_id")
+            if target_instance_id and cred_result.is_valid:
+                try:
+                    summaries = self._list_instance_summaries()
+                except Exception as e:
+                    validation_result["warnings"].append(
+                        f"Could not verify instance {target_instance_id} exists: {str(e)}"
+                    )
+                else:
+                    if not any(s["Id"] == target_instance_id for s in summaries):
+                        validation_result["is_valid"] = False
+                        validation_result["errors"].append(
+                            self._instance_not_found_message(target_instance_id, summaries)
+                        )
 
             # Validate analyzers
             if not self.analyzers:

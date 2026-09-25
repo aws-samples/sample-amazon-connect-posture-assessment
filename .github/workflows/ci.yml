@@ -56,6 +56,38 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
+  report-ui:
+    # The HTML report inlines the pre-built Cloudscape bundle committed under
+    # amazon_connect_assessment/templates/app/. Rebuild it from frontend/ and
+    # fail if the committed copy is stale.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runtime deps are inlined into every HTML report, so a vulnerable
+      # lockfile ships to users; fail on high/critical advisories.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Rebuild bundle and check it is committed
+        run: npm run check
+
   security:
     runs-on: ubuntu-latest
     steps:

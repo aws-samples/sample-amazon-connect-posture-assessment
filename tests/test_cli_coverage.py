@@ -4,6 +4,8 @@ Coverage tests for CLI initialization path (initialize_assessment_components).
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from amazon_connect_assessment.analyzers.contact_flow_analyzer import ContactFlowAnalyzer
 from amazon_connect_assessment.cli import (
     ConfigurationManager,
@@ -276,12 +278,11 @@ class TestParallelExecutionFlagDefault:
         merged = merge_cli_args_with_config(args, config)
         assert merged["global_settings"]["parallel_execution"] is False
 
-    def test_sequential_wins_if_both_flags_passed(self):
+    def test_parallel_and_sequential_are_mutually_exclusive(self):
         parser = create_argument_parser()
-        args = parser.parse_args(["--parallel", "--sequential"])
-        config = ConfigurationManager().load_config()
-        merged = merge_cli_args_with_config(args, config)
-        assert merged["global_settings"]["parallel_execution"] is False
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["--parallel", "--sequential"])
+        assert exc.value.code == 2
 
 
 class TestSkipFlowAnalysisConfigLocation:

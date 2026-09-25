@@ -60,11 +60,16 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 
 ## Sample report
 
-Checkout the sample [`html report`](https://aws-samples.github.io/sample-amazon-connect-posture-assessment/examples/sample_assessment_report.html)
+Check out the sample [HTML report](https://aws-samples.github.io/sample-amazon-connect-posture-assessment/examples/sample_assessment_report.html).
 
 ![Sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report.png)
 
+<details>
+<summary>Show the full report screenshot</summary>
 
+![Full sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report-full.png)
+
+</details>
 
 ---
 
@@ -169,7 +174,10 @@ start reports\connect_assessment_*.html       # Windows
 ```
 
 The HTML report is a single self-contained file with no external dependencies —
-safe to email or attach to a ticket.
+safe to email or attach to a ticket. It is built with the
+[Cloudscape Design System](https://cloudscape.design/) (the same components as
+the AWS console): a filterable findings table with a details side panel, charts,
+light/dark mode, and CSV/JSON export, all working offline.
 
 ---
 
@@ -237,11 +245,13 @@ Most assessment tooling inspects resources. The Caller Journey Map inspects the
   walked from each entry point to build the set of paths a caller can take.
 - **Scored outcomes.** Paths are scored for authentication, self-service
   coverage, and dead-end outcomes, and surfaced as the four `journey-*` findings.
-- **Interactive, offline map.** The CLI server-renders a deterministic
-  caller-focused projection into the HTML report. In the browser you can switch
-  between phone numbers, zoom and fit without distorting the layout, open a
-  node and connector inspector, and export SVG, PNG, or an editable draw.io
-  diagram.
+- **Interactive, offline map.** The CLI computes a deterministic
+  caller-focused layout and embeds it in the HTML report. In the browser you can
+  switch between phone numbers, zoom and fit without distorting the layout,
+  highlight the primary caller path, open any step or route in a details panel
+  (routes in and out, underlying contact flow actions, raw Connect outcome
+  values), switch to a steps-list view, and export SVG, PNG, or an editable
+  draw.io diagram.
 
 No separate web service or launcher is required — it is part of the standard
 HTML report.
@@ -281,7 +291,7 @@ The [editable Draw.io source](docs/architecture.drawio) is included.
 - **Standard credential resolution.** Credentials are resolved through the
   normal boto3 chain and are never written to reports, logs, or checkpoints.
 - **Opt-in S3 publishing only.** `--s3-output` is the only write path. If the
-  target bucket does not exist it is created with Block Public Access, SSE-S3
+  target bucket does not exist, it is created with Block Public Access, SSE-S3
   encryption, and versioning enabled.
 - **Reports contain configuration detail.** Findings include flow names, queue
   and routing configuration, and masked phone numbers. Treat generated reports

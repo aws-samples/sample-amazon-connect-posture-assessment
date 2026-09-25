@@ -21,3 +21,39 @@ class TestMaskNumber:
         masked = _mask_number(number)
         assert number not in masked
         assert masked.endswith("0123")
+
+
+class TestJourneyFindingInstance:
+    def _result(self):
+        from amazon_connect_assessment.journey.models import (
+            JourneyMapResult,
+            JourneyNode,
+            JourneyPath,
+        )
+
+        node = JourneyNode(flow_id="f1", flow_name="Main", action_id="a1", action_type="Transfer")
+        path = JourneyPath(
+            entry_number="+18005551212",
+            entry_number_type="TOLL_FREE",
+            nodes=[node],
+            terminal_type="agent_queue",
+            terminal_details={"queue": "Sales"},
+            flows_traversed=["Main"],
+        )
+        return JourneyMapResult(journeys=[path])
+
+    def test_per_number_findings_record_owning_instance(self):
+        from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
+
+        findings = generate_journey_findings(self._result(), instance_id="inst-1")
+
+        per_number = [f for f in findings if f.resource_type == "PhoneNumberJourney"]
+        assert per_number
+        assert all(f.evidence["instance_id"] == "inst-1" for f in per_number)
+
+    def test_instance_id_omitted_when_unknown(self):
+        from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
+
+        findings = generate_journey_findings(self._result())
+
+        assert all("instance_id" not in f.evidence for f in findings)

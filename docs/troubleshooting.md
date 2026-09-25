@@ -109,6 +109,14 @@ Credentials work but no instances are returned.
 2. **Missing permission** — `connect:ListInstances` must be in the IAM policy.
 3. **Wrong account** — the assumed role may be in a different account than where Connect is deployed.
 
+### `Connect instance <id> not found in <region>`
+
+`--instance-id` is checked before any checks run (including with `--dry-run`); the run exits with
+code 1 and writes no reports. The message lists the instance IDs and aliases that do exist in that
+region — usually the fix is `--region`, or copying the ID from that list. The value must be the
+instance ID (a UUID, shown in the Connect console's instance ARN after `instance/`), not the alias
+or the full ARN; anything else is rejected immediately with `is not a Connect instance ID`.
+
 ### Checks return `Skipped` instead of Pass/Fail
 
 The IAM role is missing the permission for that specific API. The finding description names it exactly. Grant the permission and re-run.
@@ -124,13 +132,16 @@ generated from it — see that module's docstring to add a permission).
 
 ### Assessment produces findings but the HTML report is empty
 
-The report generator couldn't find its Jinja2 templates. Ensure the package is installed correctly:
+The report generator couldn't find its template or UI bundle. Ensure the package is installed correctly:
 
 ```bash
 pip install -e .
-# Confirm templates exist
-ls amazon_connect_assessment/templates/html/
+# Confirm the template and the pre-built UI bundle exist
+ls amazon_connect_assessment/templates/html/ amazon_connect_assessment/templates/app/
 ```
+
+If `templates/app/` is missing in a source checkout, rebuild it with
+`cd frontend && npm ci && npm run build` (Node.js 20+).
 
 ### Assessment is very slow
 
@@ -144,8 +155,9 @@ amazon-connect-assessment --region us-east-1 --instance-id <id>
 # (~40% faster on flow-heavy accounts)
 amazon-connect-assessment --region us-east-1 --skip-flow-analysis
 
-# Increase parallelism (default is 2x CPU cores)
-amazon-connect-assessment --region us-east-1 --max-workers 16 --batch-size 20
+# Increase parallelism (default is 2x CPU cores). Concurrent checks are capped at
+# min(--max-workers, --batch-size), so raise both; see docs/performance-optimization.md
+amazon-connect-assessment --region us-east-1 --max-workers 16 --batch-size 32
 
 # Focus on one pillar
 amazon-connect-assessment --region us-east-1 --pillars security
@@ -180,9 +192,13 @@ start reports\connect_assessment_*.html       # Windows
 
 Don't double-click from a file manager on some systems — drag it into the browser instead.
 
-### Charts don't render in the report
+### The report shows only a "needs JavaScript" message
 
-The report loads Chart.js from a CDN. If you're offline, charts fall back to an "unavailable" placeholder — all findings text is still present and functional.
+The report is an interactive page built with Cloudscape components and needs
+JavaScript. Everything it needs is embedded in the file (no network access
+required), but some email previewers and locked-down viewers block scripts —
+open the file in a regular browser. The same findings are available in the JSON
+and CSV outputs.
 
 ### `--s3-output`: upload didn't complete
 

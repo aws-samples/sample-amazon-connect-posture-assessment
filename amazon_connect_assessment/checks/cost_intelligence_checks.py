@@ -49,9 +49,9 @@ class UsageMetricsCheck(BaseCheck):
         instance = context.instance
         factory = context.aws_client_factory
 
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(days=30)
 
         try:

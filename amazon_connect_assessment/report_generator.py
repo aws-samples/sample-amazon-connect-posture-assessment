@@ -1,17 +1,24 @@
 """
 HTML report generator for Amazon Connect Assessment Tool.
 
-This module provides comprehensive HTML report generation with interactive features,
-modern UI design, and offline viewing capabilities. Reports include executive summaries,
-detailed findings, remediation guidance, and interactive filtering controls.
+The HTML report is a single self-contained file: a thin Jinja shell that inlines
+the pre-built Cloudscape Design System UI (``templates/app/report-app.{js,css}``,
+built from ``frontend/``) plus one ``<script type="application/json">`` data island
+carrying everything the UI renders. All assessment content travels as JSON data —
+never as live markup — except finding markdown, which is rendered server-side by an
+XSS-safe markdown-it parser (raw HTML disabled). JSON and CSV exports are produced
+directly by this module.
 """
 
+import base64
+import dataclasses
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from jinja2 import Environment, TemplateNotFound, select_autoescape
@@ -19,10 +26,10 @@ from jinja2 import Environment, TemplateNotFound, select_autoescape
 from .models import (
     AssessmentResult,
     CheckStatus,
-    ConnectInstance,
     Finding,
     Pillar,
     Severity,
+    to_utc,
 )
 
 
@@ -41,17 +48,16 @@ def validate_report_filename(filename: str) -> str:
 
 class ReportGenerator:
     """
-    Generates rich HTML reports with interactive features for Amazon Connect assessments.
+    Generates HTML, JSON and CSV reports for Amazon Connect assessments.
 
-    Features:
-    - Modern, responsive UI design
-    - Interactive filtering by severity and status
-    - Pillar-based organization
-    - Executive summary with charts and statistics
-    - Detailed findings with remediation guidance
-    - Embedded CSS/JavaScript for offline viewing
-    - Color-coded status indicators and visual elements
+    The HTML report is built with Cloudscape components (see ``frontend/``):
+    executive summary, charts, a filterable findings table with a details split
+    panel, and the interactive Caller Journey Map. It works offline — the UI
+    bundle, fonts and data are all embedded.
     """
+
+    _APP_DIR = Path(__file__).parent / "templates" / "app"
+    _SERVICE_ICON = Path(__file__).parent / "templates" / "assets" / "amazon-connect.svg"
 
     def __init__(self, template_dir: Optional[str] = None):
         """
@@ -64,7 +70,7 @@ class ReportGenerator:
         self.template_env = self._setup_template_environment(template_dir)
 
     def _setup_template_environment(self, template_dir: Optional[str]) -> Environment:
-        """Set up Jinja2 template environment with FileSystemLoader."""
+        """Set up the Jinja2 environment that renders the HTML shell template."""
         from jinja2 import FileSystemLoader, PackageLoader
 
         if template_dir and os.path.exists(template_dir):
@@ -86,51 +92,12 @@ class ReportGenerator:
                 else:
                     raise TemplateNotFound(f"Could not find templates at {template_path}")
 
-        env = Environment(
+        return Environment(
             loader=loader,
             autoescape=select_autoescape(["html", "xml"]),
             trim_blocks=True,
             lstrip_blocks=True,
         )
-
-        # Add custom filters
-        env.filters["format_datetime"] = self._format_datetime
-        env.filters["format_duration"] = self._format_duration
-        env.filters["severity_color"] = self._get_severity_color
-        env.filters["status_color"] = self._get_status_color
-        env.filters["pillar_icon"] = self._get_pillar_icon
-        env.filters["json_encode"] = self._safe_json_encode
-        # Remediation reference URLs are hardcoded https doc links today, but
-        # they land in an ``href`` attribute — the ``| safe_url`` filter
-        # scheme-allowlists them so a non-http(s) URI (``javascript:``,
-        # ``data:``) can never reach the DOM even if a future URL is dynamic.
-        env.filters["safe_url"] = self._safe_url
-        # Reviewer feedback: the report's "Resource ID" line only showed
-        # the raw instance UUID, with no way to tell which instance that
-        # is without cross-referencing the executive summary. Every
-        # Finding.resource_id is exactly instance.instance_id (verified —
-        # no check ever composes a different value), so this filter takes
-        # a UUID plus the alias-lookup dict built once per render in
-        # _prepare_template_context (see "instance_alias_by_id" in the
-        # context) and renders "'alias' (uuid)" the same way
-        # ConnectInstance.display_name does, falling back to the bare
-        # UUID if it isn't found.
-        env.filters["instance_label"] = self._render_instance_label
-        # Finding descriptions + remediations are authored in markdown so
-        # they can use paragraph breaks, bullet lists, fenced code blocks,
-        # and inline code samples. Templates run the string through
-        # ``| markdown | safe`` — the filter renders to HTML and disables
-        # raw-HTML passthrough so untrusted flow content can't smuggle
-        # ``<script>`` into the page (Autoescape is on globally, but the
-        # rendered markdown HTML has to bypass it — hence ``| safe`` —
-        # which is why the filter itself must be XSS-safe).
-        env.filters["markdown"] = self._render_markdown
-        # Evidence dicts get their own filter — see _render_evidence for
-        # the pattern-matching logic that turns list-of-dicts keys into
-        # tables and scalar keys into a definition list.
-        env.filters["evidence"] = self._render_evidence
-
-        return env
 
     def generate_html_report(
         self,
@@ -209,12 +176,10 @@ class ReportGenerator:
                 )
             report_data = {
                 "assessment_id": assessment_result.assessment_id,
-                "timestamp": assessment_result.timestamp.isoformat(),
+                "timestamp": to_utc(assessment_result.timestamp).isoformat(),
                 "account_id": assessment_result.account_id,
                 "region": assessment_result.region,
-                "journey_map_entries": json.loads(
-                    self._journey_map_entries_json(assessment_result)
-                ),
+                "journey_map_entries": self._journey_map_entries(assessment_result),
                 "journey_map_status": getattr(assessment_result, "journey_map_status", None),
                 "summary": {
                     "total_checks": assessment_result.summary.total_checks,
@@ -258,7 +223,7 @@ class ReportGenerator:
                             finding.structured_remediation
                         ),
                         "evidence": finding.evidence,
-                        "timestamp": finding.timestamp.isoformat(),
+                        "timestamp": to_utc(finding.timestamp).isoformat(),
                     }
                     for finding in assessment_result.findings
                 ],
@@ -371,6 +336,7 @@ class ReportGenerator:
                 for inst in assessment_result.instances
                 if inst.instance_alias
             }
+            instance_ids = [inst.instance_id for inst in assessment_result.instances]
 
             # Write CSV report
             with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -379,16 +345,12 @@ class ReportGenerator:
 
                 for finding in assessment_result.findings:
                     # Find the instance for this finding
-                    instance_id = "unknown"
-                    for instance in assessment_result.instances:
-                        if finding.resource_id.startswith(instance.instance_id):
-                            instance_id = instance.instance_id
-                            break
+                    instance_id = self._finding_instance_id(finding, instance_ids) or "unknown"
 
                     writer.writerow(
                         [
                             assessment_result.assessment_id,
-                            finding.timestamp.isoformat(),
+                            to_utc(finding.timestamp).isoformat(),
                             assessment_result.account_id,
                             assessment_result.region,
                             instance_id,
@@ -436,7 +398,7 @@ class ReportGenerator:
             Generated filename
         """
         # Extract variables for substitution
-        timestamp = assessment_result.timestamp.strftime("%Y%m%d_%H%M%S")
+        timestamp = to_utc(assessment_result.timestamp).strftime("%Y%m%d_%H%M%S")
         account_id = assessment_result.account_id
         region = assessment_result.region
         assessment_id = assessment_result.assessment_id
@@ -458,82 +420,162 @@ class ReportGenerator:
     def _prepare_template_context(
         self, assessment_result: AssessmentResult, include_raw_data: bool
     ) -> Dict[str, Any]:
-        # Prepare comprehensive template context with all report data
-
-        # Generate summary statistics
-        summary_stats = self._generate_summary_statistics(assessment_result)
-
-        # Organize findings by pillar
-        findings_by_pillar = self._organize_findings_by_pillar(assessment_result.findings)
-
-        # Generate charts data
-        charts_data = self._generate_charts_data(assessment_result)
-
-        # Create executive summary
-        executive_summary = self._create_executive_summary(assessment_result)
-
-        context = {
-            # Core assessment data
-            "assessment": assessment_result,
-            "findings": assessment_result.findings,
-            "instances": assessment_result.instances,
-            # Organized data
-            "findings_by_pillar": findings_by_pillar,
-            "summary_stats": summary_stats,
-            "executive_summary": executive_summary,
-            # Caller Journey Map — one entry per inbound phone number
-            # (DID / toll-free) that terminates on a contact flow.
-            # Populated by AssessmentEngine._compute_journey_map. The
-            # template renders two dropdowns (instance -> phone number)
-            # driving a single Mermaid diagram + JS-free fallback.
-            #
-            # When entries is empty, ``journey_map_status`` carries a
-            # plain-English explanation of why (skipped by config, no
-            # numbers claimed, numbers point at queues not flows,
-            # missing ListPhoneNumbersV2 permission, etc.) so the
-            # template can render a diagnostic instead of hiding the
-            # section.
-            #
-            # ``journey_map_entries_json`` is the same data serialised
-            # as a JSON string so the initializer JavaScript in
-            # assessment_report.html can read it from a
-            # ``<script type="application/json">`` island.
-            "journey_map_entries": self._journey_map_entries(assessment_result),
-            "journey_map_entries_json": self._journey_map_entries_json(assessment_result),
-            "journey_map_instances": self._journey_map_instance_list(assessment_result),
-            "journey_map_status": getattr(assessment_result, "journey_map_status", None),
-            # Interactive elements
-            "charts_data": charts_data,
-            "charts_data_json": json.dumps(charts_data).replace("</", "<\\/"),
-            "filter_options": self._get_filter_options(
-                assessment_result.findings, assessment_result.instances
-            ),
-            # UUID -> instance_alias (bare alias, not the full display_name
-            # with the UUID already appended) for the "instance_label"
-            # filter used in findings.html's "Resource ID" line. Built
-            # once per render rather than per finding.
-            "instance_alias_by_id": {
-                inst.instance_id: inst.instance_alias
-                for inst in assessment_result.instances
-                if inst.instance_alias
-            },
-            # Metadata
-            "generation_timestamp": datetime.now(),
+        """Build the shell-template context: UI bundle plus the JSON data island."""
+        return {
             "report_title": f"Amazon Connect Assessment Tool Report - {assessment_result.account_id}",
-            # Raw data (optional)
-            "raw_data": (
-                json.dumps(assessment_result, default=str, indent=2) if include_raw_data else None
+            "app_css": self._load_app_asset("report-app.css"),
+            "app_js": self._load_app_asset("report-app.js"),
+            "report_data_json": self._json_for_script(
+                self._build_report_data(assessment_result, include_raw_data)
             ),
-            # Styling and assets
-            "embedded_css": self._load_external_css(),
-            "embedded_js": self._load_external_js(),
-            # Inlined so the report stays a single self-contained file. Empty
-            # string when the asset is missing; the header falls back to the
-            # Font Awesome headset glyph.
-            "service_icon_svg": self._load_service_icon(),
         }
 
-        return context
+    def _build_report_data(
+        self, assessment_result: AssessmentResult, include_raw_data: bool
+    ) -> Dict[str, Any]:
+        """
+        Assemble the data contract the Cloudscape report UI renders.
+
+        Everything here must be JSON-serializable. Markdown fields
+        (``*_html``) are the only pre-rendered markup, and they come from the
+        XSS-safe markdown parser; every other string is rendered as text by React.
+        """
+        summary = assessment_result.summary
+        executive_summary = self._create_executive_summary(assessment_result)
+        filter_options = self._default_filters(assessment_result.findings)
+        alias_by_id = {
+            inst.instance_id: inst.instance_alias
+            for inst in assessment_result.instances
+            if inst.instance_alias
+        }
+        instance_ids = [inst.instance_id for inst in assessment_result.instances]
+        ordered_findings = [
+            finding
+            for pillar_findings in self._organize_findings_by_pillar(
+                assessment_result.findings
+            ).values()
+            for finding in pillar_findings
+        ]
+        metadata = assessment_result.metadata
+
+        return {
+            "schema_version": 1,
+            "title": "Amazon Connect Assessment Report",
+            "generated_at": self._format_datetime(datetime.now(timezone.utc)),
+            "assessment": {
+                "id": assessment_result.assessment_id,
+                "account_id": assessment_result.account_id,
+                "region": assessment_result.region,
+                "timestamp": self._format_datetime(assessment_result.timestamp),
+            },
+            "metadata": {
+                "tool_version": metadata.tool_version,
+                "execution_time": self._format_duration(metadata.execution_time_seconds),
+                "execution_environment": metadata.execution_environment,
+                "python_version": metadata.python_version,
+            },
+            "summary": dataclasses.asdict(summary),
+            "stats": self._generate_summary_statistics(assessment_result),
+            "insights": executive_summary["insights"],
+            "recommendations": executive_summary["recommendations"],
+            "filters": {
+                "default_severity": filter_options["default_severity"],
+                "default_status": filter_options["default_status"],
+            },
+            "pillars": [
+                {"id": pillar.value, "label": pillar.value.replace("_", " ").title()}
+                for pillar in Pillar
+            ],
+            "instances": [
+                {
+                    "id": inst.instance_id,
+                    "alias": inst.instance_alias,
+                    "display_name": inst.display_name,
+                    "status": inst.status,
+                    "identity_management_type": inst.identity_management_type,
+                    "inbound_calls_enabled": inst.inbound_calls_enabled,
+                    "outbound_calls_enabled": inst.outbound_calls_enabled,
+                }
+                for inst in assessment_result.instances
+            ],
+            "findings": [
+                self._finding_view(index, finding, alias_by_id, instance_ids)
+                for index, finding in enumerate(ordered_findings)
+            ],
+            "journey": {
+                # diagram_html is the legacy server-rendered markup; the UI draws
+                # from diagram_model["layout"] instead, so don't ship it twice.
+                "entries": [
+                    {key: value for key, value in entry.items() if key != "diagram_html"}
+                    for entry in self._journey_map_entries(assessment_result)
+                ],
+                "status": getattr(assessment_result, "journey_map_status", None),
+            },
+            "execution_errors": list(assessment_result.execution_errors or []),
+            "raw_data": (
+                json.dumps(dataclasses.asdict(assessment_result), default=str, indent=2)
+                if include_raw_data
+                else None
+            ),
+            "service_icon": self._service_icon_data_uri(),
+        }
+
+    def _finding_view(
+        self,
+        index: int,
+        finding: Finding,
+        alias_by_id: Dict[str, str],
+        instance_ids: List[str],
+    ) -> Dict[str, Any]:
+        """Serialize one finding for the report UI."""
+        instance_id = self._finding_instance_id(finding, instance_ids)
+        remediation = finding.structured_remediation
+        return {
+            "key": str(index),
+            "check_id": finding.check_id,
+            "check_name": finding.check_name,
+            "pillar": finding.pillar.value,
+            "severity": finding.severity.value,
+            "status": finding.status.value,
+            "resource_id": finding.resource_id,
+            "resource_type": finding.resource_type,
+            "resource_label": self._render_instance_label(finding.resource_id, alias_by_id),
+            "instance": (
+                alias_by_id.get(instance_id, instance_id) if instance_id else finding.resource_id
+            ),
+            "timestamp": self._format_datetime(finding.timestamp),
+            "description": finding.description,
+            "description_html": self._render_markdown(finding.description),
+            "remediation_html": (
+                self._render_markdown(finding.remediation) if remediation is None else ""
+            ),
+            "structured_remediation": (
+                {
+                    "summary": remediation.summary,
+                    "steps": [
+                        {
+                            "order": step.order,
+                            "instruction_html": self._render_markdown(step.instruction),
+                            "command": step.command,
+                            "console_path": step.console_path,
+                        }
+                        for step in remediation.steps
+                    ],
+                    "target_resources": list(remediation.target_resources),
+                    "references": [
+                        {"title": ref.title, "url": self._safe_url(ref.url)}
+                        for ref in remediation.references
+                    ],
+                    "applies_if": remediation.applies_if,
+                }
+                if remediation is not None
+                else None
+            ),
+            "evidence": self._evidence_view(finding.evidence),
+            "evidence_json": (
+                json.dumps(finding.evidence, indent=2, default=str) if finding.evidence else ""
+            ),
+        }
 
     def _generate_summary_statistics(self, assessment_result: AssessmentResult) -> Dict[str, Any]:
         # Generate comprehensive summary statistics for the report
@@ -634,59 +676,6 @@ class ReportGenerator:
             organized[pillar.value] = pillar_findings
 
         return organized
-
-    def _generate_charts_data(self, assessment_result: AssessmentResult) -> Dict[str, Any]:
-        # Generate data for interactive charts and visualizations
-        findings = assessment_result.findings
-        summary = assessment_result.summary
-
-        # Status distribution for pie chart
-        status_chart = {
-            "labels": ["Passed", "Failed", "Error", "Skipped", "N/A"],
-            "data": [
-                summary.passed_checks,
-                summary.failed_checks,
-                summary.error_checks,
-                summary.skipped_checks,
-                summary.not_applicable_checks,
-            ],
-            "colors": ["#28a745", "#dc3545", "#ffc107", "#6c757d", "#adb5bd"],
-        }
-
-        # Severity distribution for failed findings
-        severity_chart = {
-            "labels": ["Critical", "High", "Medium", "Low"],
-            "data": [
-                summary.critical_findings,
-                summary.high_findings,
-                summary.medium_findings,
-                summary.low_findings,
-            ],
-            "colors": ["#dc3545", "#fd7e14", "#ffc107", "#17a2b8"],
-        }
-
-        # Pillar breakdown
-        pillar_data = {}
-        for pillar in Pillar:
-            pillar_findings = [f for f in findings if f.pillar == pillar]
-            failed_count = sum(1 for f in pillar_findings if f.status == CheckStatus.FAIL)
-            total_count = len(pillar_findings)
-            pillar_data[pillar.value] = {
-                "total": total_count,
-                "failed": failed_count,
-                "passed": total_count - failed_count,
-                "pass_rate": (
-                    round((total_count - failed_count) / total_count * 100, 1)
-                    if total_count > 0
-                    else 0
-                ),
-            }
-
-        return {
-            "status_distribution": status_chart,
-            "severity_distribution": severity_chart,
-            "pillar_breakdown": pillar_data,
-        }
 
     def _create_executive_summary(self, assessment_result: AssessmentResult) -> Dict[str, Any]:
         # Create executive summary with key insights and recommendations
@@ -801,92 +790,40 @@ class ReportGenerator:
         """Return the raw journey-map entries the engine attached."""
         return getattr(assessment_result, "journey_map_entries", []) or []
 
-    def _journey_map_entries_json(self, assessment_result: AssessmentResult) -> str:
-        """Serialize journey entries safely for an HTML JSON data island."""
-        entries = self._journey_map_entries(assessment_result)
-        serialized = json.dumps(entries, ensure_ascii=False)
-        return (
-            serialized.replace("&", "\\u0026")
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("\u2028", "\\u2028")
-            .replace("\u2029", "\\u2029")
-        )
-
     @staticmethod
-    def _journey_map_instance_list(
-        assessment_result: AssessmentResult,
-    ) -> List[Dict[str, str]]:
+    def _default_filters(findings: List[Finding]) -> Dict[str, str]:
         """
-        Return one entry per unique instance appearing in the journey
-        map, preserving the deterministic order the engine produced.
-        Used to populate the first dropdown ("Which instance?").
+        Initial findings-table filter: failed findings at the highest failing
+        severity (critical, else high). ``"all"`` means no filter on that field.
         """
-        seen: Set[str] = set()
-        out: List[Dict[str, str]] = []
-        for entry in getattr(assessment_result, "journey_map_entries", []) or []:
-            instance_id = entry.get("instance_id", "")
-            if instance_id in seen:
-                continue
-            seen.add(instance_id)
-            out.append(
-                {
-                    "id": instance_id,
-                    "label": entry.get("instance_display_name", instance_id),
-                }
-            )
-        return out
-
-    def _get_filter_options(
-        self,
-        findings: List[Finding],
-        instances: List[ConnectInstance],
-    ) -> Dict[str, Any]:
-        """
-        Build the filter dropdown options.
-
-        For the instance filter we return a list of ``{"id", "label"}`` dicts
-        so the dropdown can display the friendly alias (``label``) while the
-        option's underlying value stays as the UUID (``id``). That preserves
-        matching against ``finding.resource_id`` which is still a raw UUID.
-        Instances discovered in the assessment take precedence for label
-        resolution; instances that only appear in findings (e.g. from
-        historical data) fall back to the UUID.
-        """
-        severities = list(set(f.severity.value for f in findings))
-        statuses = list(set(f.status.value for f in findings))
-        pillars = list(set(f.pillar.value for f in findings))
-        default_status = CheckStatus.FAIL.value if CheckStatus.FAIL.value in statuses else "all"
-
-        failed_severities = {
-            finding.severity for finding in findings if finding.status == CheckStatus.FAIL
-        }
+        failed_severities = {f.severity for f in findings if f.status == CheckStatus.FAIL}
         if Severity.CRITICAL in failed_severities:
             default_severity = Severity.CRITICAL.value
         elif Severity.HIGH in failed_severities:
             default_severity = Severity.HIGH.value
         else:
             default_severity = "all"
-
-        # Build UUID → display_name from the instance list so we can attach
-        # friendly labels to the dropdown options.
-        alias_by_id: Dict[str, str] = {inst.instance_id: inst.display_name for inst in instances}
-
-        instance_ids = sorted(
-            {f.resource_id for f in findings if f.resource_type == "ConnectInstance"}
-        )
-        instance_options = [{"id": iid, "label": alias_by_id.get(iid, iid)} for iid in instance_ids]
-
+        has_failures = any(f.status == CheckStatus.FAIL for f in findings)
         return {
-            "severities": sorted(
-                severities, key=lambda x: ["critical", "high", "medium", "low"].index(x)
-            ),
             "default_severity": default_severity,
-            "statuses": sorted(statuses),
-            "default_status": default_status,
-            "pillars": sorted(pillars),
-            "instances": instance_options,
+            "default_status": CheckStatus.FAIL.value if has_failures else "all",
         }
+
+    @staticmethod
+    def _finding_instance_id(finding: Finding, instance_ids: List[str]) -> Optional[str]:
+        """
+        Resolve the Connect instance a finding belongs to.
+
+        Most checks use the instance ID as ``resource_id``. Journey findings use
+        the phone number and record the instance in ``evidence["instance_id"]``;
+        the prefix match covers resource IDs composed from the instance ID.
+        """
+        if finding.resource_id in instance_ids:
+            return finding.resource_id
+        evidence_instance = (finding.evidence or {}).get("instance_id")
+        if evidence_instance:
+            return str(evidence_instance)
+        return next((iid for iid in instance_ids if finding.resource_id.startswith(iid)), None)
 
     def _save_report(self, html_content: str, output_path: str) -> None:
         # Save HTML report to specified path
@@ -904,9 +841,22 @@ class ReportGenerator:
             raise
 
     @staticmethod
-    def _safe_json_encode(value) -> str:
-        """JSON-encode a value, escaping sequences that could break out of script tags."""
-        return json.dumps(value).replace("</", "<\\/")
+    def _json_for_script(value: Any) -> str:
+        """
+        Serialize ``value`` for a ``<script type="application/json">`` island.
+
+        ``<``, ``>`` and ``&`` are escaped as JSON unicode escapes so no string
+        — including a mixed-case ``</ScRiPt>`` — can close the element early,
+        and U+2028/U+2029 are escaped for older JavaScript parsers.
+        """
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        return (
+            serialized.replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
 
     @staticmethod
     def _render_instance_label(resource_id: str, alias_by_id: Dict[str, str]) -> str:
@@ -947,8 +897,45 @@ class ReportGenerator:
             # need since a finding description can interpolate flow-
             # authored strings (queue names, prompt text, attribute
             # names) which we do not fully trust.
-            cls._MARKDOWN_PARSER = MarkdownIt("commonmark", {"html": False, "breaks": False})
+            md = MarkdownIt("commonmark", {"html": False, "breaks": False})
+            # The rendered HTML is injected into the report as live markup, so
+            # links get the same scheme allowlist as remediation references,
+            # minus relative URLs (in a file:// report they'd point at the
+            # reader's disk). Rejected links render as plain text.
+            md.validateLink = cls._is_allowed_markdown_link
+            md.add_render_rule("image", cls._render_markdown_image)
+            md.add_render_rule("link_open", cls._render_markdown_link_open)
+            cls._MARKDOWN_PARSER = md
         return cls._MARKDOWN_PARSER
+
+    @staticmethod
+    def _is_allowed_markdown_link(url: str) -> bool:
+        """Allow only absolute http(s) and mailto URLs in finding markdown."""
+        candidate = url.strip()
+        if candidate.startswith("//"):
+            return False
+        try:
+            scheme = urlparse(candidate).scheme.lower()
+        except ValueError:
+            return False
+        return scheme in ("http", "https", "mailto")
+
+    @staticmethod
+    def _render_markdown_image(renderer: Any, tokens: Any, idx: int, options: Any, env: Any) -> str:
+        """Render images as their alt text: the report never fetches remote content."""
+        from markdown_it.common.utils import escapeHtml
+
+        token = tokens[idx]
+        return escapeHtml(renderer.renderInlineAsText(token.children or [], options, env))
+
+    @staticmethod
+    def _render_markdown_link_open(
+        renderer: Any, tokens: Any, idx: int, options: Any, env: Any
+    ) -> str:
+        """Open links in a new tab so following one doesn't navigate away from the report."""
+        tokens[idx].attrSet("target", "_blank")
+        tokens[idx].attrSet("rel", "noopener noreferrer")
+        return renderer.renderToken(tokens, idx, options, env)
 
     @classmethod
     def _render_markdown(cls, text) -> str:
@@ -967,99 +954,63 @@ class ReportGenerator:
         return cls._get_markdown_parser().render(text)
 
     # ------------------------------------------------------------------
-    # Evidence renderer
+    # Evidence view
     # ------------------------------------------------------------------
     #
     # Checks stash raw diagnostics on ``Finding.evidence`` — dicts of
-    # scalars, lists of dicts, ARNs, nested dicts. The old template just
-    # dumped this as one big JSON blob in a ``<pre>`` block. That was
-    # unreadable once evidence grew past a handful of fields; a 10-item
-    # ``hardcoded_details`` list plus a couple of scalars ran ~60 lines
-    # of dense JSON.
-    #
-    # This filter turns evidence into structured HTML: a definition list
-    # for top-level scalars, a real HTML table for any list-of-dicts key
-    # (one row per entry, columns pulled from the union of keys), and
-    # nested sub-blocks for dict-of-dict evidence. ARN-shaped values are
-    # abbreviated in-place with the full value kept in a ``title=``
-    # tooltip so the reader can hover to see the full string but doesn't
-    # get a wall of ``arn:aws:connect:us-east-1:...`` on screen.
-    #
-    # Falls back to pretty-printed JSON only for shapes it can't
-    # recognise (rare in practice; every check we ship uses one of the
-    # patterns above).
+    # scalars, lists of dicts, ARNs, nested dicts. Dumping that as one JSON
+    # blob is unreadable once evidence grows past a handful of fields, so
+    # this turns it into a structure the UI renders with Cloudscape
+    # components: key-value pairs for scalars, a table per list-of-dicts key
+    # (columns = union of row keys), lists for list-of-scalars, and nested
+    # sections for dict values. ARN-shaped and very long values are
+    # abbreviated with the full value kept alongside for a hover tooltip.
 
     _EVIDENCE_ARN_ABBREV = 60
     _EVIDENCE_LONG_STRING_ABBREV = 100
+    # Nested evidence deeper than this renders as JSON rather than more
+    # nested sections — no check produces anything close to it.
+    _EVIDENCE_MAX_DEPTH = 4
 
     @classmethod
-    def _render_evidence(cls, evidence) -> str:
-        """Render a Finding's evidence dict as structured HTML."""
+    def _evidence_view(cls, evidence: Any) -> Optional[Dict[str, Any]]:
+        """Structure a Finding's evidence for the report UI (``None`` when empty)."""
         if not evidence:
-            return ""
+            return None
         if not isinstance(evidence, dict):
-            # A check may have stashed a non-dict for legacy reasons —
-            # render as JSON so nothing crashes.
-            return cls._render_evidence_fallback(evidence)
-        return cls._render_evidence_dict(evidence, depth=0)
+            # A check may have stashed a non-dict for legacy reasons.
+            return {"fallback": cls._evidence_json(evidence)}
+        return cls._evidence_block(evidence, depth=0)
 
     @classmethod
-    def _render_evidence_dict(cls, evidence: Dict[str, Any], depth: int = 0) -> str:
-        """
-        Turn a dict into an HTML fragment:
-
-          * scalar keys go into a ``<dl class="evidence-scalars">``
-          * list-of-dicts keys become tables (one per key)
-          * list-of-scalars keys become ``<ul>``
-          * nested dict keys become sub-sections with a heading and a
-            recursive call
-        """
-        scalar_items: List[tuple] = []
-        list_of_dicts: List[tuple] = []
-        list_of_scalars: List[tuple] = []
-        nested_dicts: List[tuple] = []
-
+    def _evidence_block(cls, evidence: Dict[str, Any], depth: int) -> Dict[str, Any]:
+        """Split a dict into pairs / tables / lists / nested sections."""
+        if depth > cls._EVIDENCE_MAX_DEPTH:
+            return {"fallback": cls._evidence_json(evidence)}
+        pairs: List[Dict[str, Any]] = []
+        tables: List[Dict[str, Any]] = []
+        lists: List[Dict[str, Any]] = []
+        sections: List[Dict[str, Any]] = []
         for key, value in evidence.items():
+            label = cls._humanize_key(key)
             if isinstance(value, dict):
-                nested_dicts.append((key, value))
+                sections.append({"title": label, "block": cls._evidence_block(value, depth + 1)})
+            elif isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+                tables.append(cls._evidence_table(label, value))
             elif isinstance(value, list):
-                if value and all(isinstance(v, dict) for v in value):
-                    list_of_dicts.append((key, value))
-                else:
-                    list_of_scalars.append((key, value))
+                lists.append({"title": label, "items": [cls._evidence_cell(v) for v in value]})
             else:
-                scalar_items.append((key, value))
-
-        parts: List[str] = []
-        if scalar_items:
-            parts.append(cls._render_scalar_dl(scalar_items))
-        for key, rows in list_of_dicts:
-            parts.append(cls._render_table(key, rows))
-        for key, values in list_of_scalars:
-            parts.append(cls._render_scalar_list(key, values))
-        for key, sub in nested_dicts:
-            parts.append(cls._render_nested_dict(key, sub, depth + 1))
-        return "".join(parts) if parts else cls._render_evidence_fallback(evidence)
+                pairs.append({"label": label, "value": cls._evidence_cell(value)})
+        if not (pairs or tables or lists or sections):
+            return {"fallback": cls._evidence_json(evidence)}
+        return {"pairs": pairs, "tables": tables, "lists": lists, "sections": sections}
 
     @classmethod
-    def _render_scalar_dl(cls, items: List[tuple]) -> str:
-        """Definition list for scalar key/value pairs."""
-        rows: List[str] = ['<dl class="evidence-scalars">']
-        for key, value in items:
-            rows.append(f"<dt>{cls._humanize_key(key)}</dt>")
-            rows.append(f"<dd>{cls._format_scalar_value(value)}</dd>")
-        rows.append("</dl>")
-        return "".join(rows)
-
-    @classmethod
-    def _render_table(cls, key: str, rows: List[Dict[str, Any]]) -> str:
+    def _evidence_table(cls, title: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        HTML table for a list of dicts. Column order = keys of the first
-        row, then any additional keys any subsequent row introduces (in
-        insertion order). Cells format ARN-shaped and long-string values
-        with hover tooltips.
+        Table for a list of dicts. Column order = keys of the first row, then
+        any additional keys a later row introduces (in insertion order).
         """
-        # Collect column keys preserving first-appearance order.
         columns: List[str] = []
         seen: set = set()
         for row in rows:
@@ -1067,110 +1018,57 @@ class ReportGenerator:
                 if k not in seen:
                     seen.add(k)
                     columns.append(k)
-        header_cells = "".join(f"<th>{cls._humanize_key(c)}</th>" for c in columns)
-        body_rows = []
-        for row in rows:
-            cells = "".join(f"<td>{cls._format_scalar_value(row.get(c, ''))}</td>" for c in columns)
-            body_rows.append(f"<tr>{cells}</tr>")
-        title = cls._humanize_key(key)
-        count = len(rows)
-        # A caveat next to the count reminds the reader that the check
-        # only preserves the first N entries in evidence (see the checks —
-        # most cap at 10) so nothing looks like the full universe.
-        return (
-            '<div class="evidence-section">'
-            f'<h6 class="evidence-heading">{title} '
-            f'<span class="evidence-count">({count} row{"s" if count != 1 else ""})</span></h6>'
-            '<div class="evidence-table-wrap">'
-            f'<table class="evidence-table"><thead><tr>{header_cells}</tr></thead>'
-            f"<tbody>{''.join(body_rows)}</tbody></table>"
-            "</div></div>"
-        )
+        return {
+            "title": title,
+            "columns": [cls._humanize_key(c) for c in columns],
+            "rows": [[cls._evidence_cell(row.get(c, "")) for c in columns] for row in rows],
+        }
 
     @classmethod
-    def _render_scalar_list(cls, key: str, values: List[Any]) -> str:
-        """Unordered list for a list-of-scalars."""
-        items = "".join(f"<li>{cls._format_scalar_value(v)}</li>" for v in values)
-        title = cls._humanize_key(key)
-        return (
-            '<div class="evidence-section">'
-            f'<h6 class="evidence-heading">{title} '
-            f'<span class="evidence-count">({len(values)})</span></h6>'
-            f'<ul class="evidence-list">{items}</ul>'
-            "</div>"
-        )
+    def _evidence_cell(cls, value: Any) -> Dict[str, str]:
+        """
+        Format a scalar for display: ``{"text", "kind"}`` plus ``"full"`` when
+        the text is abbreviated. ``kind`` is one of null / bool / number /
+        arn / text.
+        """
+        if value is None:
+            return {"text": "—", "kind": "null"}
+        if isinstance(value, bool):
+            return {"text": "true" if value else "false", "kind": "bool"}
+        if isinstance(value, (int, float)):
+            return {"text": str(value), "kind": "number"}
+        if isinstance(value, (list, tuple)):
+            # Inline mini-list, comma-separated.
+            text = ", ".join(cls._evidence_cell(v)["text"] for v in value) or "—"
+            return {"text": text, "kind": "text"}
+        if isinstance(value, dict):
+            # Nested dict inside a cell — render as key=value pairs.
+            text = ", ".join(f"{k}={cls._evidence_cell(v)['text']}" for k, v in value.items())
+            return {"text": text, "kind": "text"}
+        s = str(value)
+        if s.startswith("arn:aws:"):
+            return {"text": cls._abbrev_arn(s), "full": s, "kind": "arn"}
+        if len(s) > cls._EVIDENCE_LONG_STRING_ABBREV:
+            return {
+                "text": s[: cls._EVIDENCE_LONG_STRING_ABBREV - 1] + "\u2026",
+                "full": s,
+                "kind": "text",
+            }
+        return {"text": s, "kind": "text"}
 
-    @classmethod
-    def _render_nested_dict(cls, key: str, sub: Dict[str, Any], depth: int) -> str:
-        """Sub-section for a nested dict value."""
-        title = cls._humanize_key(key)
-        return (
-            f'<div class="evidence-section evidence-nested">'
-            f'<h6 class="evidence-heading">{title}</h6>'
-            f"{cls._render_evidence_dict(sub, depth=depth)}"
-            "</div>"
-        )
-
-    @classmethod
-    def _render_evidence_fallback(cls, value: Any) -> str:
+    @staticmethod
+    def _evidence_json(value: Any) -> str:
         """Pretty-print JSON as a last resort."""
         try:
-            body = json.dumps(value, indent=2, default=str)
+            return json.dumps(value, indent=2, default=str)
         except TypeError:
-            body = str(value)
-        # HTML-escape the JSON — this is unstructured content going into
-        # a <pre>; no filter chain protects us here.
-        import html as _html
-
-        return f'<pre class="evidence-json">{_html.escape(body)}</pre>'
+            return str(value)
 
     @staticmethod
     def _humanize_key(key: Any) -> str:
         """Turn ``hardcoded_details`` into ``Hardcoded details``."""
-        import html as _html
-
         s = str(key).replace("_", " ").strip()
-        return _html.escape(s[:1].upper() + s[1:]) if s else ""
-
-    @classmethod
-    def _format_scalar_value(cls, value: Any) -> str:
-        """
-        Format a scalar for display inside a table cell or <dd>.
-
-        Abbreviates ARNs and very long strings with a hover tooltip
-        carrying the full value. Boolean / numeric / None pass through
-        with type-appropriate rendering.
-        """
-        import html as _html
-
-        if value is None:
-            return '<span class="evidence-null">—</span>'
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (int, float)):
-            return _html.escape(str(value))
-        if isinstance(value, (list, tuple)):
-            # Inline mini-list, comma-separated.
-            return ", ".join(cls._format_scalar_value(v) for v in value) or "—"
-        if isinstance(value, dict):
-            # Nested dict inside a cell — render as key=value pairs.
-            return ", ".join(
-                f"{_html.escape(str(k))}={cls._format_scalar_value(v)}" for k, v in value.items()
-            )
-        s = str(value)
-        if s.startswith("arn:aws:"):
-            return (
-                f'<code class="evidence-arn" title="{_html.escape(s)}">'
-                f"{_html.escape(cls._abbrev_arn(s))}"
-                "</code>"
-            )
-        if len(s) > cls._EVIDENCE_LONG_STRING_ABBREV:
-            return (
-                f'<span class="evidence-abbrev" title="{_html.escape(s)}">'
-                f"{_html.escape(s[: cls._EVIDENCE_LONG_STRING_ABBREV - 1])}\u2026"
-                "</span>"
-            )
-        return _html.escape(s)
+        return s[:1].upper() + s[1:] if s else ""
 
     @classmethod
     def _abbrev_arn(cls, arn: str) -> str:
@@ -1230,7 +1128,7 @@ class ReportGenerator:
                 dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 return dt
-        return dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
+        return to_utc(dt).strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
 
     def _format_duration(self, seconds: float) -> str:
         # Format duration in seconds to human readable format
@@ -1241,95 +1139,30 @@ class ReportGenerator:
         else:
             return f"{seconds / 3600:.1f}h"
 
-    def _get_severity_color(self, severity: str) -> str:
-        # Get color code for severity level
-        colors = {
-            "critical": "#dc3545",
-            "high": "#fd7e14",
-            "medium": "#ffc107",
-            "low": "#17a2b8",
-        }
-        return colors.get(severity.lower(), "#6c757d")
-
-    def _get_status_color(self, status: str) -> str:
-        # Get color code for check status
-        colors = {
-            "pass": "#28a745",
-            "fail": "#dc3545",
-            "error": "#ffc107",
-            "skipped": "#6c757d",
-            "not_applicable": "#adb5bd",
-        }
-        return colors.get(status.lower(), "#6c757d")
-
-    def _get_pillar_icon(self, pillar: str) -> str:
-        # Get icon class for pillar
-        icons = {
-            "resilience": "fas fa-shield-alt",
-            "security": "fas fa-lock",
-            "cost_optimization": "fas fa-dollar-sign",
-        }
-        return icons.get(pillar.lower(), "fas fa-cog")
-
-    def _load_external_css(self) -> str:
-        """Load CSS from external template files."""
-        try:
-            template_base = Path(__file__).parent / "templates" / "css"
-            css_files = [
-                "main.css",
-                "components.css",
-                "findings.css",
-                "charts.css",
-                # journey_map.css styles the Caller Journey Map section
-                # (top-N flows + Mermaid diagrams). Loaded after findings
-                # so its dark-mode overrides win where the two overlap.
-                "journey_map.css",
-                "responsive.css",
-            ]
-
-            combined_css = []
-            for css_file in css_files:
-                css_path = template_base / css_file
-                if css_path.exists():
-                    with open(css_path, "r", encoding="utf-8") as f:
-                        combined_css.append(f.read())
-                else:
-                    self.logger.warning(f"CSS file not found: {css_path}")
-
-            return "\n\n".join(combined_css)
-        except Exception as e:
-            self.logger.error(f"Failed to load external CSS: {e}")
-            return ""
-
-    def _load_service_icon(self) -> str:
-        """Return the inline SVG for the header service icon.
-
-        Reads the bundled asset so it can be embedded directly in the report
-        (keeping the output a single self-contained file). Returns an empty
-        string if the asset is missing, letting the header template fall back
-        to the Font Awesome glyph.
+    def _load_app_asset(self, name: str) -> str:
         """
-        try:
-            icon_path = Path(__file__).parent / "templates" / "assets" / "amazon-connect.svg"
-            if icon_path.exists():
-                return icon_path.read_text(encoding="utf-8")
-            self.logger.warning(f"Service icon not found: {icon_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to load service icon: {e}")
-        return ""
+        Read a pre-built report UI asset (``report-app.js`` / ``report-app.css``).
 
-    def _load_external_js(self) -> str:
-        """Load JavaScript from external template files."""
-        try:
-            template_base = Path(__file__).parent / "templates" / "js"
-            js_path = template_base / "report-controller.js"
+        The bundle is what renders the report, so a missing file is an error
+        rather than a silently blank page.
+        """
+        path = self._APP_DIR / name
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Report UI bundle not found: {path}. Rebuild it with "
+                "`npm ci && npm run build` in the frontend/ directory."
+            )
+        content = path.read_text(encoding="utf-8")
+        # The asset is inlined into a <script>/<style> element; make sure no
+        # literal end tag inside it can terminate that element early.
+        tag = "script" if name.endswith(".js") else "style"
+        return re.sub(rf"</({tag})", r"<\\/\1", content, flags=re.IGNORECASE)
 
-            if js_path.exists():
-                with open(js_path, "r", encoding="utf-8") as f:
-                    return f.read()
-            else:
-                self.logger.warning(f"JavaScript file not found: {js_path}")
-                return ""
-        except Exception as e:
-            self.logger.error(f"Failed to load external JavaScript: {e}")
-            return ""
+    def _service_icon_data_uri(self) -> Optional[str]:
+        """Return the bundled Amazon Connect icon as a data URI for the top navigation."""
+        try:
+            svg = self._SERVICE_ICON.read_bytes()
+        except OSError as e:
+            self.logger.warning(f"Service icon not available: {e}")
+            return None
+        return "data:image/svg+xml;base64," + base64.b64encode(svg).decode("ascii")

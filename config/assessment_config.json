@@ -1,7 +1,6 @@
 {
     "global_settings": {
         "timeout": 300,
-        "retry_count": 3,
         "max_retry_attempts": 5,
         "retry_base_delay": 1.0,
         "retry_max_delay": 60.0,

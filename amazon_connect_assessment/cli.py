@@ -8,7 +8,9 @@ and flexible output options for running assessments across different environment
 import argparse
 import json
 import logging
+import math
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +31,41 @@ from .logging_config import configure_aws_logging, setup_logging
 from .report_generator import ReportGenerator
 
 REPORTS_DIRECTORY = "reports"
+
+_INSTANCE_ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def instance_id_arg(value: str) -> str:
+    """argparse type for --instance-id: a Connect instance ID is a lowercase UUID."""
+    candidate = value.strip().lower()
+    if not _INSTANCE_ID_PATTERN.match(candidate):
+        raise argparse.ArgumentTypeError(
+            f"'{value}' is not a Connect instance ID (expected a UUID such as "
+            "12345678-abcd-1234-abcd-123456789012, not an ARN or alias)"
+        )
+    return candidate
+
+
+def positive_int(value: str) -> int:
+    """argparse type: an integer >= 1."""
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not an integer")
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {number}")
+    return number
+
+
+def non_negative_float(value: str) -> float:
+    """argparse type: a finite number >= 0."""
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a number")
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative number, got {value}")
+    return number
 
 
 class ConfigurationManager:
@@ -73,7 +110,6 @@ class ConfigurationManager:
         return {
             "global_settings": {
                 "timeout": 300,
-                "retry_count": 3,
                 "max_retry_attempts": 5,
                 "retry_base_delay": 1.0,
                 "retry_max_delay": 60.0,
@@ -176,6 +212,9 @@ class ConfigurationManager:
         result = base.copy()
 
         for key, value in override.items():
+            # An empty YAML section (`output:`) loads as None; keep the defaults.
+            if value is None and isinstance(result.get(key), dict):
+                continue
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 result[key] = self._merge_configs(result[key], value)
             else:
@@ -188,7 +227,6 @@ class ConfigurationManager:
         env_mappings = {
             "CONNECT_ASSESSMENT_LOG_LEVEL": ["global_settings", "log_level"],
             "CONNECT_ASSESSMENT_TIMEOUT": ["global_settings", "timeout"],
-            "CONNECT_ASSESSMENT_RETRY_COUNT": ["global_settings", "retry_count"],
             "CONNECT_ASSESSMENT_MAX_RETRY_ATTEMPTS": [
                 "global_settings",
                 "max_retry_attempts",
@@ -225,7 +263,6 @@ class ConfigurationManager:
                 # Convert value to appropriate type
                 if config_path[-1] in [
                     "timeout",
-                    "retry_count",
                     "max_workers",
                     "batch_size",
                     "max_retry_attempts",
@@ -244,29 +281,28 @@ class ConfigurationManager:
 
                 current[config_path[-1]] = value
 
-    def validate_config(self) -> List[str]:
+    def validate_config(self, config: Optional[Dict[str, Any]] = None) -> List[str]:
         """
         Validate configuration and return list of validation errors.
+
+        Args:
+            config: Configuration to validate (default: the loaded file config).
+                Pass the CLI-merged config so flag values are checked too.
 
         Returns:
             List of validation error messages
         """
+        cfg = self.config if config is None else config
         errors = []
 
         # Validate global settings
-        global_settings = self.config.get("global_settings", {})
+        global_settings = cfg.get("global_settings") or {}
 
         if (
             not isinstance(global_settings.get("timeout"), int)
             or global_settings.get("timeout") <= 0
         ):
             errors.append("global_settings.timeout must be a positive integer")
-
-        if (
-            not isinstance(global_settings.get("retry_count"), int)
-            or global_settings.get("retry_count") < 0
-        ):
-            errors.append("global_settings.retry_count must be a non-negative integer")
 
         if (
             not isinstance(global_settings.get("max_retry_attempts"), int)
@@ -303,7 +339,7 @@ class ConfigurationManager:
 
         # Validate log level
         valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        log_level = global_settings.get("log_level", "INFO").upper()
+        log_level = str(global_settings.get("log_level") or "INFO").upper()
         if log_level not in valid_log_levels:
             errors.append(
                 f"global_settings.log_level must be one of: {', '.join(valid_log_levels)}"
@@ -317,7 +353,7 @@ class ConfigurationManager:
             "operational_excellence",
             "performance_efficiency",
         ]
-        enabled_pillars = self.config.get("enabled_pillars", [])
+        enabled_pillars = cfg.get("enabled_pillars") or []
         for pillar in enabled_pillars:
             if pillar not in valid_pillars:
                 errors.append(
@@ -326,7 +362,7 @@ class ConfigurationManager:
 
         # Validate severities
         valid_severities = ["critical", "high", "medium", "low"]
-        enabled_severities = self.config.get("enabled_severities", [])
+        enabled_severities = cfg.get("enabled_severities") or []
         for severity in enabled_severities:
             if severity not in valid_severities:
                 errors.append(
@@ -334,9 +370,9 @@ class ConfigurationManager:
                 )
 
         # Validate output configuration
-        output_config = self.config.get("output", {})
+        output_config = cfg.get("output") or {}
         valid_formats = ["html", "json", "csv", "asff"]
-        output_formats = output_config.get("format", [])
+        output_formats = output_config.get("format") or []
         if not isinstance(output_formats, list):
             output_formats = [output_formats]
 
@@ -400,7 +436,6 @@ Examples:
 Environment Variables:
   CONNECT_ASSESSMENT_LOG_LEVEL              Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   CONNECT_ASSESSMENT_TIMEOUT                Set operation timeout in seconds
-  CONNECT_ASSESSMENT_RETRY_COUNT            Set number of retries for failed operations
   CONNECT_ASSESSMENT_MAX_RETRY_ATTEMPTS     Set maximum retry attempts for network operations
   CONNECT_ASSESSMENT_RETRY_BASE_DELAY       Set base delay between retries in seconds
   CONNECT_ASSESSMENT_RETRY_MAX_DELAY        Set maximum delay between retries in seconds
@@ -461,7 +496,11 @@ Configuration Files:
     aws_group.add_argument(
         "--instance-id",
         metavar="ID",
-        help="Assess only this specific Connect instance ID (skip discovery of others)",
+        type=instance_id_arg,
+        help=(
+            "Assess only this specific Connect instance ID (skip discovery of others). "
+            "The run stops with an error if the instance is not in the target region"
+        ),
     )
 
     # Assessment options
@@ -498,31 +537,25 @@ Configuration Files:
     )
     assessment_group.add_argument(
         "--timeout",
-        type=int,
+        type=positive_int,
         metavar="SECONDS",
         help="Timeout for assessment operations in seconds",
     )
     assessment_group.add_argument(
-        "--retry-count",
-        type=int,
-        metavar="COUNT",
-        help="Number of retries for failed operations",
-    )
-    assessment_group.add_argument(
         "--max-retry-attempts",
-        type=int,
+        type=positive_int,
         metavar="COUNT",
         help="Maximum retry attempts for network operations (default: 5)",
     )
     assessment_group.add_argument(
         "--retry-base-delay",
-        type=float,
+        type=non_negative_float,
         metavar="SECONDS",
         help="Base delay between retries in seconds (default: 1.0)",
     )
     assessment_group.add_argument(
         "--retry-max-delay",
-        type=float,
+        type=non_negative_float,
         metavar="SECONDS",
         help="Maximum delay between retries in seconds (default: 60.0)",
     )
@@ -583,14 +616,15 @@ Configuration Files:
 
     # Logging and verbosity options
     logging_group = parser.add_argument_group("Logging Options")
-    logging_group.add_argument(
+    verbosity_group = logging_group.add_mutually_exclusive_group()
+    verbosity_group.add_argument(
         "--verbose",
         "-v",
         action="count",
         default=0,
         help="Increase verbosity (-v for INFO, -vv for DEBUG)",
     )
-    logging_group.add_argument(
+    verbosity_group.add_argument(
         "--quiet",
         "-q",
         action="store_true",
@@ -630,7 +664,8 @@ Configuration Files:
         action="store_true",
         help="Disable checkpoint recovery functionality",
     )
-    execution_group.add_argument(
+    mode_group = execution_group.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--parallel",
         action="store_true",
         default=None,
@@ -642,20 +677,20 @@ Configuration Files:
             "for a single run."
         ),
     )
-    execution_group.add_argument(
+    mode_group.add_argument(
         "--sequential",
         action="store_true",
         help="Force sequential execution (disables parallel processing)",
     )
     execution_group.add_argument(
         "--max-workers",
-        type=int,
+        type=positive_int,
         metavar="COUNT",
         help="Maximum number of parallel worker threads (default: auto-detect)",
     )
     execution_group.add_argument(
         "--batch-size",
-        type=int,
+        type=positive_int,
         metavar="SIZE",
         help="Number of checks to process in each batch (default: 10)",
     )
@@ -743,8 +778,6 @@ def merge_cli_args_with_config(args: argparse.Namespace, config: Dict[str, Any])
     global_settings = merged_config.setdefault("global_settings", {})
     if args.timeout is not None:
         global_settings["timeout"] = args.timeout
-    if args.retry_count is not None:
-        global_settings["retry_count"] = args.retry_count
     if args.max_retry_attempts is not None:
         global_settings["max_retry_attempts"] = args.max_retry_attempts
     if args.retry_base_delay is not None:
@@ -762,8 +795,7 @@ def merge_cli_args_with_config(args: argparse.Namespace, config: Dict[str, Any])
     # and silently forced global_settings["parallel_execution"] back to True
     # even when a config file explicitly set `parallel_execution: false` —
     # the only way to get sequential execution was --sequential, and the
-    # config setting was pure noise. --sequential still wins if both are
-    # passed (mirrors "the more specific/defensive flag wins").
+    # config setting was pure noise. argparse rejects passing both.
     if args.sequential:
         global_settings["parallel_execution"] = False
     elif args.parallel:
@@ -809,6 +841,162 @@ def merge_cli_args_with_config(args: argparse.Namespace, config: Dict[str, Any])
     return merged_config
 
 
+def check_registration_filters(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Keyword arguments for register_all_checks() derived from the merged config."""
+    cli_opts = config.get("cli", {})
+    enabled_pillars = config.get("enabled_pillars")
+
+    # NOTE: enabled_severities always has a default value (all four
+    # levels) from ConfigurationManager._get_default_config, so we
+    # only treat it as an active filter when the CLI/config narrowed
+    # it away from that default. Otherwise every run would silently
+    # filter to the default list even without --severity, which
+    # would be harmless today but fragile if the default set ever
+    # changes independent of this check.
+    severity_filter = None
+    enabled_severities = config.get("enabled_severities")
+    if enabled_severities and set(enabled_severities) != {"critical", "high", "medium", "low"}:
+        severity_filter = set(enabled_severities)
+
+    return {
+        "pillars": set(enabled_pillars) if enabled_pillars else None,
+        "severities": severity_filter,
+        "check_ids": set(cli_opts["checks"]) if cli_opts.get("checks") else None,
+        "exclude_check_ids": (
+            set(cli_opts["exclude_checks"]) if cli_opts.get("exclude_checks") else None
+        ),
+        "skip_flow_analysis": cli_opts.get("skip_flow_analysis", False),
+    }
+
+
+def _nearest_existing_path(path: str) -> str:
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return path
+
+
+def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) -> List[str]:
+    """
+    Check inputs that would otherwise fail only after the assessment has run.
+
+    Covers the log file, output directory (or its nearest existing parent),
+    filename template, S3 bucket name, --diff baseline, --checks/--exclude-checks
+    IDs, and whether any check survives the registration filters. AWS-dependent checks
+    (instance ID, permissions) are in AssessmentEngine.validate_configuration.
+    """
+    from .checks.registration import register_all_checks
+    from .report.s3_publisher import is_valid_bucket_name
+    from .report_generator import validate_report_filename
+
+    errors: List[str] = []
+    output = config.get("output", {})
+    cli_opts = config.get("cli", {})
+
+    if log_file:
+        log_dir = os.path.dirname(os.path.abspath(log_file))
+        if os.path.isdir(log_file):
+            errors.append(f"--log-file {log_file} is a directory, not a file")
+        elif not os.path.isdir(log_dir):
+            errors.append(f"--log-file directory does not exist: {log_dir}")
+        elif not os.access(log_dir, os.W_OK):
+            errors.append(f"--log-file directory is not writable: {log_dir}")
+
+    output_dir = output.get("directory") or REPORTS_DIRECTORY
+    existing = _nearest_existing_path(output_dir)
+    if not os.path.isdir(existing):
+        if existing == os.path.abspath(output_dir):
+            errors.append(f"Output directory {output_dir} exists and is not a directory")
+        else:
+            errors.append(f"Output directory {output_dir} cannot be created: {existing} is a file")
+    elif not os.access(existing, os.W_OK | os.X_OK):
+        errors.append(f"Output directory {output_dir} is not writable ({existing})")
+
+    template = output.get("filename_template")
+    if template:
+        try:
+            rendered = template.format(
+                timestamp="20260101_000000",
+                account_id="123456789012",
+                region="us-east-1",
+                assessment_id="00000000-0000-0000-0000-000000000000",
+            )
+            validate_report_filename(rendered)
+        except (KeyError, IndexError, AttributeError):
+            errors.append(
+                f"Filename template '{template}' uses an unknown placeholder; supported: "
+                "{timestamp}, {account_id}, {region}, {assessment_id}"
+            )
+        except ValueError as e:
+            errors.append(f"Filename template '{template}' is invalid: {e}")
+
+    bucket = output.get("s3_bucket")
+    if bucket and not is_valid_bucket_name(bucket):
+        errors.append(f"--s3-bucket '{bucket}' is not a valid S3 bucket name")
+
+    baseline = cli_opts.get("diff_baseline")
+    if baseline:
+        if not os.path.isfile(baseline):
+            errors.append(f"--diff baseline file not found: {baseline}")
+        else:
+            try:
+                with open(baseline, encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, (list, dict)) or (
+                    isinstance(data, dict) and "findings" not in data
+                ):
+                    errors.append(
+                        f"--diff baseline {baseline} is not an assessment JSON report "
+                        "(no 'findings')"
+                    )
+            except (OSError, json.JSONDecodeError) as e:
+                errors.append(f"--diff baseline {baseline} is not valid JSON: {e}")
+
+    requested = {
+        "--checks": cli_opts.get("checks") or [],
+        "--exclude-checks": cli_opts.get("exclude_checks") or [],
+    }
+    # Registration logs its progress, which the real run repeats; problems
+    # found here are reported as validation errors instead.
+    previous_disable = logging.root.manager.disable
+    logging.disable(logging.WARNING)
+    try:
+        catalog = CheckRegistry()
+        register_all_checks(catalog)
+        effective = CheckRegistry()
+        register_all_checks(effective, **check_registration_filters(config))
+    finally:
+        logging.disable(previous_disable)
+
+    known = set(catalog.list_check_ids())
+    unknown_ids = False
+    for flag, ids in requested.items():
+        unknown = sorted(set(ids) - known)
+        if unknown:
+            unknown_ids = True
+            errors.append(
+                f"{flag}: unknown check ID(s) {', '.join(unknown)}; "
+                "run --list-checks to see valid IDs"
+            )
+
+    # Mirrors the `enabled: false` handling in CheckRegistry.load_checks_from_config.
+    disabled = {
+        check_id
+        for check_id, check_config in (config.get("checks") or {}).items()
+        if isinstance(check_config, dict) and not check_config.get("enabled", True)
+    }
+    if not unknown_ids and not set(effective.list_check_ids()) - disabled:
+        errors.append(
+            "No checks remain after applying --pillars, --severity, --checks, "
+            "--exclude-checks, --skip-flow-analysis, and checks disabled in the config file"
+        )
+
+    return errors
+
+
 def initialize_assessment_components(config: Dict[str, Any]) -> tuple:
     """
     Initialize assessment engine and related components.
@@ -845,45 +1033,14 @@ def initialize_assessment_components(config: Dict[str, Any]) -> tuple:
 
     # Initialize check registry and load checks
     check_registry = CheckRegistry()
+    filters = check_registration_filters(config)
+    skip_flow = filters["skip_flow_analysis"]
 
     # Register all checks using the central registration module.
     try:
         from .checks.registration import register_all_checks
 
-        cli_opts = config.get("cli", {})
-        pillar_filter = None
-        enabled_pillars = config.get("enabled_pillars")
-        if enabled_pillars:
-            pillar_filter = set(enabled_pillars)
-
-        # NOTE: enabled_severities always has a default value (all four
-        # levels) from ConfigurationManager._get_default_config, so we
-        # only treat it as an active filter when the CLI/config narrowed
-        # it away from that default. Otherwise every run would silently
-        # filter to the default list even without --severity, which
-        # would be harmless today but fragile if the default set ever
-        # changes independent of this check.
-        severity_filter = None
-        enabled_severities = config.get("enabled_severities")
-        all_severities = {"critical", "high", "medium", "low"}
-        if enabled_severities and set(enabled_severities) != all_severities:
-            severity_filter = set(enabled_severities)
-
-        check_ids_filter = set(cli_opts["checks"]) if cli_opts.get("checks") else None
-        exclude_check_ids = (
-            set(cli_opts["exclude_checks"]) if cli_opts.get("exclude_checks") else None
-        )
-
-        skip_flow = cli_opts.get("skip_flow_analysis", False)
-
-        register_all_checks(
-            check_registry,
-            pillars=pillar_filter,
-            severities=severity_filter,
-            check_ids=check_ids_filter,
-            exclude_check_ids=exclude_check_ids,
-            skip_flow_analysis=skip_flow,
-        )
+        register_all_checks(check_registry, **filters)
         logger.info(f"Registered {len(check_registry)} checks")
     except Exception as e:
         logger.warning(f"Failed to load checks: {str(e)}")
@@ -1330,28 +1487,30 @@ def main() -> int:
         config_manager = ConfigurationManager()
         config = config_manager.load_config(args.config)
 
-        # Validate configuration if requested
-        if args.validate_config:
-            errors = config_manager.validate_config()
-            if errors:
-                print("Configuration validation failed:")
-                for error in errors:
-                    print(f"  ✗ {error}")
-                return 1
-            else:
-                print("✓ Configuration is valid")
-                return 0
-
-        # Merge CLI arguments with configuration
+        # Merge CLI arguments with configuration, then validate the result so
+        # bad flag values fail here rather than mid-run or after the run.
         config = merge_cli_args_with_config(args, config)
+        errors = config_manager.validate_config(config) + validate_run_inputs(
+            config, log_file=args.log_file
+        )
+        # --show-config displays the merged config even when it is invalid, since
+        # that is what the user needs to diagnose the validation errors.
+        if args.show_config:
+            show_current_config(config, config_manager.get_config_file_path())
+        if errors:
+            print("Configuration validation failed:")
+            for error in errors:
+                print(f"  ✗ {error}")
+            return 1
+        if args.validate_config:
+            print("✓ Configuration is valid")
+            return 0
 
         # Setup logging
         setup_logging_from_args(args, config)
         logger = logging.getLogger("cli")
 
-        # Show configuration if requested
         if args.show_config:
-            show_current_config(config, config_manager.get_config_file_path())
             return 0
 
         # Initialize assessment components
@@ -1366,6 +1525,17 @@ def main() -> int:
         if args.list_checks:
             list_available_checks(check_registry)
             return 0
+
+        resume_id = config.get("cli", {}).get("resume_assessment")
+        if resume_id and not engine.has_checkpoint(resume_id):
+            if config.get("cli", {}).get("no_checkpoints"):
+                print("✗ --resume-assessment cannot be used with --no-checkpoints")
+            else:
+                print(
+                    f"✗ No checkpoint for assessment {resume_id} in {engine.checkpoint_dir} "
+                    "(use --checkpoint-dir if it was saved elsewhere)"
+                )
+            return 1
 
         # Check permissions if requested
         if args.check_permissions:

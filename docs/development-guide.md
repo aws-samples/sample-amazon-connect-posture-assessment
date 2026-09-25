@@ -6,6 +6,7 @@
 - [Running tests](#running-tests)
 - [Code quality](#code-quality)
 - [Developer scripts](#developer-scripts)
+- [HTML report UI](#html-report-ui)
 - [Adding a new check](#adding-a-new-check)
   - [Create the check class](#1-create-the-check-class)
   - [Register the check](#2-register-the-check)
@@ -98,13 +99,63 @@ python scripts/validate_environment.py
 python scripts/generate_readme_html.py
 ```
 
-Regenerate `docs/images/sample-assessment-report.png` after changing the sample
-report in `examples/`:
+Regenerate the README screenshots after changing the sample report in `examples/`:
 
 ```bash
 pip install -e ".[screenshots]"
 playwright install chromium
 python scripts/capture_screenshots.py
+```
+
+One render writes both images: the full-length
+`docs/images/sample-assessment-report-full.png` (shown in a collapsed README section)
+and `docs/images/sample-assessment-report.png`, a crop from the Executive summary
+through the Caller journey map (`--preview-from` / `--preview-to`) shown inline.
+Pass `--no-preview` to skip the crop, or `--viewport-only` (with optional `--height`
+and `--scroll-y`) to capture a single viewport to `--output`.
+
+---
+
+## HTML report UI
+
+The HTML report is a [Cloudscape](https://cloudscape.design/) React app
+(`frontend/`) bundled by esbuild into
+`amazon_connect_assessment/templates/app/report-app.{js,css}`. The bundle is
+**committed**, so installing or running the Python tool never needs Node.js.
+`ReportGenerator` renders a thin Jinja shell (`templates/html/assessment_report.html`)
+that inlines the bundle plus one JSON data island built by
+`ReportGenerator._build_report_data()` — that dict is the contract between the
+Python side and the UI.
+
+Only rebuild when you change `frontend/src/` or its dependencies (Node.js 20+):
+
+```bash
+cd frontend
+npm ci
+npm test        # node:test unit tests (CSV export, filenames, PNG sizing, data loading, contract)
+npm run build   # writes amazon_connect_assessment/templates/app/
+npm run check   # build + fail if the committed bundle differs (what CI runs)
+```
+
+The data contract is pinned from both sides: `frontend/src/contract.js` lists every
+field the UI reads (and `loadReportData()` rejects data missing any of them), and
+`frontend/test/fixtures/report-data.json` is generated from the real
+`_build_report_data()` output. `tests/test_report_ui_contract.py` fails when the Python
+output drifts from that fixture; the Node tests check the fixture against
+`contract.js`. After an intentional contract change, update `contract.js` and run
+`UPDATE_REPORT_FIXTURE=1 pytest tests/test_report_ui_contract.py`.
+
+Commit the rebuilt bundle together with the source change. Conventions:
+
+- Render assessment content as text through Cloudscape components. The only
+  pre-rendered markup is finding markdown (`*_html` fields), produced by the
+  XSS-safe markdown-it parser in `ReportGenerator._render_markdown`.
+- Use Cloudscape design tokens (`@cloudscape-design/design-tokens`) for any
+  custom styling so light/dark mode keeps working.
+- The Caller Journey Map draws the geometry the Python renderer computed
+  (`diagram_model["layout"]`, from `journey/renderer.py::_layout_payload`), so
+  the in-report diagram always matches the SVG and draw.io exports.
+- Keep the report offline: no CDN fonts, scripts, or images.
 
 ---
 
@@ -244,7 +295,7 @@ amazon_connect_assessment/
 ├── parallel_engine.py        # Parallel execution (default, extends engine.py)
 ├── aws_client_factory.py     # boto3 session management, credential handling
 ├── models.py                 # Dataclasses: Finding, ConnectInstance, AssessmentResult, etc.
-├── report_generator.py       # Jinja2 → HTML, JSON, CSV output; ASFF uses report/asff_export.py
+├── report_generator.py       # HTML (Cloudscape UI + JSON data island), JSON, CSV; ASFF uses report/asff_export.py
 ├── network_resilience.py     # Retry logic, exponential backoff, rate limit detection
 ├── logging_config.py         # Structured logging setup
 │
@@ -289,11 +340,15 @@ amazon_connect_assessment/
 │   ├── posture_roadmap.py    # Roadmap generation
 │   └── s3_publisher.py       # Optional upload of reports to an S3 bucket (--s3-output)
 │
-└── templates/                # Jinja2 templates for HTML report
-    ├── html/assessment_report.html
-    ├── html/partials/
-    ├── css/
-    └── js/report-controller.js
+└── templates/
+    ├── html/assessment_report.html  # Thin Jinja shell: inlines the UI bundle + data island
+    ├── app/report-app.{js,css}      # Built Cloudscape UI (committed; built from frontend/)
+    └── assets/amazon-connect.svg
+
+frontend/                         # React + Cloudscape source for the HTML report UI
+├── package.json / package-lock.json  # Pinned Cloudscape, React, esbuild versions
+├── build.mjs                     # esbuild → amazon_connect_assessment/templates/app/
+└── src/                          # App, findings table, finding detail, journey map, charts
 
 cloudformation/
 └── AmazonConnectSelfAssessmentPolicy.yaml # Deploy to grant your account the required IAM permissions
@@ -335,7 +390,9 @@ GitHub Actions runs on every push and PR to `main`:
 - **Test** — pytest on Python 3.12
 - **Lint** — `ruff check` (lint + import order) and `ruff format --check`
 - **Type check** — mypy
-- **Security audit** — pip-audit on dependencies
+- **Report UI** — runs the `frontend/` unit tests, rebuilds the bundle, and fails if the committed bundle in
+  `amazon_connect_assessment/templates/app/` is stale
+- **Security audit** — pip-audit on Python dependencies; `npm audit --audit-level=high` on the report UI (`report-ui` job)
 
 See `.github/workflows/ci.yml` for the full definition.
 

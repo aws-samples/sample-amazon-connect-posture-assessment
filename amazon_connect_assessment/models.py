@@ -6,9 +6,14 @@ process, including assessment results, findings, and Connect instance representa
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+def to_utc(dt: datetime) -> datetime:
+    """Return ``dt`` in UTC; naive values are assumed to already be UTC."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
 class Pillar(Enum):
@@ -104,7 +109,7 @@ class Finding:
     description: str
     remediation: str
     evidence: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Optional structured, evidence-specific remediation (Requirement 42).
     # The flat ``remediation`` string above is auto-derived from this when set,
     # so existing report rendering and exports remain backward compatible.

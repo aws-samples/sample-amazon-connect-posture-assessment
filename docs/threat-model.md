@@ -64,7 +64,7 @@ The only write operation the tool can perform is creating and writing to its own
 |---|---|---|---|
 | Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Depth bounded at 50; paths capped at 200 per entry and 5000 globally. |
 | Combinatorial explosion from highly branching flows | Denial of Service | Medium | `max_paths` and `MAX_TOTAL_PATHS` caps prevent unbounded growth. Path enumeration short-circuits once limits are hit. |
-| Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | Jinja2 autoescaping applied to all template output. JSON encoding uses `<\/` escape. |
+| Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | Flow-derived text reaches the report only as JSON data (`<`, `>`, `&` escaped as `\u003c`/`\u003e`/`\u0026` so no string can close the data island) and is rendered as text by React. |
 | Malformed flow JSON crashes the parser | Denial of Service | Low | Parser validates input type, skips non-dict actions gracefully, and uses `.get()` with defaults throughout. |
 | Dynamic attribute references used to confuse graph analysis | Spoofing | Low | Dynamic references are detected and recorded in `dynamic_references` — never followed as if they were static edges. |
 
@@ -82,7 +82,7 @@ The only write operation the tool can perform is creating and writing to its own
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| XSS in HTML report via injected flow names or parameters | Elevation of Privilege | Medium | Jinja2 `select_autoescape(["html", "xml"])` enabled. All dynamic content escaped by default. |
+| XSS in HTML report via injected flow names or parameters | Elevation of Privilege | Medium | All assessment data is embedded as an escaped JSON data island and rendered as text by React (Cloudscape components). The only pre-rendered markup is finding markdown, produced by markdown-it with raw HTML disabled; markdown links must be absolute `http(s)`/`mailto` (others render as text) and images render as alt text, so the report never fetches remote content. Reference URLs are scheme-allowlisted (`_safe_url`). The inlined UI bundle is static, developer-built code; `</script`/`</style` sequences in it are neutralised on load. Jinja2 autoescaping stays on for the shell template. |
 | Local report file accessible to unauthorized users | Information Disclosure | Medium | Reports written to a local directory; access governed by OS file permissions. |
 | Report tampering after generation | Tampering | Low | Reports are static, point-in-time snapshots. ASFF output can be verified via Security Hub import validation. |
 
@@ -102,11 +102,11 @@ The only write operation the tool can perform is creating and writing to its own
 | Category | Key risks | Primary controls |
 |---|---|---|
 | **Spoofing** | Credential misuse; bucket-name takeover | Same-account read-only inline policy (no cross-account assumption); bucket ownership checked via `head_bucket` before upload |
-| **Tampering** | Adversarial flow content | Iterative bounded parsing; Jinja2 autoescaping |
+| **Tampering** | Adversarial flow content | Iterative bounded parsing; escaped JSON data island rendered as text |
 | **Repudiation** | Assessment actions not auditable | All AWS API calls logged in CloudTrail automatically |
 | **Information Disclosure** | Credential leakage; public report bucket | No credentials in logs/reports; Block Public Access + SSE on report bucket; restrictive local file permissions |
 | **Denial of Service** | Graph explosion | Bounded traversal (depth 50, paths 5000) |
-| **Elevation of Privilege** | XSS in reports; over-broad IAM | Jinja2 autoescaping; least-privilege read-only role, with optional S3 writes granted separately and scoped to the report bucket |
+| **Elevation of Privilege** | XSS in reports; over-broad IAM | JSON data island rendered as text by React, XSS-safe markdown; least-privilege read-only role, with optional S3 writes granted separately and scoped to the report bucket |
 
 ---
 
@@ -170,7 +170,7 @@ The only write operation the tool can perform is creating and writing to its own
 | Risk | Likelihood | Impact | Acceptance rationale |
 |---|---|---|---|
 | Local attacker on same host accesses reports | Low | Medium | Standard host security model — mitigate with OS-level access controls |
-| Malicious flow name containing JavaScript passes through a future template change that disables autoescaping | Low | Medium | Covered by Jinja2 autoescape default + code review |
+| Malicious flow name containing JavaScript reaches the DOM through a future UI change that injects data as HTML (e.g. a new `dangerouslySetInnerHTML`) | Low | Medium | Only server-rendered markdown is injected as HTML; tests pin the data-island escaping; code review of `frontend/` changes |
 | boto3 dependency has a vulnerability | Low | High | Mitigated by dependency scanning in CI and regular updates |
 | Large account with 1000+ flows causes high memory during graph construction | Medium | Low | Bounded by MAX_TOTAL_PATHS (5000); graph holds only tier-1/tier-2 flows |
 | Report bucket retains historical reports indefinitely | Low | Low | Versioning is enabled by design; operators can apply lifecycle rules |

@@ -2,6 +2,8 @@
 Extended CLI coverage — tests for helper functions and config operations.
 """
 
+import pytest
+
 from amazon_connect_assessment.cli import (
     ConfigurationManager,
     create_argument_parser,
@@ -117,36 +119,24 @@ class TestMergeCliArgs:
         assert merged["global_settings"]["max_workers"] == 16
 
     def test_explicit_zero_numeric_values_are_preserved(self):
+        # Zero is valid for these, so the merge must not drop it as falsy.
         parser = create_argument_parser()
-        args = parser.parse_args(
-            [
-                "--timeout",
-                "0",
-                "--retry-count",
-                "0",
-                "--max-retry-attempts",
-                "0",
-                "--retry-base-delay",
-                "0",
-                "--retry-max-delay",
-                "0",
-                "--max-workers",
-                "0",
-                "--batch-size",
-                "0",
-            ]
-        )
+        args = parser.parse_args(["--retry-base-delay", "0", "--retry-max-delay", "0"])
         config = ConfigurationManager().load_config()
 
         merged = merge_cli_args_with_config(args, config)
 
-        assert merged["global_settings"]["timeout"] == 0
-        assert merged["global_settings"]["retry_count"] == 0
-        assert merged["global_settings"]["max_retry_attempts"] == 0
         assert merged["global_settings"]["retry_base_delay"] == 0
         assert merged["global_settings"]["retry_max_delay"] == 0
-        assert merged["global_settings"]["max_workers"] == 0
-        assert merged["global_settings"]["batch_size"] == 0
+
+    @pytest.mark.parametrize(
+        "flag", ["--timeout", "--max-retry-attempts", "--max-workers", "--batch-size"]
+    )
+    def test_zero_is_rejected_where_a_positive_value_is_required(self, flag, capsys):
+        with pytest.raises(SystemExit) as exc:
+            create_argument_parser().parse_args([flag, "0"])
+        assert exc.value.code == 2
+        assert "must be a positive integer" in capsys.readouterr().err
 
 
 class TestSetupLogging:
@@ -168,3 +158,52 @@ class TestSetupLogging:
         args = parser.parse_args(["-vv"])
         config = {"global_settings": {"log_level": "WARNING"}}
         setup_logging_from_args(args, config)
+
+
+class TestBlankConfigValues:
+    """Empty YAML keys load as None; validation must not crash on them."""
+
+    @pytest.mark.parametrize(
+        "yaml_text",
+        [
+            "enabled_pillars:\n",
+            "enabled_severities:\n",
+            "global_settings:\n  log_level:\n",
+            "output:\n  format:\n",
+            "output:\n",
+        ],
+    )
+    def test_blank_values_validate_cleanly(self, tmp_path, yaml_text):
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml_text)
+        mgr = ConfigurationManager()
+        config = mgr.load_config(str(path))
+        assert mgr.validate_config(config) == []
+
+    def test_blank_section_keeps_defaults(self, tmp_path):
+        path = tmp_path / "cfg.yaml"
+        path.write_text("output:\n")
+        config = ConfigurationManager().load_config(str(path))
+        assert config["output"]["format"]
+
+
+class TestMainValidation:
+    def test_filename_template_attribute_access_is_reported(self, monkeypatch, capsys):
+        from amazon_connect_assessment import cli
+
+        monkeypatch.setattr(
+            "sys.argv", ["prog", "--output-filename", "{timestamp.x}", "--validate-config"]
+        )
+        assert cli.main() == 1
+        assert "Filename template" in capsys.readouterr().out
+
+    def test_show_config_prints_even_when_invalid(self, tmp_path, monkeypatch, capsys):
+        from amazon_connect_assessment import cli
+
+        path = tmp_path / "cfg.yaml"
+        path.write_text("enabled_pillars: [bogus]\n")
+        monkeypatch.setattr("sys.argv", ["prog", "--config", str(path), "--show-config"])
+        assert cli.main() == 1
+        out = capsys.readouterr().out
+        assert "bogus" in out
+        assert "Configuration validation failed" in out

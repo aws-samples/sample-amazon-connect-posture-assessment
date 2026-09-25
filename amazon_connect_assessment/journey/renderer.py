@@ -454,20 +454,30 @@ def flow_to_diagram_html(graph: ContactFlowGraph) -> str:
 
 
 def flow_to_diagram_payload(graph: ContactFlowGraph) -> Tuple[str, Dict[str, Any]]:
-    """Return the rendered diagram and its redacted inspector model."""
+    """Return the rendered diagram and the full inspector model the report UI draws from."""
     artifacts = flow_to_diagram_artifacts(graph)
     return artifacts.diagram_html, artifacts.diagram_model
 
 
 def flow_to_diagram_artifacts(graph: ContactFlowGraph) -> JourneyDiagramArtifacts:
     """Generate every report/download artifact from one projected layout."""
-    empty_model: Dict[str, Any] = {"nodes": {}, "edges": {}, "primary_path": []}
+    flow_label = graph.flow_name or graph.flow_id or "flow"
+    empty_model: Dict[str, Any] = {"nodes": {}, "edges": {}, "primary_path": [], "layout": None}
     try:
         if graph.action_count == 0 or graph.action_count > _HARD_CAP:
+            # ``notice`` is the plain-text twin of the placeholder HTML so the
+            # report UI can explain the missing diagram without injecting markup.
+            empty_model["notice"] = (
+                f"Flow '{flow_label}' has no actions to display."
+                if graph.action_count == 0
+                else f"Flow '{flow_label}' has {graph.action_count} actions — too complex to "
+                "render as a legible diagram. Consider splitting into flow modules."
+            )
             return JourneyDiagramArtifacts(_render(graph), empty_model)
         layout = _compute_layout(graph)
         diagram_html = _render(graph, layout)
         diagram_model = layout.model.to_dict()
+        diagram_model["layout"] = _layout_payload(layout)
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to render flow %s (%s) as a diagram: %s",
@@ -476,8 +486,9 @@ def flow_to_diagram_artifacts(graph: ContactFlowGraph) -> JourneyDiagramArtifact
             e,
         )
         placeholder = _placeholder_html(
-            f"Diagram unavailable for flow '{html.escape(graph.flow_name or graph.flow_id or 'flow')}' (render error)."  # noqa: E501
+            f"Diagram unavailable for flow '{html.escape(flow_label)}' (render error)."
         )
+        empty_model["notice"] = f"Diagram unavailable for flow '{flow_label}' (render error)."
         return JourneyDiagramArtifacts(placeholder, empty_model)
 
     svg_markup: Optional[str] = None
@@ -595,18 +606,31 @@ class _EdgeLabelPlacement:
     edge: JourneyEdge
 
 
-def _build_connectors(
+@dataclass
+class _ConnectorRoute:
+    """Renderer-computed geometry for one displayed connector."""
+
+    edge: JourneyEdge
+    is_back: bool
+    # SVG path ``d`` strings. Jump routes (long feedback edges) are two
+    # short stubs instead of one continuous path.
+    paths: List[str]
+    is_jump: bool
+    arrow: Tuple[float, float, str]
+
+
+def _route_connectors(
     positions: Dict[str, Tuple[int, int]],
     forward_edges: List[JourneyEdge],
     back_edges: List[JourneyEdge],
-) -> Tuple[str, List[_EdgeLabelPlacement], int, int]:
+) -> Tuple[List[_ConnectorRoute], List[_EdgeLabelPlacement], int, int]:
     """Route projected edges through reserved inter-column tracks."""
     if not positions:
-        return "", [], _MARGIN * 2, _MARGIN * 2
+        return [], [], _MARGIN * 2, _MARGIN * 2
 
     max_x = max(x + _NODE_W for x, _y in positions.values())
     max_y = max(y + _NODE_H for _x, y in positions.values())
-    segments: List[str] = []
+    routes: List[_ConnectorRoute] = []
     label_requests: List[_EdgeLabelPlacement] = []
     gutter_use: Dict[Tuple[int, int], int] = {}
 
@@ -619,7 +643,6 @@ def _build_connectors(
         track_index = gutter_use.get(gutter, 0)
         gutter_use[gutter] = track_index + 1
         track_x = start_x + (end_x - start_x) / 2 + track_index * 8
-        path_class, head_class = _connector_classes(edge)
         if start_y == end_y:
             path = f"M {start_x} {start_y} H {end_x}"
             # Same-lane labels live in the reserved band above the
@@ -628,30 +651,31 @@ def _build_connectors(
         else:
             path = f"M {start_x} {start_y} H {track_x} V {end_y} H {end_x}"
             label_y = ty
-        segments.append(f'<path class="{path_class}" d="{path}" />')
-        segments.append(_arrow_triangle(end_x, end_y, "right", head_class))
+        routes.append(_ConnectorRoute(edge, False, [path], False, (end_x, end_y, "right")))
         label_requests.append(_EdgeLabelPlacement(track_x, label_y, edge))
 
     loop_bottom = max_y
     for loop_index, edge in enumerate(back_edges):
         sx, sy = positions[edge.source]
         tx, ty = positions[edge.target]
-        path_class, head_class = _connector_classes(edge, is_back=True)
         rank_span = abs(int((sx - tx) / _COL_PITCH))
         if rank_span > 3:
             source_x = sx + _NODE_W
             source_y = sy + _NODE_H / 2
             target_x = tx
             target_y = ty + _NODE_H / 2
-            segments.append(
-                f'<path class="{path_class} jm-connector-jump" '
-                f'd="M {source_x} {source_y} H {source_x + 28}" />'
+            routes.append(
+                _ConnectorRoute(
+                    edge,
+                    True,
+                    [
+                        f"M {source_x} {source_y} H {source_x + 28}",
+                        f"M {target_x - 28} {target_y} H {target_x}",
+                    ],
+                    True,
+                    (target_x, target_y, "right"),
+                )
             )
-            segments.append(
-                f'<path class="{path_class} jm-connector-jump" '
-                f'd="M {target_x - 28} {target_y} H {target_x}" />'
-            )
-            segments.append(_arrow_triangle(target_x, target_y, "right", head_class))
             label_requests.append(_EdgeLabelPlacement(source_x + 54, source_y, edge))
             continue
 
@@ -659,11 +683,15 @@ def _build_connectors(
         end_x, end_y = tx + _NODE_W / 2, ty + _NODE_H
         loop_y = max(sy, ty) + _NODE_H + _LANE_START_GAP + loop_index * _LANE_GAP
         loop_bottom = max(loop_bottom, loop_y)
-        segments.append(
-            f'<path class="{path_class}" '
-            f'd="M {start_x} {start_y} V {loop_y} H {end_x} V {end_y}" />'
+        routes.append(
+            _ConnectorRoute(
+                edge,
+                True,
+                [f"M {start_x} {start_y} V {loop_y} H {end_x} V {end_y}"],
+                False,
+                (end_x, end_y, "up"),
+            )
         )
-        segments.append(_arrow_triangle(end_x, end_y, "up", head_class))
         label_requests.append(_EdgeLabelPlacement((start_x + end_x) / 2, loop_y, edge))
 
     stacked_labels = _stack_edge_labels(label_requests)
@@ -671,7 +699,61 @@ def _build_connectors(
     canvas_h = max(max_y, loop_bottom) + _MARGIN
     if stacked_labels:
         canvas_h = max(canvas_h, max(item.y for item in stacked_labels) + _MARGIN)
-    return "".join(segments), stacked_labels, canvas_w, canvas_h
+    return routes, stacked_labels, canvas_w, canvas_h
+
+
+def _build_connectors(
+    positions: Dict[str, Tuple[int, int]],
+    forward_edges: List[JourneyEdge],
+    back_edges: List[JourneyEdge],
+) -> Tuple[str, List[_EdgeLabelPlacement], int, int]:
+    """Render routed connectors as SVG markup styled by the ``jm-connector*`` classes."""
+    routes, labels, canvas_w, canvas_h = _route_connectors(positions, forward_edges, back_edges)
+    segments: List[str] = []
+    for route in routes:
+        path_class, head_class = _connector_classes(route.edge, is_back=route.is_back)
+        if route.is_jump:
+            path_class += " jm-connector-jump"
+        for d in route.paths:
+            segments.append(f'<path class="{path_class}" d="{d}" />')
+        segments.append(_arrow_triangle(*route.arrow, head_class))
+    return "".join(segments), labels, canvas_w, canvas_h
+
+
+def _layout_payload(layout: _Layout) -> Dict[str, Any]:
+    """Serialize the accepted layout so the report UI draws exactly this geometry."""
+    routes, labels, canvas_w, canvas_h = _route_connectors(
+        layout.positions, layout.forward_edges, layout.back_edges
+    )
+    label_payload: Dict[str, Dict[str, Any]] = {}
+    for placement in labels:
+        edge = placement.edge
+        raw_label = edge.label or "Continue"
+        first_outcome = edge.outcomes[0] if edge.outcomes else None
+        label_payload[edge.key] = {
+            "x": placement.x,
+            "y": placement.y,
+            "text": "›" if raw_label == "Continue" else _truncate(raw_label, _EDGE_LABEL_MAX_CHARS),
+            "tooltip": _edge_label_explanation(
+                first_outcome.raw_label if first_outcome else "",
+                first_outcome.transition_type if first_outcome else "",
+            ),
+        }
+    return {
+        "canvas": {"width": canvas_w, "height": canvas_h},
+        "node_size": {"width": _NODE_W, "height": _NODE_H},
+        "positions": {key: {"x": x, "y": y} for key, (x, y) in layout.positions.items()},
+        "connectors": {
+            route.edge.key: {
+                "paths": route.paths,
+                "arrow": _arrow_path(*route.arrow),
+                "is_back": route.is_back,
+                "is_jump": route.is_jump,
+            }
+            for route in routes
+        },
+        "labels": label_payload,
+    }
 
 
 def _connector_classes(edge: JourneyEdge, is_back: bool = False) -> Tuple[str, str]:
@@ -713,6 +795,11 @@ def _stack_edge_labels(requests: List[_EdgeLabelPlacement]) -> List[_EdgeLabelPl
 
 def _arrow_triangle(tip_x: float, tip_y: float, direction: str, css_class: str) -> str:
     """Return a small filled SVG arrowhead at ``(tip_x, tip_y)``."""
+    return f'<path class="{css_class}" d="{_arrow_path(tip_x, tip_y, direction)}" />'
+
+
+def _arrow_path(tip_x: float, tip_y: float, direction: str) -> str:
+    """Return the ``d`` attribute of an arrowhead pointing ``direction`` at the tip."""
     if direction == "right":
         p1 = (tip_x - _ARROW_LEN, tip_y - _ARROW_HALF_WIDTH)
         p2 = (tip_x - _ARROW_LEN, tip_y + _ARROW_HALF_WIDTH)
@@ -722,9 +809,7 @@ def _arrow_triangle(tip_x: float, tip_y: float, direction: str, css_class: str) 
     else:
         p1 = (tip_x - _ARROW_HALF_WIDTH, tip_y - _ARROW_LEN)
         p2 = (tip_x + _ARROW_HALF_WIDTH, tip_y - _ARROW_LEN)
-    return (
-        f'<path class="{css_class}" d="M {tip_x} {tip_y} L {p1[0]} {p1[1]} L {p2[0]} {p2[1]} Z" />'
-    )
+    return f"M {tip_x} {tip_y} L {p1[0]} {p1[1]} L {p2[0]} {p2[1]} Z"
 
 
 def _edge_label_html(placement: _EdgeLabelPlacement) -> str:
@@ -752,6 +837,11 @@ def _edge_label_html(placement: _EdgeLabelPlacement) -> str:
 
 
 def _edge_label_tooltip(raw_label: str, kind: str) -> str:
+    """Build an attribute-escaped hover explanation for a route label."""
+    return html.escape(_edge_label_explanation(raw_label, kind), quote=True)
+
+
+def _edge_label_explanation(raw_label: str, kind: str) -> str:
     """Build a plain-text hover explanation without exposing raw route values.
 
     Known Amazon Connect branch identifiers get a specific reader-facing
@@ -765,50 +855,59 @@ def _edge_label_tooltip(raw_label: str, kind: str) -> str:
         explanation = _CONDITION_EXPLANATIONS.get(raw_label, _DEFAULT_CONDITION_EXPLANATION)
     else:
         explanation = "The condition under which this transition is taken."
-    return html.escape(explanation, quote=True)
+    return explanation
 
 
 # ---------------------------------------------------------------------------
 # Standalone SVG export — every element drawn as an SVG shape, so the
 # result is one portable image file rather than an HTML/SVG hybrid that
-# only means anything inside the report's own page. Colors below are
-# the same hex values journey_map.css assigns each category, so the
-# exported image matches what the report shows.
+# only means anything inside the report's own page. Colors below are the
+# Cloudscape (visual refresh, light mode) design-token values the report UI
+# uses for the same elements (frontend/src/JourneyMap.jsx), so an exported
+# image matches what the report shows.
 # ---------------------------------------------------------------------------
 
-# (fill, left-border stroke, text color) per category — mirrors
-# .jm-node-{category} in journey_map.css exactly, so the export looks
-# like the live diagram rather than a re-skinned approximation.
+# (fill, left accent + category label, label text) per category. Accents are
+# the Cloudscape categorical chart palette / neutral status color.
 _SVG_CATEGORY_COLORS: Dict[str, Tuple[str, str, str]] = {
-    "speaks": ("#d4edda", "#28a745", "#155724"),
-    "chooses": ("#d1ecf1", "#17a2b8", "#0c5460"),
-    "waits": ("#fff3cd", "#ffc107", "#856404"),
-    "terminal": ("#f8d7da", "#dc3545", "#721c24"),
-    "processing": ("#f8f9fa", "#adb5bd", "#6c757d"),
+    "speaks": ("#ffffff", "#688ae8", "#0f141a"),
+    "chooses": ("#ffffff", "#8456ce", "#0f141a"),
+    "waits": ("#ffffff", "#e07941", "#0f141a"),
+    "terminal": ("#ffffff", "#8c8c94", "#0f141a"),
+    "processing": ("#ffffff", "#2ea597", "#0f141a"),
 }
-_SVG_ENTRY_OUTLINE = "#ff9900"
-_SVG_CONNECTOR_STROKE = "#adb5bd"
-_SVG_CONNECTOR_ERROR_STROKE = "#dc3545"
+_SVG_NODE_BORDER = "#c6c6cd"
+_SVG_ENTRY_OUTLINE = "#006ce0"
+_SVG_CONNECTOR_STROKE = "#424650"
+_SVG_CONNECTOR_FALLBACK_STROKE = "#855900"
+_SVG_CONNECTOR_ERROR_STROKE = "#db0000"
 _SVG_LABEL_BG = "#ffffff"
-_SVG_LABEL_BORDER = "#dee2e6"
-_SVG_LABEL_TEXT = "#495057"
+_SVG_LABEL_BORDER = "#c6c6cd"
+_SVG_LABEL_TEXT = "#424650"
+_SVG_FONT_FAMILY = "'Open Sans', 'Helvetica Neue', Roboto, Arial, sans-serif"
+# Category captions, matching the report UI's legend.
+_SVG_CATEGORY_LABELS: Dict[str, str] = {
+    "speaks": "Caller hears",
+    "chooses": "Caller chooses",
+    "waits": "Caller waits",
+    "terminal": "Call ends",
+    "processing": "System work",
+}
 
 # _build_connectors() produces connector <path> markup carrying the
-# same CSS classes flow_to_diagram_html relies on the report's own
-# journey_map.css to style (jm-connector, jm-connector-error,
+# CSS classes (jm-connector, jm-connector-error,
 # jm-connector-head, ...). A standalone SVG document has no such
 # stylesheet attached, so this embeds the exact equivalent rules
 # inline via a <style> element — SVG supports scoped CSS the same way
 # HTML does — rather than duplicating _build_connectors just to emit
-# `stroke=`/`fill=` attributes directly. Colors are the same hex
-# values as journey_map.css's `.jm-connector*` rules.
+# `stroke=`/`fill=` attributes directly.
 _SVG_CONNECTOR_STYLE = (
     "<style>"
     f".jm-connector,.jm-connector-back{{fill:none;stroke:{_SVG_CONNECTOR_STROKE};stroke-width:1.75;}}"  # noqa: E501
     f".jm-connector-head,.jm-connector-back-head{{fill:{_SVG_CONNECTOR_STROKE};stroke:none;}}"
-    f".jm-connector-fallback,.jm-connector-fallback.jm-connector-back{{fill:none;stroke:#d97706;stroke-width:1.75;stroke-dasharray:3 4;}}"
-    f".jm-connector-fallback-head{{fill:#d97706;stroke:none;}}"
-    f".jm-connector-error,.jm-connector-error.jm-connector-back{{fill:none;stroke:{_SVG_CONNECTOR_ERROR_STROKE};stroke-width:1.75;stroke-dasharray:5 4;}}"  # noqa: E501
+    f".jm-connector-fallback,.jm-connector-fallback.jm-connector-back{{fill:none;stroke:{_SVG_CONNECTOR_FALLBACK_STROKE};stroke-width:1.75;stroke-dasharray:6 4;}}"  # noqa: E501
+    f".jm-connector-fallback-head{{fill:{_SVG_CONNECTOR_FALLBACK_STROKE};stroke:none;}}"
+    f".jm-connector-error,.jm-connector-error.jm-connector-back{{fill:none;stroke:{_SVG_CONNECTOR_ERROR_STROKE};stroke-width:1.75;stroke-dasharray:6 4;}}"  # noqa: E501
     f".jm-connector-error-head,.jm-connector-error.jm-connector-back-head{{fill:{_SVG_CONNECTOR_ERROR_STROKE};}}"  # noqa: E501
     "</style>"
 )
@@ -850,7 +949,7 @@ def _render_svg_export(
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_w}" height="{canvas_h}" '
-        f'viewBox="0 0 {canvas_w} {canvas_h}" font-family="Arial, Helvetica, sans-serif">',
+        f'viewBox="0 0 {canvas_w} {canvas_h}" font-family="{_SVG_FONT_FAMILY}">',
         _SVG_CONNECTOR_STYLE,
         f'<rect x="0" y="0" width="{canvas_w}" height="{canvas_h}" fill="#ffffff" />',
         connector_paths,
@@ -991,10 +1090,10 @@ def _drawio_edge_points(layout: _Layout) -> Dict[str, List[Tuple[float, float]]]
 
 
 def _drawio_node_style(node: JourneyNode) -> str:
-    fill, stroke, text_color = _SVG_CATEGORY_COLORS.get(
+    fill, _accent, text_color = _SVG_CATEGORY_COLORS.get(
         node.category, _SVG_CATEGORY_COLORS["processing"]
     )
-    outline = _SVG_ENTRY_OUTLINE if node.is_entry else stroke
+    outline = _SVG_ENTRY_OUTLINE if node.is_entry else _SVG_NODE_BORDER
     stroke_width = "2" if node.is_entry else "1"
     return (
         "rounded=1;whiteSpace=wrap;html=0;align=left;verticalAlign=middle;"
@@ -1006,9 +1105,9 @@ def _drawio_node_style(node: JourneyNode) -> str:
 
 def _drawio_edge_style(edge: JourneyEdge) -> str:
     if edge.route_type == "exception":
-        color, dashed, dash_pattern = _SVG_CONNECTOR_ERROR_STROKE, "1", "5 4"
+        color, dashed, dash_pattern = _SVG_CONNECTOR_ERROR_STROKE, "1", "6 4"
     elif edge.route_type == "fallback":
-        color, dashed, dash_pattern = "#d97706", "1", "3 4"
+        color, dashed, dash_pattern = _SVG_CONNECTOR_FALLBACK_STROKE, "1", "6 4"
     else:
         color, dashed, dash_pattern = _SVG_CONNECTOR_STROKE, "0", ""
     width = "2" if edge.is_primary else "1.75"
@@ -1039,23 +1138,22 @@ def _xml_text(value: object) -> str:
 
 def _svg_node(x: int, y: int, category: str, label: str, is_entry: bool) -> str:
     """Return one node as an SVG ``<rect>`` + category/label ``<text>``."""
-    fill, border_stroke, text_color = _SVG_CATEGORY_COLORS.get(
+    fill, accent, text_color = _SVG_CATEGORY_COLORS.get(
         category, _SVG_CATEGORY_COLORS["processing"]
     )
-    safe_category = html.escape(_xml_text(category.title()))
+    safe_category = html.escape(_SVG_CATEGORY_LABELS.get(category, category.title()))
     lines = _wrap_for_svg(_xml_text(label), _NODE_W - 2 * _SVG_NODE_PAD_X, _SVG_LABEL_FONT_SIZE)
 
     parts = [
         f'<rect x="{x}" y="{y}" width="{_NODE_W}" height="{_NODE_H}" rx="6" ry="6" '
-        f'fill="{fill}" stroke="#e9ecef" stroke-width="1" />',
+        f'fill="{fill}" stroke="{_SVG_NODE_BORDER}" stroke-width="1" />',
         # Left accent border — a thin filled rect flush with the
-        # card's left edge, mirroring the HTML card's border-left.
-        f'<rect x="{x}" y="{y}" width="4" height="{_NODE_H}" fill="{border_stroke}" />',
+        # card's left edge, mirroring the report card's border-left.
+        f'<rect x="{x}" y="{y}" width="4" height="{_NODE_H}" fill="{accent}" />',
     ]
     if is_entry:
-        # Entry-point highlight ring, mirroring .jm-node-entry's
-        # box-shadow — drawn as an outer stroked rect since SVG has no
-        # box-shadow equivalent.
+        # Entry-point highlight ring — drawn as an outer stroked rect
+        # since SVG has no box-shadow equivalent.
         parts.append(
             f'<rect x="{x - 2}" y="{y - 2}" width="{_NODE_W + 4}" height="{_NODE_H + 4}" '
             f'rx="8" ry="8" fill="none" stroke="{_SVG_ENTRY_OUTLINE}" stroke-width="2" />'
@@ -1065,7 +1163,7 @@ def _svg_node(x: int, y: int, category: str, label: str, is_entry: bool) -> str:
     category_y = y + _SVG_NODE_PAD_Y + _SVG_CATEGORY_FONT_SIZE
     parts.append(
         f'<text x="{text_x}" y="{category_y}" font-size="{_SVG_CATEGORY_FONT_SIZE}" '
-        f'font-weight="700" letter-spacing="0.5" fill="{text_color}" opacity="0.75">'
+        f'font-weight="700" letter-spacing="0.5" fill="{accent}">'
         f"{safe_category}</text>"
     )
 

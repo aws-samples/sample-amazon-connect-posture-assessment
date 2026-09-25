@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from ..models import AssessmentResult, CheckStatus, Finding, Pillar, Severity
+from ..models import AssessmentResult, CheckStatus, Finding, Pillar, Severity, to_utc
 from ..report_generator import validate_report_filename
 
 # ASFF severity label mapping
@@ -68,7 +68,7 @@ def finding_to_asff(
 ) -> Dict[str, Any]:
     """Convert a single Finding to an ASFF-compliant dict."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    finding_timestamp = finding.timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    finding_timestamp = to_utc(finding.timestamp).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     severity_info = _SEVERITY_MAP.get(finding.severity, {"Label": "INFORMATIONAL", "Normalized": 0})
 
@@ -148,7 +148,7 @@ def export_asff(
         )
         findings_asff.append(asff)
 
-    timestamp = result.timestamp.strftime("%Y%m%d_%H%M%S")
+    timestamp = to_utc(result.timestamp).strftime("%Y%m%d_%H%M%S")
     template = filename_template or "connect_assessment_asff_{timestamp}_{account_id}"
     filename = template.format(
         timestamp=timestamp,

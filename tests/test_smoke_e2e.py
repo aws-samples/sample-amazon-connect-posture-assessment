@@ -110,7 +110,6 @@ class TestFullPipelineSmoke:
             "global_settings": {
                 "parallel_execution": False,
                 "timeout": 60,
-                "retry_count": 1,
                 "max_retry_attempts": 1,
                 "retry_base_delay": 0.1,
                 "retry_max_delay": 1.0,

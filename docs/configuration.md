@@ -52,7 +52,6 @@ Global settings affect the overall assessment execution:
 ```yaml
 global_settings:
   timeout: 300                    # Timeout in seconds for AWS API calls
-  retry_count: 3                  # Number of retries for failed API calls
   max_retry_attempts: 5           # Maximum retry attempts for network operations
   retry_base_delay: 1.0          # Base delay between retries in seconds
   retry_max_delay: 60.0          # Maximum delay between retries in seconds
@@ -236,7 +235,6 @@ enabled_severities:
 # Production settings optimized for performance
 global_settings:
   timeout: 300
-  retry_count: 5
   max_retry_attempts: 3
   parallel_execution: true
   max_workers: 16
@@ -275,6 +273,7 @@ findings.
 
 - `enabled`: Boolean to enable/disable the check (default: true)
 - `severity`: Override the default severity level ("critical", "high", "medium", "low")
+
 `parameters`, `remediation_template`, and `description` are not currently
 consumed by the check registry.
 
@@ -284,7 +283,26 @@ The following fields are reserved for future support and are not live settings:
 
 ## Configuration Validation
 
-The configuration system includes validation to ensure settings are correct. Invalid configurations will be reported during startup.
+Every run validates the effective configuration (defaults, config file, environment
+variables, then CLI flags) before contacting AWS, and exits with code 1 listing every
+problem. `--validate-config` runs the same checks and exits. The following are validated:
+
+- Numeric settings: `timeout`, `max_retry_attempts`, `max_workers`, and `batch_size` must be
+  positive integers; retry delays must be non-negative, with `retry_max_delay >= retry_base_delay`.
+- Pillars, severities, and output formats must be known values.
+- `--checks` / `--exclude-checks` IDs must exist (see `--list-checks`), and at least one check
+  must remain after `--pillars`, `--severity`, `--checks`, `--exclude-checks`,
+  `--skip-flow-analysis`, and `enabled: false` entries in the config file are applied.
+- The output directory must be a directory, or creatable: its nearest existing parent must
+  be a writable directory.
+- The filename template may only use `{timestamp}`, `{account_id}`, `{region}`, and
+  `{assessment_id}`, and must produce a filename, not a path.
+- `--s3-bucket` must be a valid S3 bucket name; `--diff` must be an existing JSON report;
+  `--log-file` must be in an existing, writable directory.
+- `--resume-assessment` must have a checkpoint (and cannot be combined with `--no-checkpoints`).
+- `--instance-id` must be an instance ID (UUID) that exists in the target region.
+
+`--parallel`/`--sequential` and `--verbose`/`--quiet` are mutually exclusive.
 
 ## Best Practices
 

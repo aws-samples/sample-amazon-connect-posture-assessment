@@ -12,9 +12,6 @@ dist/
 *.egg
 
 # Virtual environments
-.env
-.env.*
-!.env.example
 .venv
 env/
 venv/
@@ -26,36 +23,84 @@ venv/
 coverage.xml
 htmlcov/
 .hypothesis/
+.tox/
+.nox/
 
 # Linting / type-checking caches
 .ruff_cache/
 .mypy_cache/
+.dmypy.json
 .cache/
 
-# IDE
-.vscode/
-.idea/
-.claude/settings.local.json
+# Report UI build (the bundle in amazon_connect_assessment/templates/app/ IS committed)
+frontend/node_modules/
+frontend/coverage/
+npm-debug.log*
+.eslintcache
 
-# OS
-.DS_Store
-Thumbs.db
+# Secrets and local credentials (never commit)
+.env
+.env.*
+!.env.example
+.envrc
+.aws/
+*.pem
+*.key
 
-# Project-specific
-# Generated reports (keep examples but ignore generated ones)
+# Assessment output: reports contain account IDs, ARNs, and phone numbers.
+# The CLI writes to reports/ by default; --output-dir can put them anywhere.
 reports/*
 !reports/.gitkeep
+connect_assessment_*.html
+connect_assessment_*.json
+connect_assessment_*.csv
+
+# Retain only the sample report
+examples/*
+!examples/sample_assessment_report.html
+
+# ASH security scanner: retain only the repository configuration
+.ash/*
+!.ash/ash.yaml
+
+# Generated documentation and local documentation-site builds
+docs/README.html
+site/
+_site/
+.jekyll-cache/
+.sass-cache/
 
 # Temporary test scripts
 temp_*.py
 test_temp_*.py
 
-# AWS credentials (if accidentally placed in project)
-.aws/
-
 # Log files
 *.log
 logs/
+
+# Local legacy artifacts not used by the runtime package
+archive/
+connect-lens/
+
+# IDE / editors
+.vscode/
+.idea/
+.fleet/
+*.code-workspace
+
+# AI coding assistants (shared .claude/settings.json and .claude/CLAUDE.md are committed)
+CLAUDE.local.md
+.codegraph/
+.claude/
+
+# OS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Backup files
 *~
@@ -64,22 +109,3 @@ logs/
 *.bak
 *.orig
 *.rej
-
-#Retain the sample report
-examples/*
-!examples/sample_assessment_report.html
-
-# ASH security scanner: retain only the repository configuration
-.ash/*
-!.ash/ash.yaml
-
-# Local legacy artifacts not used by the runtime package
-archive/
-connect-lens/
-
-# Generated documentation and local documentation-site builds
-docs/README.html
-site/
-_site/
-.jekyll-cache/
-.sass-cache/

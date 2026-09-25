@@ -208,7 +208,7 @@ class TestAssessmentConfig:
     def test_from_dict(self):
         """Test AssessmentConfig creation from dictionary."""
         data = {
-            "global_settings": {"timeout": 600, "retry_count": 5},
+            "global_settings": {"timeout": 600, "max_retry_attempts": 5},
             "enabled_pillars": ["security", "resilience"],
             "enabled_severities": ["critical", "high"],
             "checks": {
@@ -224,7 +224,7 @@ class TestAssessmentConfig:
 
         config = AssessmentConfig.from_dict(data)
 
-        assert config.global_settings == {"timeout": 600, "retry_count": 5}
+        assert config.global_settings == {"timeout": 600, "max_retry_attempts": 5}
         assert config.enabled_pillars == [Pillar.SECURITY, Pillar.RESILIENCE]
         assert config.enabled_severities == [Severity.CRITICAL, Severity.HIGH]
         assert len(config.check_configs) == 2
@@ -296,7 +296,7 @@ class TestCheckConfigurationManager:
         """Test loading configuration from YAML file."""
         manager = CheckConfigurationManager()
         config_data = {
-            "global_settings": {"retry_count": 5},
+            "global_settings": {"max_retry_attempts": 5},
             "enabled_pillars": ["security"],
             "checks": {
                 "yaml-check": {
@@ -315,7 +315,7 @@ class TestCheckConfigurationManager:
             manager.load_from_file(temp_path)
             config = manager.get_config()
 
-            assert config.global_settings["retry_count"] == 5
+            assert config.global_settings["max_retry_attempts"] == 5
             assert config.enabled_pillars == [Pillar.SECURITY]
             assert "yaml-check" in config.check_configs
             assert config.check_configs["yaml-check"].enabled is False
@@ -371,7 +371,7 @@ class TestCheckConfigurationManager:
     def test_save_to_yaml_file(self):
         """Test saving configuration to YAML file."""
         manager = CheckConfigurationManager()
-        manager.set_global_setting("retry_count", 3)
+        manager.set_global_setting("max_retry_attempts", 3)
 
         with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             temp_path = f.name
@@ -383,7 +383,7 @@ class TestCheckConfigurationManager:
             with open(temp_path, "r") as f:
                 saved_data = yaml.safe_load(f)
 
-            assert saved_data["global_settings"]["retry_count"] == 3
+            assert saved_data["global_settings"]["max_retry_attempts"] == 3
         finally:
             Path(temp_path).unlink()
 
@@ -393,7 +393,7 @@ class TestCheckConfigurationManager:
 
         # Load first configuration
         config1 = {
-            "global_settings": {"timeout": 300, "retry_count": 3},
+            "global_settings": {"timeout": 300, "max_retry_attempts": 3},
             "checks": {"check-1": {"check_id": "check-1", "enabled": True}},
         }
         manager.load_from_dict(config1)
@@ -409,7 +409,7 @@ class TestCheckConfigurationManager:
 
         # Global settings should be merged with override
         assert config.global_settings["timeout"] == 600  # overridden
-        assert config.global_settings["retry_count"] == 3  # preserved
+        assert config.global_settings["max_retry_attempts"] == 3  # preserved
         assert config.global_settings["max_workers"] == 8  # added
 
         # Check configs should be merged
@@ -423,7 +423,6 @@ class TestCheckConfigurationManager:
 
         # Valid configuration
         manager.set_global_setting("timeout", 300)
-        manager.set_global_setting("retry_count", 3)
         manager.set_global_setting("max_workers", 4)
 
         errors = manager.validate_config()
@@ -431,13 +430,11 @@ class TestCheckConfigurationManager:
 
         # Invalid configuration
         manager.set_global_setting("timeout", -100)  # negative timeout
-        manager.set_global_setting("retry_count", "invalid")  # non-integer
-        manager.set_global_setting("max_workers", 0)  # zero workers
+        manager.set_global_setting("max_workers", "invalid")  # non-integer
 
         errors = manager.validate_config()
-        assert len(errors) == 3
+        assert len(errors) == 2
         assert any("timeout" in error for error in errors)
-        assert any("retry_count" in error for error in errors)
         assert any("max_workers" in error for error in errors)
 
     def test_create_default_config(self):
@@ -447,7 +444,7 @@ class TestCheckConfigurationManager:
 
         assert isinstance(default_config, AssessmentConfig)
         assert "timeout" in default_config.global_settings
-        assert "retry_count" in default_config.global_settings
+        assert "max_retry_attempts" not in default_config.global_settings
         assert "parallel_execution" in default_config.global_settings
         assert "max_workers" in default_config.global_settings
         assert default_config.enabled_pillars == list(Pillar)
