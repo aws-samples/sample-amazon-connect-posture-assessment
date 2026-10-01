@@ -84,7 +84,7 @@ Same folder as the existing role template, so users find both in one place. The 
 **`AmazonConnectReadOnlyPolicy`** — a single `AWS::IAM::ManagedPolicy`.
 
 - `ManagedPolicyName: !Ref PolicyName`
-- `Description: Read-only permissions for the Amazon Connect assessment tool (see docs/iam-policy-template.json for the source-of-truth action set).`
+- `Description: Read-only permissions for the Amazon Connect Customer posture assessment tool (see docs/iam-policy-template.json for the source-of-truth action set).`
 - `PolicyDocument`: **inlined verbatim** from `docs/iam-policy-template.json`. The additions policy in `AmazonConnectScanRole.yaml` uses the same approach today; a drift test asserts every canonical action is present.
 - `Roles`: conditional list — `[!Ref AttachToRoleName]` when set, `AWS::NoValue` otherwise.
 

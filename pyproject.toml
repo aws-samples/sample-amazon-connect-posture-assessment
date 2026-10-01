@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "amazon-connect-assessment"
 version = "1.0.0"
-description = "Assess Amazon Connect deployments against AWS Well-Architected Framework best practices"
+description = "Assess Amazon Connect Customer deployments using checks informed by AWS Well-Architected best practices"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT-0"}

@@ -4,7 +4,7 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#232F3E;" value="Amazon Connect Customer Assessment Tool — Deployment Architecture" vertex="1">
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#232F3E;" value="Amazon Connect Customer Posture Assessment Tool — Deployment Architecture" vertex="1">
           <mxGeometry height="40" width="1720" x="40" y="45" as="geometry" />
         </mxCell>
         <mxCell id="runnerBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Assessment runner&lt;br&gt;(local workstation, AWS CloudShell, or CI runner)" vertex="1">
@@ -70,7 +70,7 @@
         <mxCell id="connect" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.connect;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">
           <mxGeometry height="78" width="78" x="883" y="465" as="geometry" />
         </mxCell>
-        <mxCell id="connectLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon Connect&#xa;instances, flows, queues, routing, phone numbers" vertex="1">
+        <mxCell id="connectLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon Connect Customer&#xa;instances, flows, queues, routing, phone numbers" vertex="1">
           <mxGeometry height="46" width="210" x="817" y="546" as="geometry" />
         </mxCell>
         <mxCell id="cloudwatch" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">

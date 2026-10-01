@@ -1,8 +1,8 @@
-# Amazon Connect Customer Assessment Tool — Threat Model
+# Amazon Connect Customer Posture Assessment Tool — Threat Model
 
-This document identifies the security boundaries, trust zones, threat actors, attack surfaces, and mitigations for the Amazon Connect Customer Assessment Tool. It follows the STRIDE framework.
+This document identifies the security boundaries, trust zones, threat actors, attack surfaces, and mitigations for the Amazon Connect Customer Posture Assessment Tool. It follows the STRIDE framework.
 
-> **Architecture note:** The Amazon Connect Customer Assessment Tool is a
+> **Architecture note:** The Amazon Connect Customer Posture Assessment Tool is a
 > **command-line tool**. It has no
 > listening socket or daemon.
 
@@ -22,7 +22,7 @@ This document identifies the security boundaries, trust zones, threat actors, at
 
 ## System overview
 
-The Amazon Connect Customer Assessment Tool is a **read-only** assessment tool that:
+The Amazon Connect Customer Posture Assessment Tool is a **read-only** assessment tool that:
 - Runs as a CLI process on a user's workstation, AWS CloudShell, or a CI runner
 - Authenticates to AWS using existing credentials (profile, role assumption, or environment variables)
 - Makes read-only assessment calls to Amazon Connect Customer and supporting services

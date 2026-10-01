@@ -82,7 +82,7 @@ Resources:
     Properties:
       ManagedPolicyName: !Ref PolicyName
       Description: >
-        Read-only permissions for the Amazon Connect assessment tool. Every
+        Read-only permissions for the Amazon Connect Customer posture assessment tool. Every
         canonical action from docs/iam-policy-template.json is granted
         explicitly — no AWS managed policies are attached, so every action
         must be inline. A drift test in tests/test_iam_policy_consistency.py

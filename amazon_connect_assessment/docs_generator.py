@@ -27,11 +27,11 @@ class DocsGenerator:
         checks_by_pillar = self._group_by_pillar(checks)
 
         lines = [
-            "# Amazon Connect Assessment — Check Catalog",
+            "# Amazon Connect Customer Posture Assessment Tool — Check Catalog",
             "",
             "This document catalogs every check the assessment tool performs, "
             "organized by AWS Well-Architected pillar. For each check, it lists "
-            "what is evaluated, why it matters for Amazon Connect, and prescriptive "
+            "what is evaluated, why it matters for Amazon Connect Customer, and prescriptive "
             "remediation guidance.",
             "",
             "## Summary Table",

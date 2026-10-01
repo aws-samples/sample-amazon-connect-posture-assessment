@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project overview
 
-Amazon Connect Assessment Tool — evaluates Amazon Connect deployments against the AWS Well-Architected Framework. Checks span 5 pillars (Resilience, Security, Cost Optimization, Performance Efficiency, Operational Excellence). Runs as a CLI. Assessment operations are read-oriented by default; the opt-in `--s3-output` path creates/hardens an S3 report bucket and uploads generated reports. The HTML report also includes a phone-number-driven Caller Journey Map section, and `AssessmentEngine._compute_journey_findings()` invokes the deeper `journey/` scoring pipeline.
+Amazon Connect Customer Posture Assessment Tool — evaluates Amazon Connect Customer deployments using checks informed by AWS Well-Architected best practices. Checks span 5 pillars (Resilience, Security, Cost Optimization, Performance Efficiency, Operational Excellence). Runs as a CLI. Assessment operations are read-oriented by default; the opt-in `--s3-output` path creates/hardens an S3 report bucket and uploads generated reports. The HTML report also includes a phone-number-driven Caller Journey Map section, and `AssessmentEngine._compute_journey_findings()` invokes the deeper `journey/` scoring pipeline.
 
 ## Build and test
 

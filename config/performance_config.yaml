@@ -1,4 +1,4 @@
-# Performance Configuration for Amazon Connect Assessment Tool
+# Performance Configuration for Amazon Connect Customer Posture Assessment Tool
 # This file contains settings to optimize assessment execution performance
 # Only includes parameters that are actually supported by the current implementation
 

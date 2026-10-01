@@ -1,8 +1,8 @@
-# Amazon Connect Customer Assessment Tool Configuration
+# Amazon Connect Customer Posture Assessment Tool Configuration
 
 [Back to the documentation index](README.md)
 
-This is the canonical configuration reference for the Amazon Connect Customer Assessment Tool.
+This is the canonical configuration reference for the Amazon Connect Customer Posture Assessment Tool.
 The sample configuration files remain in `config/`; `config/README.md` points here.
 Configuration controls assessment behavior, check selection, execution settings, and
 report generation.

@@ -1,4 +1,4 @@
-# Amazon Connect Customer Assessment Tool — Development Guide
+# Amazon Connect Customer Posture Assessment Tool — Development Guide
 
 ## Table of Contents
 

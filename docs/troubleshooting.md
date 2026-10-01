@@ -1,4 +1,4 @@
-# Amazon Connect Customer Assessment Tool — Troubleshooting Guide
+# Amazon Connect Customer Posture Assessment Tool — Troubleshooting Guide
 
 ## Table of Contents
 
@@ -102,7 +102,7 @@ aws sso login --profile my-sso-profile
 
 Credentials work but no instances are returned.
 
-1. **Wrong region** — Amazon Connect Customer instances are region-specific. Confirm with:
+1. **Wrong region** — Amazon Connect Customer instances are region-specific. Confirm with the [AWS CLI `connect list-instances` command](https://docs.aws.amazon.com/cli/latest/reference/connect/list-instances.html):
    ```bash
    aws connect list-instances --region us-east-1
    ```

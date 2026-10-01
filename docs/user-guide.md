@@ -1,4 +1,4 @@
-# Amazon Connect Customer Assessment Tool — User Guide
+# Amazon Connect Customer Posture Assessment Tool — User Guide
 
 [Back to the documentation index](README.md)
 
@@ -84,9 +84,10 @@ For installation failures, see [troubleshooting.md](troubleshooting.md).
 
 ## AWS Access
 
-The assessment is read-only against the Amazon Connect Customer resources it
-inspects. The optional `--s3-output` feature creates or hardens the selected
-report bucket and uploads generated reports.
+The assessment is read-only against the
+[Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html)
+resources it inspects. The optional `--s3-output` feature creates or hardens
+the selected report bucket and uploads generated reports.
 
 Confirm the active identity and region access:
 
@@ -94,6 +95,9 @@ Confirm the active identity and region access:
 aws sts get-caller-identity
 aws connect list-instances --region us-east-1
 ```
+
+AWS documents this command under the
+[`connect list-instances` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/connect/list-instances.html).
 
 If access is denied, deploy the self-assessment policy:
 
@@ -289,7 +293,7 @@ The CLI exits with code `0` on success and `1` on failure.
 ### GitHub Actions
 
 ```yaml
-name: Amazon Connect Assessment Tool
+name: Amazon Connect Customer Posture Assessment Tool
 
 on:
   schedule:

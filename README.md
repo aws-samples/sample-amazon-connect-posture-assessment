@@ -1,16 +1,25 @@
-# Amazon Connect Well-Architected Posture Assessment Tool
+# Amazon Connect Customer Posture Assessment Tool
 
-> Assess Amazon Connect across security, resilience, cost optimization, operational excellence, and performance efficiency using checks informed by AWS Well-Architected best practices.
+> Assess Amazon Connect Customer across security, resilience, cost optimization, operational excellence, and performance efficiency using checks informed by AWS Well-Architected best practices.
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT--0-green.svg)](LICENSE)
 [![Well-Architected](https://img.shields.io/badge/AWS-Well--Architected-orange.svg)](https://aws.amazon.com/architecture/well-architected/)
 
-A command-line tool that assesses an Amazon Connect Customer deployment against
-AWS Well-Architected Framework best practices and produces a shareable report
-in minutes. Point it at an AWS account and region, and it inventories the
-instance, parses your contact flows, maps what callers actually experience, and
-returns prioritized findings with remediation guidance.
+A command-line tool that assesses an Amazon Connect Customer deployment using
+checks informed by the
+[AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
+and produces a shareable report in minutes. Point it at an AWS account and
+region, and it inventories the instance, parses your contact flows, maps what
+callers actually experience, and returns prioritized findings with remediation
+guidance.
+
+AWS now calls the contact center product
+[Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html).
+The [AWS CLI](https://docs.aws.amazon.com/cli/latest/reference/connect/index.html)
+and [API](https://docs.aws.amazon.com/connect/latest/APIReference/Welcome.html)
+service identifier remains `connect`, and this tool's command remains
+`amazon-connect-assessment`.
 
 No agent or runtime service is required. Assessment operations are read-only;
 the opt-in `--s3-output` path creates or hardens the selected report bucket and
@@ -332,7 +341,7 @@ contract.
 
 ## Architecture
 
-![Amazon Connect Customer Assessment Tool deployment architecture](docs/architecture.svg)
+![Amazon Connect Customer Posture Assessment Tool deployment architecture](docs/architecture.svg)
 
 The [editable Draw.io source](docs/architecture.drawio) is included.
 

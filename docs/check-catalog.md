@@ -1,4 +1,4 @@
-# Amazon Connect Customer Assessment Tool — Check Catalog
+# Amazon Connect Customer Posture Assessment Tool — Check Catalog
 
 59 registered checks across 5 AWS Well-Architected pillars, plus 4 Caller Journey Mapping findings produced by a separate pipeline (see the Caller Journey Mapping section below — these are not returned by `--list-checks`, which only enumerates the check-registry checks). Every check returns one of five statuses:
 
@@ -75,7 +75,7 @@ Run `amazon-connect-assessment --list-checks` for the live list at any time.
 
 | Check ID | Severity | What it evaluates |
 |---|---|---|
-| `res-acgr-config-001` | Low | Discovery only: reports whether Amazon Connect Global Resiliency (ACGR) is configured. Returns **Not Applicable** for instances without ACGR (~95% of deployments), so those reports show nothing about ACGR at all. When ACGR is present, the five `res-acgr-*` audit checks below verify each aspect. |
+| `res-acgr-config-001` | Low | Discovery only: reports whether [Connect Customer Global Resiliency](https://docs.aws.amazon.com/connect/latest/adminguide/get-started-connect-global-resiliency.html) (ACGR) is configured. Returns **Not Applicable** for instances without ACGR (~95% of deployments), so those reports show nothing about ACGR at all. When ACGR is present, the five `res-acgr-*` audit checks below verify each aspect. |
 | `res-acgr-identity-001` | High | When ACGR is configured, the instance uses SAML 2.0 identity management. Agents can only fail over via Global Sign-in, which requires SAML — CONNECT_MANAGED and EXISTING_DIRECTORY leave agents stranded on failover. |
 | `res-acgr-tdg-status-001` | High | When ACGR is configured, every traffic distribution group is in ACTIVE status. Non-ACTIVE TDGs (CREATION_FAILED, PENDING_DELETION, etc.) cannot serve failover traffic. |
 | `res-acgr-traffic-dist-001` | High | When ACGR is configured, traffic is distributed across regions rather than pinned 100% to one region. A 100/0 split leaves the standby region unexercised. |
@@ -159,7 +159,7 @@ Each card's color represents the customer experience:
 | `ai-ops-bedrock-logging-001` | Medium | For instances with a Q assistant integration, verifies that the regional Bedrock model invocation logging configuration has a CloudWatch Logs or S3 destination. It does not prove per-assistant delivery; without a Q assistant integration, the check is Not Applicable. |
 | `ops-unreachable-blocks-001` | Low | Traverses default, conditional, and error transitions from a valid entry point to find unreachable customer-authored actions. A known unreachable block remains FAIL even when other discovery is incomplete; incomplete analysis without a known issue is Skipped rather than treated as healthy. |
 | `ops-early-media-001` | Low | Early media audio enabled for outbound calls (agents hear ringing/busy signal) |
-| `ops-auto-resolve-001` | Low | Reports whether `AUTO_RESOLVE_BEST_VOICES` is enabled so Amazon Connect can substitute an equivalent same-locale Polly voice when a flow's SSML `<voice>` choice is unavailable; this is unrelated to the Task channel |
+| `ops-auto-resolve-001` | Low | Reports whether `AUTO_RESOLVE_BEST_VOICES` is enabled so Amazon Connect Customer can substitute an equivalent same-locale Polly voice when a flow's SSML `<voice>` choice is unavailable; this is unrelated to the Task channel |
 
 ---
 
@@ -171,7 +171,7 @@ Each card's color represents the customer experience:
 | `perf-flow-complexity-001` | Low | Observational flow structure inventory: total/reachable actions, longest simple route, integrations, cycles, bounded path enumeration, and module use. It does not apply a numerical AWS compliance threshold. |
 | `perf-sequential-lambda-001` | Low | Reachable routes where one Lambda reaches another before a customer-facing interaction. Evidence includes both functions, mode/timeout, intermediate path, transition type, and error branches. |
 
-The Lambda usage structure review follows published Amazon Connect Lambda behavior guidance but does not invent a maximum block count: total authored blocks, reachable blocks, and the bounded maximum on one simple route are presented as distinct observational measures. Its PASS means inventory completed, not that a particular count is optimal. The flow structure review similarly follows guidance to keep flows small, modular, and reusable while acknowledging that AWS does not publish a numerical complexity cutoff. Sequential-Lambda remediation remains conditional on data dependencies and preserves timeout and error-branch semantics.
+The Lambda usage structure review follows published AWS guidance for Lambda functions in Amazon Connect Customer flows but does not invent a maximum block count: total authored blocks, reachable blocks, and the bounded maximum on one simple route are presented as distinct observational measures. Its PASS means inventory completed, not that a particular count is optimal. The flow structure review similarly follows guidance to keep flows small, modular, and reusable while acknowledging that AWS does not publish a numerical complexity cutoff. Sequential-Lambda remediation remains conditional on data dependencies and preserves timeout and error-branch semantics.
 
 ---
 

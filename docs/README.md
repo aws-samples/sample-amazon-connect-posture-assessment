@@ -1,12 +1,13 @@
 # Documentation Index
 
 This directory contains the current user guides, implementation references, and
-design records for the Amazon Connect Customer Assessment Tool.
+design records for the Amazon Connect Customer Posture Assessment Tool.
 
 ## Table of Contents
 
 - [Start Here](#start-here)
 - [Current Behavior](#current-behavior)
+- [AWS Documentation](#aws-documentation)
 - [Contributors and Maintainers](#contributors-and-maintainers)
 - [Design and Historical Reference](#design-and-historical-reference)
 - [Source-of-Truth Rules](#source-of-truth-rules)
@@ -26,6 +27,12 @@ design records for the Amazon Connect Customer Assessment Tool.
 - [Report formats](report-formats.md) — HTML, JSON, CSV, and ASFF output contracts.
 - [Performance guide](performance-optimization.md) — parallel execution, retry tuning, and journey-scoring bounds.
 - [IAM policy template](iam-policy-template.json) — canonical read permissions for the assessment.
+
+## AWS Documentation
+
+- [Amazon Connect Customer overview](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html) — current product name and contact center scope.
+- [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html) — the framework that informs the assessment checks.
+- [Amazon Connect Customer API reference](https://docs.aws.amazon.com/connect/latest/APIReference/Welcome.html) and [AWS CLI `connect` commands](https://docs.aws.amazon.com/cli/latest/reference/connect/index.html) — technical identifiers and operations.
 
 ## Contributors and Maintainers
 

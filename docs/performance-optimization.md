@@ -1,4 +1,4 @@
-# Amazon Connect Customer Assessment Tool — Performance Guide
+# Amazon Connect Customer Posture Assessment Tool — Performance Guide
 
 The tool runs with parallel execution enabled by default. This page covers what that means and how to tune it for your environment.
 
