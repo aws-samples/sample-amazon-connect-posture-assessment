@@ -1,10 +1,11 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   colorBackgroundContainerContent,
   colorBackgroundLayoutMain,
   colorBorderDividerDefault,
   colorBorderStatusInfo,
   colorChartsPaletteCategorical1,
+  colorChartsPaletteCategorical2,
   colorChartsPaletteCategorical3,
   colorChartsPaletteCategorical4,
   colorChartsPaletteCategorical5,
@@ -22,7 +23,6 @@ import {
   Box,
   Button,
   ButtonDropdown,
-  ColumnLayout,
   Container,
   FormField,
   Header,
@@ -34,11 +34,13 @@ import {
   Table,
   Toggle,
 } from '@cloudscape-design/components';
+import { journeyEntryOptions } from './data';
 import { downloadSvgAsPng, downloadText, safeFilenamePart } from './download';
 
 export const CATEGORIES = {
   speaks: { label: 'Caller hears', color: colorChartsPaletteCategorical1 },
   chooses: { label: 'Caller chooses', color: colorChartsPaletteCategorical4 },
+  agentic: { label: 'Agentic self-service', color: colorChartsPaletteCategorical2 },
   waits: { label: 'Caller waits', color: colorChartsPaletteCategorical5 },
   processing: { label: 'System work', color: colorChartsPaletteCategorical3 },
   terminal: { label: 'Call ends', color: colorChartsStatusNeutral },
@@ -275,19 +277,20 @@ function EmptyJourney({ status }) {
 
 export default function JourneyMap({ journey, selection, onSelect, onClearSelection }) {
   const entries = journey.entries;
-  const instances = useMemo(
-    () => [...new Map(entries.map((e) => [e.instance_id, e.instance_display_name || e.instance_id])).entries()],
-    [entries],
-  );
-  const [instanceId, setInstanceId] = useState(instances[0]?.[0]);
-  const numbers = entries.filter((e) => e.instance_id === instanceId);
   const [entryIndex, setEntryIndex] = useState(0);
-  const entry = numbers[entryIndex] ?? numbers[0];
+  const entry = entries[entryIndex] ?? entries[0];
+  const entryOptions = journeyEntryOptions(entries);
   const [view, setView] = useState('diagram');
   const [zoom, setZoom] = useState(1);
   const [highlightPrimary, setHighlightPrimary] = useState(false);
   const [exportStatus, setExportStatus] = useState(null);
   const canvasRef = useRef(null);
+
+  useEffect(() => {
+    setEntryIndex(0);
+    setExportStatus(null);
+    onClearSelection();
+  }, [entries]);
 
   const model = entry?.diagram_model;
   const layout = model?.layout;
@@ -321,8 +324,6 @@ export default function JourneyMap({ journey, selection, onSelect, onClearSelect
     }
   };
 
-  const numberLabel = (e) => e.phone_number || e.flow_name;
-
   return (
     <Container
       header={
@@ -347,37 +348,17 @@ export default function JourneyMap({ journey, selection, onSelect, onClearSelect
       }
     >
       <SpaceBetween size="l">
-        <ColumnLayout columns={2}>
-          <FormField label="Connect instance">
-            <Select
-              selectedOption={{ value: instanceId, label: instances.find(([id]) => id === instanceId)?.[1] }}
-              options={instances.map(([value, label]) => ({ value, label, description: value }))}
-              onChange={({ detail }) => {
-                setInstanceId(detail.selectedOption.value);
-                setEntryIndex(0);
-                setExportStatus(null);
-                onClearSelection();
-              }}
-            />
-          </FormField>
-          <FormField label="DID / toll-free number">
-            <Select
-              selectedOption={{ value: String(entryIndex), label: numberLabel(entry), description: entry.phone_description || undefined }}
-              options={numbers.map((e, i) => ({
-                value: String(i),
-                label: numberLabel(e),
-                description: e.phone_description || undefined,
-                labelTag: e.flow_name,
-                tags: e.phone_type ? [e.phone_type.replace(/_/g, ' ')] : undefined,
-              }))}
-              onChange={({ detail }) => {
-                setEntryIndex(Number(detail.selectedOption.value));
-                setExportStatus(null);
-                onClearSelection();
-              }}
-            />
-          </FormField>
-        </ColumnLayout>
+        <FormField label="DID / toll-free number">
+          <Select
+            selectedOption={entryOptions[entryIndex] ?? entryOptions[0]}
+            options={entryOptions}
+            onChange={({ detail }) => {
+              setEntryIndex(Number(detail.selectedOption.value));
+              setExportStatus(null);
+              onClearSelection();
+            }}
+          />
+        </FormField>
 
         <KeyValuePairs
           columns={4}

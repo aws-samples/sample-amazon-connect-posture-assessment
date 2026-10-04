@@ -226,6 +226,8 @@ Resources:
             Resource:
               - !Sub 'arn:aws:iam::${AWS::AccountId}:role/*'
               - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/*'
+              # AWS-managed policies attached to roles (read-only GetPolicy).
+              - 'arn:aws:iam::aws:policy/*'
 
           - Sid: STSAccess
             Effect: Allow

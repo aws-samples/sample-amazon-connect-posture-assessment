@@ -166,17 +166,17 @@ class SelfServiceContainmentCheck(BaseCheck):
 
 
 class QueueWaitTimeCheck(BaseCheck):
-    """Detect high wait times without callback offering (Req 29)."""
+    """Review queue-routing flows for callback action availability."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-wait-time-001",
-            name="Queue Wait Time / Callback Opportunity",
+            name="Queue Callback Availability Review",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.HIGH,
             description=(
-                "Checks whether flows that route to queues offer a callback "
-                "option, reducing hold-time telephony costs."
+                "Identifies parsed flows that contain queue routing but no detected "
+                "callback action for workload-specific review."
             ),
         )
 
@@ -263,17 +263,17 @@ class QueueWaitTimeCheck(BaseCheck):
 
 
 class AgentOccupancyCheck(BaseCheck):
-    """Agent occupancy / staffing efficiency indicators (Req 30)."""
+    """Provide guidance for external agent occupancy analysis."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-occupancy-001",
-            name="Agent Occupancy / Staffing Efficiency",
+            name="Agent Occupancy Monitoring Guidance",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
             description=(
-                "Provides an informational check noting that agent occupancy "
-                "metrics should be monitored for staffing cost efficiency."
+                "Provides guidance for reviewing agent occupancy with authoritative "
+                "historical metrics; this check does not measure occupancy."
             ),
         )
 
@@ -299,17 +299,17 @@ class AgentOccupancyCheck(BaseCheck):
 
 
 class RepeatContactFCRCheck(BaseCheck):
-    """Detect returning-caller detection logic in flows (Req 31)."""
+    """Review flows for returning-caller pattern hints."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-fcr-001",
-            name="Repeat Contact / First Call Resolution Indicator",
+            name="Returning Caller Pattern Review",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
             description=(
-                "Checks whether contact flows perform returning-caller "
-                "detection to enable routing optimization and FCR tracking."
+                "Searches parsed flow action types and parameters for returning-caller "
+                "hints that need workload-specific review."
             ),
         )
 
@@ -372,17 +372,17 @@ class RepeatContactFCRCheck(BaseCheck):
 
 
 class AfterContactWorkCheck(BaseCheck):
-    """Flag excessive after-contact work as a cost signal (Req 32)."""
+    """Provide guidance for external after-contact-work analysis."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-acw-001",
-            name="After-Contact Work Duration",
+            name="After-Contact-Work Monitoring Guidance",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
             description=(
-                "Notes that ACW duration should be monitored; excessive ACW "
-                "increases cost per contact."
+                "Provides guidance for reviewing after-contact-work duration with "
+                "authoritative historical metrics; this check does not measure ACW."
             ),
         )
 
@@ -535,6 +535,7 @@ class IVRToAgentDataContinuityCheck(BaseCheck):
 
 
 _LEX_ACTION_TYPES = {"ConnectToLexBot", "ConnectParticipantWithLexBot"}
+_CONVERSATIONAL_AI_ACTION_TYPES = {*_LEX_ACTION_TYPES, "ConnectParticipantWithAgenticCX"}
 _INPUT_ACTION_TYPES = {
     "GetParticipantInput",
     "GetUserInput",
@@ -583,8 +584,12 @@ def _is_lex_input(action: FlowAction) -> bool:
     )
 
 
+def _is_conversational_ai(action: FlowAction) -> bool:
+    return action.action_type in _CONVERSATIONAL_AI_ACTION_TYPES or _is_lex_input(action)
+
+
 def _is_dtmf_input(action: FlowAction) -> bool:
-    if action.action_type not in _INPUT_ACTION_TYPES or _is_lex_input(action):
+    if action.action_type not in _INPUT_ACTION_TYPES or _is_conversational_ai(action):
         return False
     if action.action_type in {"StoreCustomerInput", "StoreUserInput"}:
         return True
@@ -655,8 +660,9 @@ class LegacySelfServiceTierCheck(BaseCheck):
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
             description=(
-                "Identifies reachable queue routes that use DTMF menu input without a Lex "
-                "conversation on that same route. This is an opportunity flag, not a defect."
+                "Identifies reachable queue routes that use DTMF menu input without a Lex or "
+                "Agentic CX conversation on that same route. This is an opportunity flag, not "
+                "a defect."
             ),
         )
 
@@ -703,8 +709,10 @@ class LegacySelfServiceTierCheck(BaseCheck):
             for route in routes:
                 actions = [graph.actions[action_id] for action_id in route]
                 dtmf_actions = [action for action in actions if _is_dtmf_input(action)]
-                lex_actions = [action for action in actions if _is_lex_input(action)]
-                if not dtmf_actions or lex_actions:
+                conversational_ai_actions = [
+                    action for action in actions if _is_conversational_ai(action)
+                ]
+                if not dtmf_actions or conversational_ai_actions:
                     continue
                 affected_routes.append(
                     {
@@ -764,10 +772,10 @@ class LegacySelfServiceTierCheck(BaseCheck):
                 resource_type="ContactFlow",
                 description=(
                     f"**{len(affected_routes)} reachable queue route(s) across "
-                    f"{len(affected_flow_ids)} flow(s) use DTMF input without a Lex "
-                    "conversation on the same route.** Lex on another branch does not "
-                    f"change the affected caller route.{limitation_note} Review the listed "
-                    "DTMF actions and retain simple menus where they remain the right fit."
+                    f"{len(affected_flow_ids)} flow(s) use DTMF input without a Lex or "
+                    "Agentic CX conversation on the same route.** Conversational AI on another "
+                    f"branch does not change the affected caller route.{limitation_note} Review "
+                    "the listed DTMF actions and retain simple menus where they remain the right fit."
                 ),
                 evidence=evidence,
                 structured_remediation=Remediation(
@@ -781,8 +789,9 @@ class LegacySelfServiceTierCheck(BaseCheck):
                         RemediationStep(
                             order=1,
                             instruction=(
-                                "Review each listed route and consider Lex when free-form intent "
-                                "handling would improve containment beyond a numbered menu."
+                                "Review each listed route and consider Lex or Agentic CX when "
+                                "free-form intent handling would improve containment beyond a "
+                                "numbered menu."
                             ),
                             console_path="Connect console -> Routing -> Flows",
                         )
@@ -824,18 +833,18 @@ class LegacySelfServiceTierCheck(BaseCheck):
             resource_type="ContactFlow",
             description=(
                 f"Analyzed {eligible_queue_routes} reachable queue route(s); none use DTMF "
-                "input without a Lex conversation on that same route."
+                "input without a Lex or Agentic CX conversation on that same route."
             ),
             evidence=evidence,
         )
 
 
-def register_cost_containment_checks(registry) -> None:
-    """Register all operational-intelligence cost checks."""
-    registry.register_check(SelfServiceContainmentCheck())
-    registry.register_check(QueueWaitTimeCheck())
+def register_cost_containment_checks(registry, include_flow_checks: bool = True) -> None:
+    """Register cost controls, optionally excluding flow-dependent executors."""
     registry.register_check(AgentOccupancyCheck())
-    registry.register_check(RepeatContactFCRCheck())
     registry.register_check(AfterContactWorkCheck())
-    registry.register_check(IVRToAgentDataContinuityCheck())
-    registry.register_check(LegacySelfServiceTierCheck())
+    if include_flow_checks:
+        registry.register_check(QueueWaitTimeCheck())
+        registry.register_check(RepeatContactFCRCheck())
+        registry.register_check(IVRToAgentDataContinuityCheck())
+        registry.register_check(LegacySelfServiceTierCheck())

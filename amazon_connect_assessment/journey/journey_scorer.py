@@ -4,16 +4,9 @@ resilience, and CX maturity gaps.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from ..models import (
-    CheckStatus,
-    Finding,
-    Pillar,
-    Remediation,
-    RemediationStep,
-    Severity,
-)
+from ..models import CheckStatus, Finding, Remediation
 from ..parsers.flow_patterns import (
     AUTHENTICATION_INDICATORS,
     PERSONALIZATION_INDICATORS,
@@ -74,7 +67,11 @@ def _score_single_path(path: JourneyPath) -> JourneyScore:
             score.has_personalization = True
 
         # NLU / Bot
-        if node.action_type in ("ConnectParticipantWithLexBot", "ConnectToLexBot"):
+        if node.action_type in (
+            "ConnectParticipantWithLexBot",
+            "ConnectToLexBot",
+            "ConnectParticipantWithAgenticCX",
+        ):
             score.has_nlu_bot = True
 
         # Returning caller detection
@@ -127,178 +124,312 @@ def _matches_indicators(node: JourneyNode, indicators: Dict[str, List[str]]) -> 
     return any(h in blob for h in hints)
 
 
+_CANONICAL_JOURNEY_CONTROL_IDS = (
+    "sec-flow-auth-001",
+    "cost-containment-001",
+    "journey-res-001",
+    "journey-scope-001",
+)
+
+
+def _selected_journey_ids(selected_control_ids: Optional[Iterable[str]]) -> List[str]:
+    from ..checks.control_registry import ExecutionSource, get_atomic_control_registry
+
+    catalog = get_atomic_control_registry()
+    requested = (
+        _CANONICAL_JOURNEY_CONTROL_IDS if selected_control_ids is None else selected_control_ids
+    )
+    selected: List[str] = []
+    for control in catalog.select(requested):
+        if control.execution_source != ExecutionSource.JOURNEY:
+            raise ValueError(f"Control {control.control_id} is not owned by Journey execution")
+        selected.append(control.control_id)
+    return selected
+
+
+def _representative_path(path: JourneyPath) -> Dict[str, Any]:
+    return {
+        "phone_number": _mask_number(path.entry_number),
+        "flows": path.flows_traversed,
+        "terminal_type": path.terminal_type,
+        "terminal_details": path.terminal_details,
+    }
+
+
+def _canonical_finding(
+    control_id: str,
+    instance_id: Optional[str],
+    status: CheckStatus,
+    description: str,
+    remediation: str,
+    evidence: Dict[str, Any],
+    structured_remediation: Optional[Remediation] = None,
+) -> Finding:
+    from ..checks.control_registry import get_atomic_control_registry
+
+    control = get_atomic_control_registry().get(control_id)
+    canonical_instance_id = instance_id or "instance"
+    return Finding(
+        check_id=control.control_id,
+        check_name=control.name,
+        pillar=control.pillar,
+        severity=control.default_severity,
+        status=status,
+        resource_id=canonical_instance_id,
+        resource_type="ConnectInstance",
+        description=description,
+        remediation=remediation,
+        evidence=evidence,
+        structured_remediation=structured_remediation,
+        disposition=control.disposition,
+        methodology=control.methodology,
+        instance_id=canonical_instance_id,
+    )
+
+
+def _no_candidate_status(result: JourneyMapResult) -> CheckStatus:
+    return CheckStatus.PASS if result.enumeration_complete else CheckStatus.SKIPPED
+
+
+def _coverage_evidence(result: JourneyMapResult) -> Dict[str, Any]:
+    numbers = sorted({_mask_number(path.entry_number) for path in result.journeys})
+    return {
+        "evaluated_phone_numbers": numbers,
+        "journey_count": len(result.journeys),
+        "enumeration_complete": result.enumeration_complete,
+        "enumeration_limitations": result.enumeration_limitations,
+    }
+
+
 def generate_journey_findings(
-    result: JourneyMapResult, instance_id: Optional[str] = None
+    result: JourneyMapResult,
+    instance_id: Optional[str] = None,
+    selected_control_ids: Optional[Iterable[str]] = None,
+    evaluation_limitation: Optional[str] = None,
 ) -> List[Finding]:
-    """Produce Finding objects from scored journey results.
+    """Emit one canonical aggregate outcome per selected Journey control."""
+    selected_ids = _selected_journey_ids(selected_control_ids)
+    if evaluation_limitation:
+        return [
+            _canonical_finding(
+                control_id,
+                instance_id,
+                CheckStatus.SKIPPED,
+                "Journey evaluation could not be completed for this instance.",
+                "Resolve the reported data or execution limitation and rerun the assessment.",
+                {"evaluation_limitation": evaluation_limitation},
+            )
+            for control_id in selected_ids
+        ]
 
-    ``instance_id`` identifies the instance the journeys were enumerated from.
-    It is optional only so existing callers keep working; pass it whenever it
-    is known, because ``journey-scope-001`` is instance-scoped and its
-    ``resource_id`` otherwise falls back to the literal string ``"instance"``,
-    which tells a reader nothing and cannot be correlated with the other
-    findings in a multi-instance account.
-    """
     findings: List[Finding] = []
+    paths_by_number: Dict[str, List[JourneyPath]] = {}
+    for path in result.journeys:
+        paths_by_number.setdefault(path.entry_number, []).append(path)
 
-    # Group journeys by entry number for per-DID analysis.
-    by_number: Dict[str, List[JourneyPath]] = {}
-    for j in result.journeys:
-        by_number.setdefault(j.entry_number, []).append(j)
+    for control_id in selected_ids:
+        coverage = _coverage_evidence(result)
 
-    for number, paths in by_number.items():
-        # Security: any path to queue without auth?
-        unauthed_queue_paths = [
-            p
-            for p in paths
-            if p.terminal_type == "agent_queue"
-            and not result.scores.get(p.path_hash, JourneyScore()).has_authentication
-        ]
-        if unauthed_queue_paths:
-            p = unauthed_queue_paths[0]
+        if control_id == "journey-scope-001":
+            if not result.tier_assignments and not result.dormant_flows:
+                findings.append(
+                    _canonical_finding(
+                        control_id,
+                        instance_id,
+                        CheckStatus.NOT_APPLICABLE,
+                        "No parsed flow inventory was available for a phone-reachability review.",
+                        "Provide readable contact flow inventory and rerun the assessment.",
+                        {"reason": "no_flow_inventory"},
+                    )
+                )
+                continue
+            dormant_flows = sorted(result.dormant_flows)
+            status = CheckStatus.FAIL if dormant_flows else CheckStatus.PASS
+            description = (
+                f"{len(dormant_flows)} flow(s) are outside the discovered phone-anchored "
+                "static closure and require an ownership and usage review."
+                if dormant_flows
+                else "All parsed flows are in the discovered phone-anchored static closure."
+            )
             findings.append(
-                Finding(
-                    check_id="journey-sec-001",
-                    check_name="Journey Reaches Agent Queue Without Authentication",
-                    pillar=Pillar.SECURITY,
-                    severity=Severity.HIGH,
-                    status=CheckStatus.FAIL,
-                    resource_id=number,
-                    resource_type="PhoneNumberJourney",
-                    description=(
-                        f"Caller journey from {number} reaches queue "
-                        f"'{p.terminal_details.get('queue', 'unknown')}' without "
-                        f"any authentication step ({len(unauthed_queue_paths)} path(s))."
-                    ),
-                    remediation="Insert caller authentication before routing to agent queue.",
-                    evidence={
-                        "phone_number": _mask_number(number),
-                        "unauthed_paths": len(unauthed_queue_paths),
-                        "first_path_flows": p.flows_traversed,
+                _canonical_finding(
+                    control_id,
+                    instance_id,
+                    status,
+                    description,
+                    "Review associations, dynamic references, other channels, ownership, and "
+                    "observed usage before changing any flow.",
+                    {
+                        "dormant_flow_count": len(dormant_flows),
+                        "dormant_flow_ids": dormant_flows,
+                        "dynamic_reference_count": len(result.dynamic_edges),
                     },
-                    structured_remediation=Remediation(
-                        summary=f"Insert auth in flow '{p.nodes[0].flow_name}' before queue transfer.",
-                        target_resources=[number, p.nodes[0].flow_name],
-                        steps=[
-                            RemediationStep(
-                                order=1,
-                                instruction=(
-                                    f"Add a Lambda verification or DTMF PIN step in "
-                                    f"flow '{p.nodes[0].flow_name}' before the "
-                                    f"TransferToQueue action."
-                                ),
-                            ),
-                        ],
-                    ),
                 )
             )
+            continue
 
-        # Containment: zero self-service?
-        no_ss_paths = [
-            p for p in paths if not result.scores.get(p.path_hash, JourneyScore()).has_self_service
-        ]
-        if len(no_ss_paths) == len(paths) and paths:
+        if not result.journeys:
             findings.append(
-                Finding(
-                    check_id="journey-cost-001",
-                    check_name="Zero Self-Service Paths",
-                    pillar=Pillar.COST_OPTIMIZATION,
-                    severity=Severity.HIGH,
-                    status=CheckStatus.FAIL,
-                    resource_id=number,
-                    resource_type="PhoneNumberJourney",
-                    description=(
-                        f"All {len(paths)} journey path(s) from {number} route to "
-                        f"agents without any self-service automation."
-                    ),
-                    remediation="Add self-service options (Lex bot, DTMF menu, Lambda lookup).",
-                    evidence={
-                        "phone_number": _mask_number(number),
-                        "total_paths": len(paths),
-                        "containment_score": result.containment_scores.get(number, 0),
-                    },
-                    structured_remediation=Remediation(
-                        summary=f"Add self-service automation to flow '{paths[0].nodes[0].flow_name}'.",
-                        target_resources=[number, paths[0].nodes[0].flow_name],
-                        steps=[
-                            RemediationStep(
-                                order=1,
-                                instruction=(
-                                    "Add a Lex bot or DTMF menu before the queue "
-                                    "transfer to deflect common requests."
-                                ),
-                            ),
-                        ],
-                    ),
+                _canonical_finding(
+                    control_id,
+                    instance_id,
+                    CheckStatus.NOT_APPLICABLE,
+                    "No phone-number journeys made this control applicable.",
+                    "Associate an inbound phone number with a readable contact flow to evaluate it.",
+                    {"reason": "no_phone_number_journeys"},
                 )
             )
+            continue
 
-        # Resilience: dead-end paths?
-        dead_ends = [
-            p
-            for p in paths
-            if p.terminal_type == "disconnect" and p.terminal_details.get("reason") == "dead_end"
-        ]
-        if dead_ends:
-            findings.append(
-                Finding(
-                    check_id="journey-res-001",
-                    check_name="Dead-End Caller Path",
-                    pillar=Pillar.RESILIENCE,
-                    severity=Severity.HIGH,
-                    status=CheckStatus.FAIL,
-                    resource_id=number,
-                    resource_type="PhoneNumberJourney",
-                    description=(
-                        f"{len(dead_ends)} path(s) from {number} end in a dead-end "
-                        f"disconnect with no agent/callback/bot option."
-                    ),
-                    remediation="Replace dead-end disconnects with callback or queue transfer.",
-                    evidence={
-                        "phone_number": _mask_number(number),
-                        "dead_end_count": len(dead_ends),
-                    },
-                    structured_remediation=Remediation(
-                        summary="Replace dead-end disconnects with fallback routing.",
-                        target_resources=[number],
-                        steps=[
-                            RemediationStep(
-                                order=1,
-                                instruction=(
-                                    "Add a callback offer or overflow queue before "
-                                    "the DisconnectParticipant action."
-                                ),
-                            ),
-                        ],
-                    ),
+        if control_id == "sec-flow-auth-001":
+            candidates = [
+                path
+                for path in result.journeys
+                if path.terminal_type == "agent_queue"
+                and not result.scores.get(path.path_hash, JourneyScore()).has_authentication
+            ]
+            affected_numbers = sorted({_mask_number(path.entry_number) for path in candidates})
+            status = CheckStatus.FAIL if candidates else _no_candidate_status(result)
+            evidence = {
+                **coverage,
+                "affected_phone_numbers": affected_numbers,
+                "candidate_path_count": len(candidates),
+                "representative_paths": [
+                    _representative_path(paths[0])
+                    for _, paths in sorted(
+                        {
+                            number: [path for path in candidates if path.entry_number == number]
+                            for number in {path.entry_number for path in candidates}
+                        }.items()
+                    )
+                ],
+            }
+            description = (
+                (
+                    f"{len(candidates)} agent-queue path(s) across {len(affected_numbers)} inbound "
+                    "phone number(s) have no recognized authentication step. This is called out "
+                    "because those routes may reach staff who can access or change "
+                    "customer-specific information before caller identity is established. If a "
+                    "destination handles sensitive requests, a missing verified gate can increase "
+                    "unauthorized disclosure or account-change risk; queue sensitivity and "
+                    "agent-side verification still require review."
+                )
+                if candidates
+                else (
+                    "No enumerated agent-queue path lacks a recognized authentication step. This "
+                    "matters because sensitive queues should not be reachable before caller "
+                    "identity is established where authentication is required; static recognition "
+                    "still does not prove that authentication is effective."
+                    if result.enumeration_complete
+                    else "No candidate was found, but bounded path enumeration was incomplete. "
+                    "Unexamined paths may still reach sensitive queues before caller identity is "
+                    "established, so this result cannot close the authentication review."
                 )
             )
-
-    # Dormant flows finding.
-    if len(result.dormant_flows) > 5:
-        findings.append(
-            Finding(
-                check_id="journey-scope-001",
-                check_name="Dormant Flows Detected",
-                pillar=Pillar.COST_OPTIMIZATION,
-                severity=Severity.LOW,
-                status=CheckStatus.FAIL,
-                resource_id=instance_id or "instance",
-                resource_type="ConnectInstance",
-                description=(
-                    f"{len(result.dormant_flows)} flows have zero traffic and no phone "
-                    "number association — consider deleting unused flows."
-                ),
-                remediation="Review and delete dormant flows to reduce clutter.",
-                evidence={"dormant_flow_count": len(result.dormant_flows)},
+            findings.append(
+                _canonical_finding(
+                    control_id,
+                    instance_id,
+                    status,
+                    description,
+                    "Classify queue sensitivity and add tested fail-closed authentication before "
+                    "agent transfer where required.",
+                    evidence,
+                )
             )
-        )
+            continue
 
-    # Per-number findings use the phone number as resource_id, so record the
-    # owning instance for reports to group and filter them by instance.
-    if instance_id:
-        for finding in findings:
-            if finding.resource_type == "PhoneNumberJourney":
-                finding.evidence["instance_id"] = instance_id
+        if control_id == "cost-containment-001":
+            affected_paths_by_number: Dict[str, List[JourneyPath]] = {}
+            for number, number_paths in paths_by_number.items():
+                agent_paths = [path for path in number_paths if path.terminal_type == "agent_queue"]
+                if agent_paths and all(
+                    not result.scores.get(path.path_hash, JourneyScore()).has_self_service
+                    for path in agent_paths
+                ):
+                    affected_paths_by_number[number] = agent_paths
+            affected_paths = [
+                path
+                for number in sorted(affected_paths_by_number)
+                for path in affected_paths_by_number[number]
+            ]
+            affected_numbers = sorted({_mask_number(number) for number in affected_paths_by_number})
+            status = CheckStatus.FAIL if affected_paths else _no_candidate_status(result)
+            evidence = {
+                **coverage,
+                "affected_phone_numbers": affected_numbers,
+                "candidate_path_count": len(affected_paths),
+                "representative_paths": [
+                    _representative_path(affected_paths_by_number[number][0])
+                    for number in sorted(affected_paths_by_number)
+                ],
+            }
+            description = (
+                f"{len(affected_numbers)} inbound phone number(s) have agent-bound journeys "
+                "without recognized menu/input, Lambda lookup, or Lex self-service."
+                if affected_paths
+                else (
+                    "Every evaluated agent-bound journey includes recognized self-service."
+                    if result.enumeration_complete
+                    else "No candidate was found, but bounded path enumeration was incomplete."
+                )
+            )
+            findings.append(
+                _canonical_finding(
+                    control_id,
+                    instance_id,
+                    status,
+                    description,
+                    "Validate a suitable DTMF, Lambda, or Lex resolution opportunity with "
+                    "production demand and fallback testing.",
+                    evidence,
+                )
+            )
+            continue
+
+        if control_id == "journey-res-001":
+            candidates = [
+                path
+                for path in result.journeys
+                if path.terminal_type == "disconnect"
+                and path.terminal_details.get("reason") == "dead_end"
+            ]
+            affected_numbers = sorted({_mask_number(path.entry_number) for path in candidates})
+            status = CheckStatus.FAIL if candidates else _no_candidate_status(result)
+            evidence = {
+                **coverage,
+                "affected_phone_numbers": affected_numbers,
+                "dead_end_path_count": len(candidates),
+                "representative_paths": [
+                    _representative_path(paths[0])
+                    for _, paths in sorted(
+                        {
+                            number: [path for path in candidates if path.entry_number == number]
+                            for number in {path.entry_number for path in candidates}
+                        }.items()
+                    )
+                ],
+            }
+            description = (
+                f"{len(candidates)} structural dead-end path(s) affect "
+                f"{len(affected_numbers)} inbound phone number(s)."
+                if candidates
+                else (
+                    "No structural dead-end path was found in complete enumeration."
+                    if result.enumeration_complete
+                    else "No dead end was found, but bounded path enumeration was incomplete."
+                )
+            )
+            findings.append(
+                _canonical_finding(
+                    control_id,
+                    instance_id,
+                    status,
+                    description,
+                    "Trace each recorded path and add a caller-safe terminal outcome or document "
+                    "the intended behavior.",
+                    evidence,
+                )
+            )
 
     return findings

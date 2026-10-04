@@ -23,8 +23,8 @@ design records for the Amazon Connect Customer Posture Assessment Tool.
 
 ## Current Behavior
 
-- [Check catalog](check-catalog.md) — implemented checks, journey findings, required permissions, and subset selection.
-- [Report formats](report-formats.md) — HTML, JSON, CSV, and ASFF output contracts.
+- [Check catalog](check-catalog.md) — all 64 canonical controls, dispositions, methodology, executor ownership, aliases, and unified filter behavior.
+- [Report formats](report-formats.md) — HTML, JSON, CSV, and failed-control-only ASFF contracts, including the scored-control denominator.
 - [Performance guide](performance-optimization.md) — parallel execution, retry tuning, and journey-scoring bounds.
 - [IAM policy template](iam-policy-template.json) — canonical read permissions for the assessment.
 
@@ -51,7 +51,11 @@ configuration guide.
 ## Source-of-Truth Rules
 
 - Runtime behavior: source code and tests.
-- Implemented checks and findings: [check catalog](check-catalog.md).
+- Canonical controls, aliases, disposition, and methodology:
+  `checks/control_registry.py`, `checks/registration.py`, and the
+  [check catalog](check-catalog.md).
+- Scoring: `score_policy.py`. Only passed and failed `CONTROL` records enter
+  the scored-control denominator.
 - Configuration keys and precedence: [configuration guide](configuration.md).
 - Required read permissions: `iam_permissions.py`, [IAM policy template](iam-policy-template.json), and the consistency tests.
 - Design proposals: documents under `design/`; they may describe capabilities not yet implemented.

@@ -3,13 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ report_title }}</title>
-    {# app_css / app_js are the static, developer-built Cloudscape UI bundle read
-       verbatim from templates/app/ (built from frontend/) — no assessment data
-       reaches these blocks. All assessment data is in the JSON island below,
-       escaped by ReportGenerator._json_for_script and JSON.parse'd by the UI,
-       never executed. #}
-    <style>{{ app_css | safe }}</style>
+    <!-- Self-contained report: only the hash-pinned inline bundle may run, images are limited to data:/blob:, and no network access is permitted. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src @@STYLE_SRC@@; script-src @@SCRIPT_SRC@@; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>@@REPORT_TITLE@@</title>
+    <style>@@APP_CSS@@</style>
 </head>
 <body>
     <div id="root">
@@ -18,7 +15,7 @@
             The same findings are available in the JSON and CSV exports.
         </noscript>
     </div>
-    <script id="report-data" type="application/json">{{ report_data_json | safe }}</script>
-    <script>{{ app_js | safe }}</script> {# nosemgrep #}
+    <script id="report-data" type="application/json">@@REPORT_DATA_JSON@@</script>
+    <script>@@APP_JS@@</script>
 </body>
 </html>

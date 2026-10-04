@@ -13,12 +13,28 @@ import {
   Table,
   Tabs,
 } from '@cloudscape-design/components';
-import { SEVERITIES, SEVERITY_RANK, STATUS, capitalize, defaultFilterQuery, statusLabel } from './data';
+import {
+  DISPOSITIONS,
+  SCORE_CLASSIFICATIONS,
+  SEVERITIES,
+  SEVERITY_RANK,
+  STATUS,
+  capitalize,
+  defaultFilterQuery,
+  dispositionLabel,
+  scoreClassificationLabel,
+  statusLabel,
+} from './data';
 import { downloadText, findingsCsv } from './download';
 
 export const SeverityBadge = ({ severity }) => <Badge color={`severity-${severity}`}>{capitalize(severity)}</Badge>;
 export const Status = ({ status }) => (
   <StatusIndicator type={STATUS[status]?.type ?? 'info'}>{statusLabel(status)}</StatusIndicator>
+);
+export const DispositionBadge = ({ disposition }) => (
+  <Badge color={disposition === 'control' ? 'blue' : disposition === 'manual_review' ? 'severity-medium' : 'grey'}>
+    {dispositionLabel(disposition)}
+  </Badge>
 );
 
 // Count stacked under the name keeps each tab narrow enough that all pillars fit without scrolling.
@@ -40,6 +56,12 @@ const COLUMNS = [
     sortingComparator: (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
   },
   { id: 'status', header: 'Status', cell: (f) => <Status status={f.status} />, sortingField: 'status' },
+  {
+    id: 'disposition',
+    header: 'Disposition',
+    cell: (f) => <DispositionBadge disposition={f.disposition} />,
+    sortingField: 'disposition',
+  },
   { id: 'pillar', header: 'Pillar', cell: (f) => f.pillarLabel, sortingField: 'pillarLabel' },
   { id: 'instance', header: 'Instance', cell: (f) => f.instance, sortingField: 'instance' },
   { id: 'resource_type', header: 'Resource type', cell: (f) => f.resource_type, sortingField: 'resource_type' },
@@ -59,6 +81,18 @@ const FILTERING_PROPERTIES = [
     groupValuesLabel: 'Status values',
     operators: ['=', '!='].map((operator) => ({ operator, format: statusLabel })),
   },
+  {
+    key: 'disposition',
+    propertyLabel: 'Disposition',
+    groupValuesLabel: 'Disposition values',
+    operators: ['=', '!='].map((operator) => ({ operator, format: dispositionLabel })),
+  },
+  {
+    key: 'score_classification',
+    propertyLabel: 'Score classification',
+    groupValuesLabel: 'Score classifications',
+    operators: ['=', '!='].map((operator) => ({ operator, format: scoreClassificationLabel })),
+  },
   { key: 'pillarLabel', propertyLabel: 'Pillar', groupValuesLabel: 'Pillar values', operators: ['=', '!='] },
   { key: 'instance', propertyLabel: 'Instance', groupValuesLabel: 'Instance values', operators: ['=', '!='] },
   { key: 'resource_type', propertyLabel: 'Resource type', groupValuesLabel: 'Resource types', operators: ['=', '!='] },
@@ -69,10 +103,12 @@ const FILTERING_PROPERTIES = [
 
 const LABELED_OPTIONS = [
   ...Object.entries(STATUS).map(([value, s]) => ({ propertyKey: 'status', value, label: s.label })),
+  ...Object.entries(DISPOSITIONS).map(([value, item]) => ({ propertyKey: 'disposition', value, label: item.label })),
+  ...Object.entries(SCORE_CLASSIFICATIONS).map(([value, item]) => ({ propertyKey: 'score_classification', value, label: item.label })),
   ...SEVERITIES.map((value) => ({ propertyKey: 'severity', value, label: capitalize(value) })),
 ];
 
-export default function FindingsTable({ data, selected, onSelect, filterRequest }) {
+export default function FindingsTable({ data, selected, onSelect, onFilterChange, filterRequest }) {
   const pillarLabel = useMemo(() => Object.fromEntries(data.pillars.map((p) => [p.id, p.label])), [data]);
   const allItems = useMemo(
     () => data.findings.map((f) => ({ ...f, pillarLabel: pillarLabel[f.pillar] ?? f.pillar })),
@@ -101,7 +137,10 @@ export default function FindingsTable({ data, selected, onSelect, filterRequest 
         <Box textAlign="center" color="inherit">
           <SpaceBetween size="xs">
             <b>No matches</b>
-            <Button onClick={() => actions.setPropertyFiltering({ operation: 'and', tokens: [] })}>Clear filter</Button>
+            <Button onClick={() => {
+              actions.setPropertyFiltering({ operation: 'and', tokens: [] });
+              onFilterChange?.();
+            }}>Clear filter</Button>
           </SpaceBetween>
         </Box>
       ),
@@ -119,9 +158,17 @@ export default function FindingsTable({ data, selected, onSelect, filterRequest 
     // Only react to new requests, not to `actions` identity changes.
   }, [filterRequest]);
 
-  const failedIn = (pillar) => allItems.filter((f) => f.pillar === pillar && f.status === 'fail').length;
+  const failedIn = (pillar) =>
+    allItems.filter(
+      (finding) =>
+        finding.pillar === pillar &&
+        finding.disposition === 'control' &&
+        finding.status === 'fail',
+    ).length;
   const filteringOptions = [
-    ...propertyFilterProps.filteringOptions.filter((o) => o.propertyKey !== 'status' && o.propertyKey !== 'severity'),
+    ...propertyFilterProps.filteringOptions.filter(
+      (option) => !['status', 'severity', 'disposition', 'score_classification'].includes(option.propertyKey),
+    ),
     ...LABELED_OPTIONS,
   ];
 
@@ -130,10 +177,21 @@ export default function FindingsTable({ data, selected, onSelect, filterRequest 
       <SpaceBetween size="s">
         <Tabs
           activeTabId={pillarTab}
-          onChange={({ detail }) => setPillarTab(detail.activeTabId)}
+          onChange={({ detail }) => {
+            setPillarTab(detail.activeTabId);
+            onFilterChange?.();
+          }}
           ariaLabel="Filter findings by pillar"
           tabs={[
-            { id: 'all', label: <TabLabel name="All" failed={allItems.filter((f) => f.status === 'fail').length} /> },
+            {
+              id: 'all',
+              label: (
+                <TabLabel
+                  name="All"
+                  failed={allItems.filter((finding) => finding.disposition === 'control' && finding.status === 'fail').length}
+                />
+              ),
+            },
             ...data.pillars
               .filter((p) => allItems.some((f) => f.pillar === p.id))
               .map((p) => ({ id: p.id, label: <TabLabel name={p.label} failed={failedIn(p.id)} /> })),
@@ -173,6 +231,10 @@ export default function FindingsTable({ data, selected, onSelect, filterRequest 
             <PropertyFilter
               {...propertyFilterProps}
               filteringOptions={filteringOptions}
+              onChange={(event) => {
+                propertyFilterProps.onChange(event);
+                onFilterChange?.();
+              }}
               countText={`${filteredItemsCount} match${filteredItemsCount === 1 ? '' : 'es'}`}
               filteringPlaceholder="Filter findings by severity, status, pillar, instance or text"
               expandToViewport

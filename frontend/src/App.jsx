@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { applyMode, Mode } from '@cloudscape-design/global-styles';
 import CodeView from '@cloudscape-design/code-view/code-view';
 import {
@@ -8,7 +8,9 @@ import {
   ContentLayout,
   CopyToClipboard,
   ExpandableSection,
+  FormField,
   Header,
+  Select,
   SpaceBetween,
   SplitPanel,
   TopNavigation,
@@ -20,6 +22,7 @@ import JourneyDetail from './JourneyDetail';
 import JourneyMap from './JourneyMap';
 import PrintFindings from './PrintFindings';
 import { AssessmentDetails, ExecutiveSummary, Insights, Recommendations } from './Overview';
+import { defaultFilterQuery, makeFilterRequest, scopeReportData } from './data';
 import { downloadText, findingsCsv } from './download';
 
 const THEME_KEY = 'darkMode';
@@ -57,8 +60,19 @@ export default function App({ data }) {
   const [splitOpen, setSplitOpen] = useState(true);
   const [splitSize, setSplitSize] = useState(620);
   const [filterRequest, setFilterRequest] = useState(undefined);
+  const [instanceScope, setInstanceScope] = useState('all');
+  const filterRequestId = useRef(0);
 
+  const scopedData = useMemo(() => scopeReportData(data, instanceScope), [data, instanceScope]);
   const pillarLabel = useMemo(() => Object.fromEntries(data.pillars.map((p) => [p.id, p.label])), [data]);
+  const instanceOptions = useMemo(() => [
+    { value: 'all', label: 'All instances' },
+    ...data.instances.map((instance) => ({
+      value: instance.id,
+      label: instance.display_name || instance.alias || instance.id,
+      description: instance.id,
+    })),
+  ], [data.instances]);
 
   const changeTheme = (t) => {
     setTheme(t);
@@ -73,16 +87,16 @@ export default function App({ data }) {
     setSelection(s);
     setSplitOpen(true);
   };
-  const showFindings = (severity) =>
-    setFilterRequest({
-      query: {
-        operation: 'and',
-        tokens: [
-          { propertyKey: 'status', operator: '=', value: 'fail' },
-          { propertyKey: 'severity', operator: '=', value: severity },
-        ],
-      },
-    });
+  const requestFindings = (query) => {
+    setSelection(undefined);
+    filterRequestId.current += 1;
+    setFilterRequest(makeFilterRequest(query, filterRequestId.current));
+  };
+  const changeInstanceScope = (value) => {
+    const nextData = scopeReportData(data, value);
+    setInstanceScope(value);
+    requestFindings(defaultFilterQuery(nextData));
+  };
   const exportReport = (id) => {
     if (id === 'csv') downloadText('assessment_findings.csv', findingsCsv(data.findings), 'text/csv;charset=utf-8');
     if (id === 'json') {
@@ -96,11 +110,11 @@ export default function App({ data }) {
   let splitBody = null;
   if (selection?.kind === 'finding') {
     splitHeader = selection.finding.check_name;
-    splitBody = <FindingDetail finding={selection.finding} />;
+    splitBody = <div className="acr-no-print"><FindingDetail finding={selection.finding} /></div>;
   } else if (selection) {
     const model = selection.entry.diagram_model;
     splitHeader = selection.kind === 'node' ? model.nodes[selection.key]?.title : `Route: ${model.edges[selection.key]?.title}`;
-    splitBody = <JourneyDetail entry={selection.entry} selection={selection} onSelect={(s) => select({ ...s, entry: selection.entry })} />;
+    splitBody = <div className="acr-no-print"><JourneyDetail entry={selection.entry} selection={selection} onSelect={(s) => select({ ...s, entry: selection.entry })} /></div>;
   }
 
   const { assessment } = data;
@@ -110,7 +124,7 @@ export default function App({ data }) {
         <TopNavigation
           identity={{
             href: '#',
-            title: 'Amazon Connect Assessment',
+            title: 'Amazon Connect Customer Posture Assessment',
             logo: data.service_icon ? { src: data.service_icon, alt: 'Amazon Connect' } : undefined,
           }}
           utilities={[
@@ -151,17 +165,26 @@ export default function App({ data }) {
                 variant="h1"
                 description={`Well-Architected posture assessment · Account ${assessment.account_id} · ${assessment.region} · Assessment ${assessment.id}`}
                 actions={
-                  <ButtonDropdown
-                    variant="primary"
-                    items={[
-                      { id: 'json', text: 'Report data (JSON)' },
-                      { id: 'csv', text: 'All findings (CSV)' },
-                      { id: 'pdf', text: 'Print / save as PDF' },
-                    ]}
-                    onItemClick={({ detail }) => exportReport(detail.id)}
-                  >
-                    Export
-                  </ButtonDropdown>
+                  <SpaceBetween direction="horizontal" size="s" alignItems="end">
+                    <FormField label="Report scope">
+                      <Select
+                        selectedOption={instanceOptions.find((option) => option.value === instanceScope)}
+                        options={instanceOptions}
+                        onChange={({ detail }) => changeInstanceScope(detail.selectedOption.value)}
+                      />
+                    </FormField>
+                    <ButtonDropdown
+                      variant="primary"
+                      items={[
+                        { id: 'json', text: 'Full report data (JSON)' },
+                        { id: 'csv', text: 'All findings, all instances (CSV)' },
+                        { id: 'pdf', text: 'Print scoped report / save as PDF' },
+                      ]}
+                      onItemClick={({ detail }) => exportReport(detail.id)}
+                    >
+                      Export
+                    </ButtonDropdown>
+                  </SpaceBetween>
                 }
               >
                 {data.title}
@@ -169,29 +192,29 @@ export default function App({ data }) {
             }
           >
             <SpaceBetween size="l">
-              <Insights data={data} />
-              <ExecutiveSummary data={data} />
-              <Charts data={data} />
-              <Recommendations data={data} onShowFindings={showFindings} />
+              <Insights data={scopedData} />
+              <ExecutiveSummary data={scopedData} onShowFindings={requestFindings} />
+              <Charts data={scopedData} onShowFindings={requestFindings} />
+              <Recommendations data={scopedData} onShowFindings={requestFindings} />
               <JourneyMap
-                journey={data.journey}
+                journey={scopedData.journey}
                 selection={selection?.kind === 'finding' ? undefined : selection}
                 onSelect={select}
-                // Journey details belong to the previous entry; an open finding stays open.
-                onClearSelection={() => setSelection((s) => (s?.kind === 'finding' ? s : undefined))}
+                onClearSelection={() => setSelection(undefined)}
               />
               <div className="acr-no-print">
                 <FindingsTable
-                  data={data}
+                  data={scopedData}
                   selected={selection?.kind === 'finding' ? selection.finding : undefined}
                   onSelect={(f) => f && select({ kind: 'finding', finding: { ...f, pillarLabel: pillarLabel[f.pillar] ?? f.pillar } })}
+                  onFilterChange={() => setSelection(undefined)}
                   filterRequest={filterRequest}
                 />
               </div>
-              <PrintFindings data={data} pillarLabel={pillarLabel} />
-              <AssessmentDetails data={data} />
+              <PrintFindings data={scopedData} pillarLabel={pillarLabel} />
+              <AssessmentDetails data={scopedData} />
               {data.raw_data && (
-                <ExpandableSection headerText="Raw assessment data" variant="container" headerDescription="The complete assessment result as JSON.">
+                <ExpandableSection headerText="Raw full assessment data (all instances)" variant="container" headerDescription="The complete unscoped assessment result as JSON.">
                   <CodeView
                     content={data.raw_data}
                     lineNumbers
@@ -202,7 +225,7 @@ export default function App({ data }) {
                 </ExpandableSection>
               )}
               <Box textAlign="center" color="text-body-secondary" fontSize="body-s" padding={{ vertical: 'l' }}>
-                Amazon Connect Assessment Tool · Generated {data.generated_at} · {data.findings.length} findings across{' '}
+                Amazon Connect Customer Posture Assessment Tool · Generated {data.generated_at} · Full assessment contains {data.findings.length} records across{' '}
                 {data.instances.length} Connect instance{data.instances.length === 1 ? '' : 's'}
               </Box>
             </SpaceBetween>

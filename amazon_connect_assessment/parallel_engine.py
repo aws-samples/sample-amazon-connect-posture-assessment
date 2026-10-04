@@ -229,8 +229,8 @@ class ParallelAssessmentEngine(AssessmentEngine):
         checks = self.check_registry.get_all_checks()
 
         if not checks:
-            self.logger.warning("No checks registered for execution")
-            return all_findings
+            self.logger.info("No BaseCheck executors selected; running Journey controls only")
+            return self._compute_journey_findings(instances)
 
         # Create check tasks for all instance-check combinations
         check_tasks = []
@@ -399,6 +399,7 @@ class ParallelAssessmentEngine(AssessmentEngine):
         findings: List[Finding],
     ) -> AssessmentResult:
         """Create the final assessment result with all data."""
+        self._validate_emitted_findings(findings)
         summary = self._generate_summary(findings)
         metadata = self._generate_metadata()
 

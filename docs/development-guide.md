@@ -6,12 +6,11 @@
 - [Running tests](#running-tests)
 - [Code quality](#code-quality)
 - [Developer scripts](#developer-scripts)
-- [HTML report UI](#html-report-ui)
-- [Adding a new check](#adding-a-new-check)
-  - [Create the check class](#1-create-the-check-class)
-  - [Register the check](#2-register-the-check)
+- [Adding a new canonical control](#adding-a-new-canonical-control)
+  - [Create the BaseCheck executor](#1-create-the-basecheck-executor)
+  - [Add the atomic catalog record and register the executor](#2-add-the-atomic-catalog-record-and-register-the-executor)
   - [Write tests](#3-write-tests)
-  - [Update the check catalog](#4-update-the-check-catalog)
+  - [Update documentation](#4-update-documentation)
 - [Project architecture](#project-architecture)
   - [Data flow](#data-flow)
 - [CI pipeline](#ci-pipeline)
@@ -21,13 +20,52 @@
 
 ## Setup
 
+Use the repository workspace and its `.venv` so the Python module and generated
+reports always come from the current checkout:
+
 ```bash
 git clone <repository-url>
 cd amazon-connect-assessment
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[dev,test]"
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -e ".[dev,test]"
+python -m amazon_connect_assessment.cli --help
 ```
+
+The editable install also creates the environment-local console entry point:
+
+```bash
+.venv/bin/amazon-connect-assessment --help
+```
+
+Prefer `python -m amazon_connect_assessment.cli` in development instructions.
+It makes the interpreter and checkout explicit and avoids accidentally invoking
+a stale globally installed executable.
+
+The HTML report spans two ownership boundaries:
+
+- Python in `report_generator.py` owns the report-data schema, embeds the
+  `report-data` JSON island, and produces the self-contained HTML shell plus
+  backend JSON and CSV exports.
+- React/Cloudscape in `frontend/src/` owns rendering, report scope, metric and
+  chart drill-downs, adaptive evidence cards/tables, browser CSV/JSON exports,
+  and print/save-as-PDF behavior.
+
+The committed frontend bundle lets Python users run without Node. When
+`frontend/` changes, run:
+
+```bash
+cd frontend
+npm ci
+npm test
+npm run build
+npm run check
+cd ..
+```
+
+`npm run check` verifies that the committed bundle under
+`amazon_connect_assessment/templates/app/` matches the maintained frontend
+source.
 
 ---
 
@@ -78,7 +116,7 @@ pre-commit install            # auto-run on git commit (where core.hooksPath all
 pre-commit run --all-files    # or run on demand
 ```
 
-If `core.hooksPath` is set globally, `pre-commit install`
+If `core.hooksPath` is set globally (e.g. Amazon git-defender), `pre-commit install`
 is skipped — run `pre-commit run` manually before committing.
 
 ---
@@ -94,6 +132,9 @@ python scripts/performance_test.py
 # Pre-flight environment check (Python version, deps, imports, AWS credentials)
 python scripts/validate_environment.py
 
+# Regenerate the deterministic report from all 64 canonical controls
+python scripts/generate_sample_report.py
+
 # Regenerate the local HTML copy of README.md (requires: pip install markdown;
 # docs/README.html is generated and is not a source document)
 python scripts/generate_readme_html.py
@@ -107,63 +148,35 @@ playwright install chromium
 python scripts/capture_screenshots.py
 ```
 
-One render writes both images: the full-length
-`docs/images/sample-assessment-report-full.png` (shown in a collapsed README section)
-and `docs/images/sample-assessment-report.png`, a crop from the Executive summary
-through the Caller journey map (`--preview-from` / `--preview-to`) shown inline.
-Pass `--no-preview` to skip the crop, or `--viewport-only` (with optional `--height`
-and `--scroll-y`) to capture a single viewport to `--output`.
+One render writes both `docs/images/sample-assessment-report-full.png` and the
+cropped `docs/images/sample-assessment-report.png` used by the README. The
+capture script comes from the AWS Samples Cloudscape report workflow.
 
 ---
 
-## HTML report UI
+## Adding a new canonical control
 
-The HTML report is a [Cloudscape](https://cloudscape.design/) React app
-(`frontend/`) bundled by esbuild into
-`amazon_connect_assessment/templates/app/report-app.{js,css}`. The bundle is
-**committed**, so installing or running the Python tool never needs Node.js.
-`ReportGenerator` renders a thin Jinja shell (`templates/html/assessment_report.html`)
-that inlines the bundle plus one JSON data island built by
-`ReportGenerator._build_report_data()` — that dict is the contract between the
-Python side and the UI.
+The unified catalog contains 64 canonical records. Each record owns one root
+condition, disposition, methodology, and executor. Of the current records, 60
+use a `BaseCheck` executor and 4 use the Journey executor. Add the catalog
+record before registering a new executor; catalog hydration rejects missing,
+duplicate, aliased, or mismatched IDs.
 
-Only rebuild when you change `frontend/src/` or its dependencies (Node.js 20+):
+Use `CONTROL` only when available evidence supports a scored pass/fail decision.
+Use `MANUAL_REVIEW` for candidates that require human validation and
+`INFORMATIONAL` for inventory or context. Status remains separate from this
+disposition.
 
-```bash
-cd frontend
-npm ci
-npm test        # node:test unit tests (CSV export, filenames, PNG sizing, data loading, contract)
-npm run build   # writes amazon_connect_assessment/templates/app/
-npm run check   # build + fail if the committed bundle differs (what CI runs)
-```
+Treat every finding description as the reader's explanation, not only as an
+evidence count. State what was observed, why the condition is called out, and
+why it matters to the developer or administrator. Distinguish evidence from
+inference and include relevant proof limitations. Catalog methodology supports
+this explanation but does not replace it.
 
-The data contract is pinned from both sides: `frontend/src/contract.js` lists every
-field the UI reads (and `loadReportData()` rejects data missing any of them), and
-`frontend/test/fixtures/report-data.json` is generated from the real
-`_build_report_data()` output. `tests/test_report_ui_contract.py` fails when the Python
-output drifts from that fixture; the Node tests check the fixture against
-`contract.js`. After an intentional contract change, update `contract.js` and run
-`UPDATE_REPORT_FIXTURE=1 pytest tests/test_report_ui_contract.py`.
+For a BaseCheck-backed control, implement `execute()` as follows. Catalog
+hydration attaches disposition and methodology to the executor before it runs.
 
-Commit the rebuilt bundle together with the source change. Conventions:
-
-- Render assessment content as text through Cloudscape components. The only
-  pre-rendered markup is finding markdown (`*_html` fields), produced by the
-  XSS-safe markdown-it parser in `ReportGenerator._render_markdown`.
-- Use Cloudscape design tokens (`@cloudscape-design/design-tokens`) for any
-  custom styling so light/dark mode keeps working.
-- The Caller Journey Map draws the geometry the Python renderer computed
-  (`diagram_model["layout"]`, from `journey/renderer.py::_layout_payload`), so
-  the in-report diagram always matches the SVG and draw.io exports.
-- Keep the report offline: no CDN fonts, scripts, or images.
-
----
-
-## Adding a new check
-
-All checks inherit from `BaseCheck`. The pluggable framework handles registration, error wrapping, and report rendering — you only implement `execute()`.
-
-### 1. Create the check class
+### 1. Create the BaseCheck executor
 
 ```python
 # amazon_connect_assessment/checks/my_checks.py
@@ -215,24 +228,37 @@ except ClientError as e:
     raise
 ```
 
-### 2. Register the check
+### 2. Add the atomic catalog record and register the executor
 
-Add it to `amazon_connect_assessment/checks/registration.py`:
+Add an `AtomicControl` definition in
+`amazon_connect_assessment/checks/control_registry.py`. Choose a unique
+canonical ID and root-condition key, the disposition, complete methodology,
+the exact executor class, and whether flow analysis is required. Never create a
+second control for the same root condition.
+
+Then register the executor through
+`amazon_connect_assessment/checks/registration.py` and its domain registration
+function:
 
 ```python
-from .my_checks import register_my_checks   # add a register function
+from .my_checks import register_my_checks
+
 
 def register_all_checks(registry, pillars=None, skip_flow_analysis=False):
-    # ... existing registrations ...
+    # Existing registrations...
     register_my_checks(registry)
 ```
-
-With the register function in your module:
 
 ```python
 def register_my_checks(registry):
     registry.register_check(MyNewCheck())
 ```
+
+`AtomicControlRegistry.hydrate_base_checks()` verifies exact catalog coverage,
+pillar, severity, and executor identity. `CheckRegistry.get_selected_controls()`
+is the unified execution plan used by listing and filtering. Journey-backed
+controls use the same catalog but are emitted by
+`journey.journey_scorer.generate_journey_findings()`.
 
 ### 3. Write tests
 
@@ -280,9 +306,16 @@ def test_with_real_connect_api():
     # run check
 ```
 
-### 4. Update the check catalog
+### 4. Update documentation
 
-Add your check to `docs/check-catalog.md`.
+Update the curated `docs/check-catalog.md` row and any affected user guidance.
+`DocsGenerator` consumes `CheckRegistry.get_selected_controls()` and can create
+derived catalogs containing Journey-backed controls, disposition, root
+condition, and methodology. Do not use it to overwrite the curated catalog.
+
+Update `tests/test_documentation_consistency.py` when an approved catalog change
+alters the exact canonical IDs or totals. Regenerate the deterministic sample
+through `python scripts/generate_sample_report.py`; do not hand-edit the HTML.
 
 ---
 
@@ -295,7 +328,8 @@ amazon_connect_assessment/
 ├── parallel_engine.py        # Parallel execution (default, extends engine.py)
 ├── aws_client_factory.py     # boto3 session management, credential handling
 ├── models.py                 # Dataclasses: Finding, ConnectInstance, AssessmentResult, etc.
-├── report_generator.py       # HTML (Cloudscape UI + JSON data island), JSON, CSV; ASFF uses report/asff_export.py
+├── score_policy.py           # Shared disposition-aware scored-control policy
+├── report_generator.py       # JSON/CSV plus self-contained Cloudscape HTML data contract
 ├── network_resilience.py     # Retry logic, exponential backoff, rate limit detection
 ├── logging_config.py         # Structured logging setup
 │
@@ -309,11 +343,13 @@ amazon_connect_assessment/
 │
 ├── checks/                   # Assessment logic — one file per domain
 │   ├── base.py               # BaseCheck, CheckContext, create_finding(), skipped_for_access_denied()
-│   ├── registry.py           # CheckRegistry — stores and retrieves checks
-│   ├── registration.py       # register_all_checks() — central loader
+│   ├── control_registry.py   # Immutable 64-control identity, disposition, and methodology catalog
+│   ├── registry.py           # BaseCheck executors plus unified selected-control view
+│   ├── registration.py       # register_all_checks() — central loader and AND-filtered selector
 │   ├── mvp_checks.py         # 5 original MVP checks + register_priority_checks()
 │   ├── security_checks.py / security_deep_checks.py / contact_flow_security_checks.py
 │   ├── ai_agent_security_checks.py
+│   ├── acxd_checks.py          # Connect-side Agentic CX handoff, error-route, and escalation evidence
 │   ├── resilience_advanced_checks.py  # resilience_checks.py was removed — see its module docstring history
 │   ├── cost_optimization_checks.py / cost_intelligence_checks.py / cost_containment_checks.py
 │   ├── operational_excellence_checks.py
@@ -340,15 +376,16 @@ amazon_connect_assessment/
 │   ├── posture_roadmap.py    # Roadmap generation
 │   └── s3_publisher.py       # Optional upload of reports to an S3 bucket (--s3-output)
 │
-└── templates/
-    ├── html/assessment_report.html  # Thin Jinja shell: inlines the UI bundle + data island
-    ├── app/report-app.{js,css}      # Built Cloudscape UI (committed; built from frontend/)
+└── templates/                # Built assets and thin self-contained report shell
+    ├── html/assessment_report.html
+    ├── app/report-app.js
+    ├── app/report-app.css
     └── assets/amazon-connect.svg
 
-frontend/                         # React + Cloudscape source for the HTML report UI
-├── package.json / package-lock.json  # Pinned Cloudscape, React, esbuild versions
-├── build.mjs                     # esbuild → amazon_connect_assessment/templates/app/
-└── src/                          # App, findings table, finding detail, journey map, charts
+frontend/                     # AWS Samples React/Cloudscape report source
+├── src/                      # Cloudscape views and report-data contract
+├── test/                     # Node contract and export tests
+└── build.mjs                 # esbuild bundle → templates/app/
 
 cloudformation/
 └── AmazonConnectSelfAssessmentPolicy.yaml # Deploy to grant your account the required IAM permissions
@@ -361,25 +398,71 @@ docs/                         # This file and companions
 ### Data flow
 
 ```
-CLI args + config file
-        ↓
-AWSClientFactory (credentials, boto3 sessions)
-        ↓
-AssessmentEngine.run_assessment()
-    ├── discover_instances()        → [ConnectInstance, ...]
-    ├── analyze_instance()          → ConnectInstance (populated with flows, queues, users...)
-    ├── execute_checks()            → [Finding, ...]
-    └── run_journey_mapping()       → JourneyMappingOutput (findings + topology + scored paths)
-            ├── resolve_topology()      → phone numbers → flows → tier classification
-            ├── build_super_graph()     → instance-wide directed graph (stitched at transfers)
-            ├── enumerate_journeys()    → bounded DFS from each entry point
-            ├── score_journeys()        → security / CX / cost scoring per path
-            └── generate_findings()     → [Finding, ...]
-                                         ↓
-                                   ReportGenerator
-                                         ↓
-                               HTML / JSON / CSV / ASFF
+Repository .venv
+    └── python -m amazon_connect_assessment.cli (or .venv console entry point)
+            ↓
+       CLI args + config file
+            ↓
+       AWSClientFactory (resolved credentials, region, resilient boto3 clients)
+            ↓
+       AssessmentEngine.run_assessment()
+            ├── ListInstances in the current account and one selected region
+            ├── optional --instance-id run filter; otherwise assess every discovered instance
+            ├── analyzers populate flows, queues, users, integrations, and related data
+            ├── selected BaseCheck controls emit one outcome per selected control/instance
+            │     └── acxd_checks.py reuses parsed flow data for Connect-side ACXD evidence
+            └── Journey executor emits one aggregate outcome per selected Journey control/instance
+                  ├── phone numbers → flow topology → bounded paths
+                  └── authentication, containment, scope, and dead-end evidence
+            ↓
+       AssessmentResult + disposition-aware score policy
+            ├── JSON / CSV / ASFF exporters use the complete run result
+            └── ReportGenerator builds the Python-owned report-data contract
+                    ↓
+               self-contained HTML embeds report-data + committed UI bundle
+                    ↓
+               React/Cloudscape viewer
+                    ├── all-instance or one-instance report scope
+                    ├── exact metric/chart → findings-table filter requests
+                    ├── table/card evidence selected from container width
+                    ├── full unscoped report JSON and all-instance findings CSV
+                    └── print/save-as-PDF for every finding in the current instance scope
 ```
+
+The report-wide instance selector recomputes summaries, charts,
+recommendations, journey entries, and findings for the chosen instance. Metric
+and chart interactions send these exact property-filter queries to the findings
+table:
+
+| Interaction | Findings query |
+| --- | --- |
+| Total records or Connect instances | Clear all property filters. |
+| Control posture | `score_classification=scored_pass OR scored_fail`. |
+| Failed controls or severity index | `score_classification=scored_fail`. |
+| Unevaluated controls | `score_classification=unevaluated_control`. |
+| Not applicable | `score_classification=not_applicable`. |
+| Manual-review candidates | `status=fail AND disposition=manual_review`. |
+| All manual-review records | `disposition=manual_review`. |
+| Informational records | `disposition=informational`. |
+| Status donut | The selected segment's score classification, or `disposition=manual_review/informational AND score_classification=non_scoring`. |
+| Failed-severity bar | `status=fail AND disposition=control AND severity=<selected severity>`. |
+| Pillar stack | The selected stack semantics above plus `pillarLabel=<selected pillar>`. |
+
+Every drill-down uses the current instance-scoped dataset, switches the findings
+table to the All pillar tab, replaces the table query, and scrolls the table
+into view.
+
+Evidence rendering is adaptive. Structured records use a Cloudscape table when
+the container width is at least `max(320px, column_count × 160px)` and cards
+when it is narrower. A resize observer updates the choice as the details panel
+changes width. Print rendering uses complete, unabridged evidence values.
+
+Export scope is deliberate. Top-level HTML report JSON and CSV actions export
+the complete embedded run, independent of the current instance selector and
+findings filter. Print/save-as-PDF includes all findings in the current instance
+scope, independent of the on-screen findings filter and pagination. Backend
+JSON and CSV files likewise contain the complete CLI run result; an
+`--instance-id` run is already single-instance before export.
 
 ---
 
@@ -390,11 +473,9 @@ GitHub Actions runs on every push and PR to `main`:
 - **Test** — pytest on Python 3.12
 - **Lint** — `ruff check` (lint + import order) and `ruff format --check`
 - **Type check** — mypy
-- **Report UI** — runs the `frontend/` unit tests, rebuilds the bundle, and fails if the committed bundle in
-  `amazon_connect_assessment/templates/app/` is stale
-- **Security audit** — pip-audit on Python dependencies; `npm audit --audit-level=high` on the report UI (`report-ui` job)
+- **Security audit** — pip-audit on dependencies
 
-See `.github/workflows/ci.yml` for the full definition.
+See `.github/workflows/ci.yml` (GitHub) or `.gitlab-ci.yml` (GitLab) for the full definition.
 
 ---
 

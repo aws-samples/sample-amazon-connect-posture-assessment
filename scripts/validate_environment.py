@@ -58,7 +58,6 @@ def check_dependencies():
     required_packages = [
         ("boto3", "boto3"),
         ("botocore", "botocore"),
-        ("jinja2", "jinja2"),
         ("yaml", "pyyaml"),
         ("hypothesis", "hypothesis"),
         ("pytest", "pytest"),

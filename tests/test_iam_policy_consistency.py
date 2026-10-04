@@ -187,3 +187,45 @@ def test_ai_ops_policy_uses_wisdom_iam_prefix_for_qconnect_calls():
     # Assert
     assert expected_ai_actions <= canonical
     assert "connect:ListIntegrationAssociations" in AWSClientFactory.REQUIRED_PERMISSIONS
+
+
+def test_security_evidence_read_actions_present_in_all_policy_artifacts():
+    # Arrange
+    required_actions = {
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:GetEventSelectors",
+    }
+    standalone = json.loads(JSON_POLICY_PATH.read_text())
+    standalone_actions = {
+        action
+        for statement in standalone["Statement"]
+        for action in (
+            statement["Action"] if isinstance(statement["Action"], list) else [statement["Action"]]
+        )
+    }
+
+    # Act
+    canonical_actions = iam_permissions.all_actions()
+    cloudformation_actions = _cfn_self_assessment_actions()
+
+    # Assert
+    assert required_actions <= canonical_actions
+    assert required_actions <= standalone_actions
+    assert required_actions <= cloudformation_actions
+
+
+def test_iam_policy_aws_managed_resource_is_present_in_all_artifacts():
+    # Arrange
+    expected_resource = "arn:aws:iam::aws:policy/*"
+
+    # Act
+    canonical_text = iam_permissions.render_policy_json()
+    standalone_text = JSON_POLICY_PATH.read_text()
+    cloudformation_text = CFN_SELF_ASSESSMENT_PATH.read_text()
+
+    # Assert
+    assert expected_resource in canonical_text
+    assert expected_resource in standalone_text
+    assert expected_resource in cloudformation_text

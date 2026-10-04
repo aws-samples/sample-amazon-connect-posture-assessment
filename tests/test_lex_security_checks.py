@@ -326,3 +326,23 @@ def test_check_survives_skip_flow_analysis():
 
     # Assert
     assert "sec-lex-convlogs-001" in {c.check_id for c in registry.get_all_checks()}
+
+
+def test_lex_audio_remediation_compliance_boundary_avoids_legal_determination():
+    # Arrange
+    unencrypted = [
+        {
+            "bot_alias_arn": _ALIAS_ARN,
+            "bot_id": "BOTID12345",
+            "bot_alias_id": "TSTALIASID",
+            "region": "us-east-1",
+        }
+    ]
+
+    # Act
+    remediation = LexConversationLogEncryptionCheck._audio_remediation(unencrypted)
+
+    # Assert
+    assert "determine the obligations that apply" in remediation.summary
+    assert "AWS shared responsibility model" in remediation.summary
+    assert "GDPR" not in remediation.summary

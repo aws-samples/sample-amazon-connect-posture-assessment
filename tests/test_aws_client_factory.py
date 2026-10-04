@@ -366,3 +366,41 @@ def test_ai_ops_factory_wrappers_use_exact_services_operations_and_parameter_cas
         "nextToken": "profile-token",
         "maxResults": 100,
     }
+
+
+def test_security_evidence_factory_wrappers_use_public_api_parameters():
+    # Arrange
+    factory = AWSClientFactory()
+    iam_client = Mock(name="iam_client")
+    cloudtrail_client = Mock(name="cloudtrail_client")
+    factory.get_iam_client = Mock(return_value=iam_client)
+    factory.get_cloudtrail_client = Mock(return_value=cloudtrail_client)
+    factory.call_api_with_resilience = Mock(return_value={})
+
+    # Act
+    factory.list_role_policies_resilient("RoleName", Marker="inline-marker")
+    factory.list_attached_role_policies_resilient("RoleName", Marker="attached-marker")
+    factory.get_policy_resilient("arn:aws:iam::123456789012:policy/PolicyName")
+    factory.get_policy_version_resilient("arn:aws:iam::123456789012:policy/PolicyName", "v2")
+    factory.get_trail_status_resilient("arn:aws:cloudtrail:us-east-1:123456789012:trail/audit")
+    factory.get_trail_event_selectors_resilient(
+        "arn:aws:cloudtrail:us-east-1:123456789012:trail/audit"
+    )
+
+    # Assert
+    calls = factory.call_api_with_resilience.call_args_list
+    assert calls[0].args == (iam_client, "list_role_policies", "iam")
+    assert calls[0].kwargs == {"RoleName": "RoleName", "Marker": "inline-marker"}
+    assert calls[1].args == (iam_client, "list_attached_role_policies", "iam")
+    assert calls[1].kwargs == {"RoleName": "RoleName", "Marker": "attached-marker"}
+    assert calls[2].args == (iam_client, "get_policy", "iam")
+    assert calls[2].kwargs == {"PolicyArn": "arn:aws:iam::123456789012:policy/PolicyName"}
+    assert calls[3].args == (iam_client, "get_policy_version", "iam")
+    assert calls[3].kwargs == {
+        "PolicyArn": "arn:aws:iam::123456789012:policy/PolicyName",
+        "VersionId": "v2",
+    }
+    assert calls[4].args == (cloudtrail_client, "get_trail_status", "cloudtrail")
+    assert calls[4].kwargs == {"Name": "arn:aws:cloudtrail:us-east-1:123456789012:trail/audit"}
+    assert calls[5].args == (cloudtrail_client, "get_event_selectors", "cloudtrail")
+    assert calls[5].kwargs == {"TrailName": "arn:aws:cloudtrail:us-east-1:123456789012:trail/audit"}

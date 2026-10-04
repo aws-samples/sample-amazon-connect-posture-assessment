@@ -21,12 +21,20 @@ produces:
    _truncate().
 """
 
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
-from amazon_connect_assessment.models import CheckStatus, Finding, Pillar, Severity
+from amazon_connect_assessment.models import (
+    CheckStatus,
+    Finding,
+    FindingDisposition,
+    FindingMethodology,
+    Pillar,
+    Severity,
+)
 from amazon_connect_assessment.report.asff_export import (
     _MAX_DESCRIPTION_LENGTH,
     _MAX_REMEDIATION_TEXT_LENGTH,
@@ -157,3 +165,86 @@ class TestFindingToAsffBasicShape:
 
         with pytest.raises(ValueError, match="filename, not a path"):
             export_asff(result, str(tmp_path), filename_template="../outside/report")
+
+
+@pytest.mark.parametrize(
+    ("status", "disposition", "expected_count"),
+    [
+        (CheckStatus.PASS, FindingDisposition.CONTROL, 0),
+        (CheckStatus.FAIL, FindingDisposition.CONTROL, 1),
+        (CheckStatus.ERROR, FindingDisposition.CONTROL, 0),
+        (CheckStatus.SKIPPED, FindingDisposition.CONTROL, 0),
+        (CheckStatus.NOT_APPLICABLE, FindingDisposition.CONTROL, 0),
+        (CheckStatus.PASS, FindingDisposition.MANUAL_REVIEW, 0),
+        (CheckStatus.FAIL, FindingDisposition.MANUAL_REVIEW, 0),
+        (CheckStatus.ERROR, FindingDisposition.MANUAL_REVIEW, 0),
+        (CheckStatus.SKIPPED, FindingDisposition.MANUAL_REVIEW, 0),
+        (CheckStatus.NOT_APPLICABLE, FindingDisposition.MANUAL_REVIEW, 0),
+        (CheckStatus.PASS, FindingDisposition.INFORMATIONAL, 0),
+        (CheckStatus.FAIL, FindingDisposition.INFORMATIONAL, 0),
+        (CheckStatus.ERROR, FindingDisposition.INFORMATIONAL, 0),
+        (CheckStatus.SKIPPED, FindingDisposition.INFORMATIONAL, 0),
+        (CheckStatus.NOT_APPLICABLE, FindingDisposition.INFORMATIONAL, 0),
+    ],
+)
+def test_asff_disposition_status_matrix_exports_only_failed_controls(
+    status, disposition, expected_count, tmp_path
+):
+    # Arrange
+    result = SimpleNamespace(
+        findings=[_finding(status=status, disposition=disposition)],
+        account_id="123456789012",
+        region="us-east-1",
+        timestamp=datetime(2026, 1, 1, 12, 0, 0),
+        assessment_id="assessment-123",
+    )
+
+    # Act
+    path = export_asff(result, str(tmp_path))
+    with open(path, encoding="utf-8") as report_file:
+        payload = json.load(report_file)
+
+    # Assert
+    assert len(payload["Findings"]) == expected_count
+    if expected_count:
+        assert payload["Findings"][0]["Compliance"]["Status"] == "FAILED"
+
+
+def test_asff_methodology_content_is_bounded_and_preserved(tmp_path):
+    # Arrange
+    methodology = FindingMethodology(
+        reason="r" * 2000,
+        evidence_source="Connect API",
+        proof_limitations="Does not prove operations",
+        developer_admin_meaning="Review this control",
+        verification_criteria="Capture approved evidence",
+        responsible_function="Security",
+        primary_lens_reference="SEC-1",
+    )
+    result = SimpleNamespace(
+        findings=[
+            _finding(
+                disposition=FindingDisposition.CONTROL,
+                methodology=methodology,
+                instance_id="instance-123",
+            )
+        ],
+        account_id="123456789012",
+        region="us-east-1",
+        timestamp=datetime(2026, 1, 1, 12, 0, 0),
+        assessment_id="assessment-123",
+    )
+
+    # Act
+    path = export_asff(result, str(tmp_path))
+    with open(path, encoding="utf-8") as report_file:
+        finding = json.load(report_file)["Findings"][0]
+
+    # Assert
+    fields = finding["ProductFields"]
+    assert fields["amazon-connect-assessment/disposition"] == "control"
+    assert fields["amazon-connect-assessment/instance-id"] == "instance-123"
+    assert len(fields["amazon-connect-assessment/reason"]) <= 512
+    assert fields["amazon-connect-assessment/verification-criteria"] == (
+        "Capture approved evidence"
+    )

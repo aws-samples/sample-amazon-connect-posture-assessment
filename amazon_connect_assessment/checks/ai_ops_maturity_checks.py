@@ -118,8 +118,8 @@ def _list_association_arns(factory: Any, instance_id: str, integration_type: str
         ),
         operation="connect:ListIntegrationAssociations",
         items_key="IntegrationAssociationSummaryList",
-        response_token_key="NextToken",
-        request_token_key="NextToken",
+        response_token_key="NextToken",  # nosec B106 - pagination field name, not a credential
+        request_token_key="NextToken",  # nosec B106 - pagination field name, not a credential
         request_page_size_key="MaxResults",
     )
 
@@ -150,8 +150,8 @@ def _list_guardrails(factory: Any, assistant_id: str) -> List[Dict[str, Any]]:
         lambda **kwargs: factory.list_ai_guardrails_resilient(assistant_id, **kwargs),
         operation="wisdom:ListAIGuardrails",
         items_key="aiGuardrailSummaries",
-        response_token_key="nextToken",
-        request_token_key="nextToken",
+        response_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
+        request_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
         request_page_size_key="maxResults",
     )
 
@@ -161,8 +161,8 @@ def _list_ai_agents(factory: Any, assistant_id: str) -> List[Dict[str, Any]]:
         lambda **kwargs: factory.list_ai_agents_resilient(assistant_id, **kwargs),
         operation="wisdom:ListAIAgents",
         items_key="aiAgentSummaries",
-        response_token_key="nextToken",
-        request_token_key="nextToken",
+        response_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
+        request_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
         request_page_size_key="maxResults",
     )
 
@@ -262,8 +262,8 @@ def _list_prompts(factory: Any, assistant_id: str) -> List[Dict[str, Any]]:
         lambda **kwargs: factory.list_ai_prompts_resilient(assistant_id, **kwargs),
         operation="wisdom:ListAIPrompts",
         items_key="aiPromptSummaries",
-        response_token_key="nextToken",
-        request_token_key="nextToken",
+        response_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
+        request_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
         request_page_size_key="maxResults",
     )
 
@@ -275,8 +275,8 @@ def _list_inference_profiles(factory: Any) -> List[Dict[str, Any]]:
         ),
         operation="bedrock:ListInferenceProfiles",
         items_key="inferenceProfileSummaries",
-        response_token_key="nextToken",
-        request_token_key="nextToken",
+        response_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
+        request_token_key="nextToken",  # nosec B106 - pagination field name, not a credential
         request_page_size_key="maxResults",
     )
 

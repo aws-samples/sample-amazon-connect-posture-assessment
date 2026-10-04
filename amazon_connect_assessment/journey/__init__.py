@@ -15,7 +15,7 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from ..aws_client_factory import AWSClientFactory
 from ..models import ConnectInstance, ContactFlowGraph, Finding
@@ -35,6 +35,7 @@ def run_journey_mapping(
     parsed_flows: Dict[str, ContactFlowGraph],
     factory: AWSClientFactory,
     config: Dict[str, Any],
+    selected_control_ids: Optional[Iterable[str]] = None,
 ) -> JourneyMappingOutput:
     """
     Execute the full journey mapping pipeline.
@@ -50,7 +51,7 @@ def run_journey_mapping(
         JourneyMappingOutput with findings and result data for reporting.
     """
     from .journey_scorer import generate_journey_findings, score_journeys
-    from .path_enumerator import enumerate_journeys
+    from .path_enumerator import enumerate_journeys_with_completeness
     from .super_graph import build_super_graph
     from .topology import resolve_topology
 
@@ -69,12 +70,18 @@ def run_journey_mapping(
     # Step 3: Enumerate paths
     max_paths = config.get("journey_map", {}).get("max_paths_per_did", 200)
     max_depth = config.get("journey_map", {}).get("max_depth", 50)
-    journeys = enumerate_journeys(
+    journeys, enumeration_complete, enumeration_limitations = enumerate_journeys_with_completeness(
         super_graph=super_graph,
         phone_entries=phone_entries,
         max_paths=max_paths,
         max_depth=max_depth,
     )
+    if super_graph.dynamic_references:
+        enumeration_complete = False
+        enumeration_limitations = [
+            *enumeration_limitations,
+            f"{len(super_graph.dynamic_references)} dynamic cross-flow reference(s) unresolved",
+        ]
 
     # Step 4: Score journeys
     scores = score_journeys(journeys, config)
@@ -91,10 +98,16 @@ def run_journey_mapping(
         dormant_flows=dormant_flows,
         dynamic_edges=super_graph.dynamic_references,
         containment_scores=containment_scores,
+        enumeration_complete=enumeration_complete,
+        enumeration_limitations=enumeration_limitations,
     )
 
-    # Step 6: Generate findings
-    findings = generate_journey_findings(result, instance_id=instance.instance_id)
+    # Step 6: Generate one canonical outcome per selected Journey control.
+    findings = generate_journey_findings(
+        result,
+        instance_id=instance.instance_id,
+        selected_control_ids=selected_control_ids,
+    )
 
     return JourneyMappingOutput(result=result, findings=findings)
 

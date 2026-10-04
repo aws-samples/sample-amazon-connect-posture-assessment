@@ -16,7 +16,6 @@ from ..models import (
     CheckStatus,
     Pillar,
     Remediation,
-    RemediationReference,
     RemediationStep,
     Severity,
 )
@@ -128,17 +127,17 @@ class UsageMetricsCheck(BaseCheck):
 
 
 class UnusedPhoneNumbersCheck(BaseCheck):
-    """Identify claimed phone numbers with zero traffic (Req 14)."""
+    """Inventory claimed phone numbers for separate usage review."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-unused-numbers-001",
-            name="Unused Phone Number Detection",
+            name="Claimed Phone Number Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
             description=(
-                "Lists claimed phone numbers and flags those receiving zero "
-                "incoming calls over 30 days — each incurs a monthly cost."
+                "Inventories claimed phone numbers and estimates a worst-case monthly "
+                "holding cost for separate traffic and ownership verification."
             ),
         )
 
@@ -252,15 +251,12 @@ class PremiumFeaturesCostCheck(BaseCheck):
     def __init__(self):
         super().__init__(
             check_id="cost-premium-features-001",
-            name="Premium Feature Enablement Review",
+            name="Premium Feature Enablement Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
             description=(
-                "Reports which Amazon Connect premium features (currently "
-                "Contact Lens — the only such feature exposed as an instance "
-                "attribute) are enabled on the instance so a cost reviewer "
-                "can confirm it is intentionally in use. Enablement itself "
-                "is free; the feature is usage-billed."
+                "Inventories the Contact Lens instance attribute as enabled or disabled. "
+                "Enablement itself is free; usage within contact flows is billed."
             ),
         )
 
@@ -268,12 +264,9 @@ class PremiumFeaturesCostCheck(BaseCheck):
         instance = context.instance
         factory = context.aws_client_factory
 
-        # Check instance attributes for feature flags. AccessDenied is
-        # tracked separately from "actually false" so we can SKIP rather
-        # than falsely PASS — a denied DescribeInstanceAttribute call tells
-        # us nothing about whether the feature is enabled.
+        # A failed attribute read is unknown, never equivalent to disabled.
         features_enabled = {}
-        access_denied_attrs = []
+        failed_attributes = []
         for attr_type in _PREMIUM_FEATURES:
             try:
                 resp = factory.call_api_with_resilience(
@@ -283,146 +276,85 @@ class PremiumFeaturesCostCheck(BaseCheck):
                     InstanceId=instance.instance_id,
                     AttributeType=attr_type,
                 )
-                val = resp.get("Attribute", {}).get("Value", "false")
-                features_enabled[attr_type] = val.lower() == "true"
-            except Exception as e:
-                if factory.is_access_denied(e):
-                    access_denied_attrs.append(attr_type)
-                else:
-                    # Any other error (throttling, transient network issue)
-                    # also means we don't actually know the state — do not
-                    # default to "disabled".
-                    access_denied_attrs.append(attr_type)
+                attribute = resp.get("Attribute")
+                value = attribute.get("Value") if isinstance(attribute, dict) else None
+                if not isinstance(value, str):
+                    raise ValueError("DescribeInstanceAttribute response omitted Attribute.Value")
+                features_enabled[attr_type] = value.lower() == "true"
+            except Exception as e:  # noqa: BLE001
+                failed_attributes.append(
+                    {
+                        "attribute": attr_type,
+                        "error_type": type(e).__name__,
+                        "access_denied": bool(factory.is_access_denied(e)),
+                    }
+                )
 
-        if access_denied_attrs and len(access_denied_attrs) == len(_PREMIUM_FEATURES):
-            # Every attribute lookup failed — we have no signal at all.
-            return self.skipped_for_access_denied(context, "connect:DescribeInstanceAttribute")
-
-        enabled = [f for f, v in features_enabled.items() if v]
+        enabled = [f for f, value in features_enabled.items() if value]
+        disabled = [f for f, value in features_enabled.items() if not value]
         evidence = {
             "features_checked": features_enabled,
-            "features_undetermined": access_denied_attrs,
+            "features_enabled": enabled,
+            "features_disabled": disabled,
+            "features_undetermined": [row["attribute"] for row in failed_attributes],
+            "failed_attribute_reads": failed_attributes,
+            "analysis_complete": not failed_attributes,
         }
 
-        if not enabled:
-            if access_denied_attrs:
-                # Some (but not all) attributes couldn't be determined —
-                # say so explicitly rather than implying a clean PASS.
-                return self.create_finding(
-                    status=CheckStatus.PASS,
-                    resource_id=instance.instance_id,
-                    resource_type="ConnectInstance",
-                    description=(
-                        f"Connect instance {instance.display_name} has no "
-                        "premium features enabled among those this check "
-                        f"could determine. Could not determine: "
-                        f"{', '.join(access_denied_attrs)} (permission "
-                        "denied or transient error) — treat those as unknown, "
-                        "not confirmed disabled."
-                    ),
-                    evidence=evidence,
-                )
+        if failed_attributes:
             return self.create_finding(
-                status=CheckStatus.PASS,
+                status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    f"Connect instance {instance.display_name} has no premium "
-                    "features (Contact Lens) enabled at the instance level."
+                    "Premium feature enablement inventory was incomplete because "
+                    f"{len(failed_attributes)} attribute read(s) failed. Observed enabled "
+                    "and disabled states are retained in the evidence but are not treated "
+                    "as a complete inventory."
                 ),
                 evidence=evidence,
             )
 
-        # Build a plain-language list of enabled features + how they're billed.
-        feature_lines = []
-        for f in enabled:
-            info = _PREMIUM_FEATURES[f]
-            feature_lines.append(f"* **{info['label']}** — billed {info['billing']}")
-        feature_summary = "\n".join(feature_lines)
+        if enabled:
+            feature_lines = [
+                f"* **{_PREMIUM_FEATURES[feature]['label']}** — billed "
+                f"{_PREMIUM_FEATURES[feature]['billing']}"
+                for feature in enabled
+            ]
+            description = (
+                f"Connect instance {instance.display_name} has {len(enabled)} premium "
+                "feature(s) enabled at the instance level:\n\n"
+                + "\n".join(feature_lines)
+                + "\n\nEnablement alone does not create charges. Verify whether production "
+                "flows invoke each enabled feature and reconcile that usage with billing."
+            )
+        else:
+            description = (
+                f"Connect instance {instance.display_name} has no premium features "
+                "(Contact Lens) enabled at the instance level."
+            )
 
         return self.create_finding(
-            status=CheckStatus.FAIL,
+            status=CheckStatus.PASS,
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
-            description=(
-                f"Connect instance {instance.display_name} has "
-                f"{len(enabled)} premium feature(s) enabled at the instance "
-                "level:\n\n"
-                f"{feature_summary}\n\n"
-                "**What this observation actually means.** Enabling this "
-                "feature on the instance costs **nothing on its own** — it "
-                "is usage-billed. An earlier version of this finding "
-                "claimed per-minute charges apply regardless of use, which "
-                "was factually wrong.\n\n"
-                "**When it matters for cost.** If the feature is enabled but "
-                "never invoked by any contact flow (analytics isn't turned "
-                "on in the flow), you pay $0 for it. If you enabled it only "
-                "for a demo or PoC and it is now unused, disabling it "
-                "removes the operational surface — but there is no active "
-                "bleed.\n\n"
-                "**Suggested action.** Treat this as a hygiene check, not a "
-                "cost defect. Confirm each enabled feature is intentionally "
-                "in use in at least one production flow. If not, disable it "
-                "to reduce the instance's configuration surface."
-            ),
+            description=description,
             evidence=evidence,
-            severity=Severity.LOW,
-            structured_remediation=Remediation(
-                summary=(
-                    "Confirm each enabled premium feature is intentionally in "
-                    "use, or disable it for hygiene (no active cost impact)."
-                ),
-                target_resources=[instance.instance_id] + enabled,
-                steps=[
-                    RemediationStep(
-                        order=1,
-                        instruction=(
-                            "Verify at least one flow actually invokes "
-                            "Contact Lens via `Set contact recording and "
-                            "analytics behavior`."
-                        ),
-                        console_path="Connect console -> Routing -> Flows",
-                    ),
-                    RemediationStep(
-                        order=2,
-                        instruction=(
-                            "If a feature is enabled but no flow uses it, "
-                            "disable it via the instance attributes settings. "
-                            "This does not save money (there is no active "
-                            "cost from enablement alone) but reduces "
-                            "configuration surface."
-                        ),
-                        console_path=(
-                            "Connect console -> Instance -> Telephony / Analytics / Applications"
-                        ),
-                    ),
-                ],
-                references=[
-                    RemediationReference(
-                        title="Amazon Connect pricing",
-                        url="https://aws.amazon.com/connect/pricing/",
-                    )
-                ],
-                applies_if=(
-                    "you want to reduce operational surface on features that "
-                    "were enabled but never invoked."
-                ),
-            ),
         )
 
 
 class HoursOfOperationMismatchCheck(BaseCheck):
-    """Compare hours of operation to actual traffic patterns (Req 16)."""
+    """Inventory configured hours-of-operation schedules."""
 
     def __init__(self):
         super().__init__(
             check_id="cost-hours-mismatch-001",
-            name="Hours of Operation vs. Traffic Pattern",
+            name="Hours of Operation Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
             description=(
-                "Compares defined Hours of Operation against CloudWatch call "
-                "volume patterns to identify scheduling mismatches."
+                "Inventories returned Hours of Operation schedule summaries for "
+                "separate schedule, traffic, staffing, and association review."
             ),
         )
 

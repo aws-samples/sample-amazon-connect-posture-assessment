@@ -1,88 +1,105 @@
+"""Generate a catalog from the selected atomic assessment controls.
+
+This generator is intended for derived catalogs and test fixtures. The curated
+``docs/check-catalog.md`` includes additional explanatory material and must not
+be overwritten by routine generation.
 """
-Check catalog documentation generator (Task 16 / Requirement 36).
 
-Generates ``docs/check-catalog.md`` from the populated CheckRegistry,
-producing a summary table and per-check detail entries organized by pillar.
-"""
+from collections import defaultdict
+from typing import Iterable
 
-from typing import List
-
-from .checks.base import BaseCheck
+from .checks.control_registry import AtomicControl
 from .checks.registry import CheckRegistry
 from .models import Pillar
 
 
 class DocsGenerator:
-    """Generates check catalog documentation from registry."""
+    """Generate deterministic control-catalog documentation from a registry."""
 
     def generate_catalog(self, registry: CheckRegistry, output_path: str) -> None:
-        """
-        Generate check-catalog.md from all registered checks.
-
-        Args:
-            registry: A populated CheckRegistry.
-            output_path: File path to write the catalog markdown.
-        """
-        checks = registry.get_all_checks()
-        checks_by_pillar = self._group_by_pillar(checks)
+        """Generate Markdown for the registry's unified selected controls."""
+        controls = registry.get_selected_controls()
+        controls_by_pillar = self._group_by_pillar(controls)
 
         lines = [
-            "# Amazon Connect Customer Posture Assessment Tool — Check Catalog",
+            "# Amazon Connect Customer Posture Assessment Tool — Control Catalog",
             "",
-            "This document catalogs every check the assessment tool performs, "
-            "organized by AWS Well-Architected pillar. For each check, it lists "
-            "what is evaluated, why it matters for Amazon Connect Customer, and prescriptive "
-            "remediation guidance.",
+            (
+                f"This generated catalog contains {len(controls)} selected canonical controls. "
+                "BaseCheck and Journey-backed controls share one identity and metadata model."
+            ),
             "",
             "## Summary Table",
             "",
-            self._generate_summary_table(checks),
+            self._generate_summary_table(controls),
             "",
         ]
 
         for pillar in Pillar:
-            pillar_checks = checks_by_pillar.get(pillar, [])
-            if not pillar_checks:
+            pillar_controls = controls_by_pillar.get(pillar, [])
+            if not pillar_controls:
                 continue
             lines.append(f"## {pillar.value.replace('_', ' ').title()}")
             lines.append("")
-            for check in sorted(pillar_checks, key=lambda c: c.check_id):
-                lines.append(self._format_check_entry(check))
+            for control in sorted(pillar_controls, key=lambda item: item.control_id):
+                lines.append(self._format_control_entry(control))
             lines.append("")
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        with open(output_path, "w", encoding="utf-8") as catalog_file:
+            catalog_file.write("\n".join(lines))
 
-    def _group_by_pillar(self, checks: List[BaseCheck]):
-        grouped = {}
-        for check in checks:
-            grouped.setdefault(check.pillar, []).append(check)
-        return grouped
+    @staticmethod
+    def _group_by_pillar(
+        controls: Iterable[AtomicControl],
+    ) -> dict[Pillar, list[AtomicControl]]:
+        grouped: dict[Pillar, list[AtomicControl]] = defaultdict(list)
+        for control in controls:
+            grouped[control.pillar].append(control)
+        return dict(grouped)
 
-    def _generate_summary_table(self, checks: List[BaseCheck]) -> str:
+    @staticmethod
+    def _generate_summary_table(controls: Iterable[AtomicControl]) -> str:
         rows = [
-            "| Check ID | Pillar | Severity | Description |",
-            "|----------|--------|----------|-------------|",
+            "| Control ID | Pillar | Severity | Disposition | Executor | Name |",
+            "|---|---|---|---|---|---|",
         ]
-        for check in sorted(checks, key=lambda c: (c.pillar.value, c.check_id)):
-            desc = (check.description or "")[:80]
+        for control in sorted(
+            controls,
+            key=lambda item: (item.pillar.value, item.control_id),
+        ):
             rows.append(
-                f"| `{check.check_id}` | "
-                f"{check.pillar.value.replace('_', ' ').title()} | "
-                f"{check.severity.value.title()} | "
-                f"{desc} |"
+                f"| `{control.control_id}` | "
+                f"{control.pillar.value.replace('_', ' ').title()} | "
+                f"{control.default_severity.value.title()} | "
+                f"{control.disposition.value.replace('_', ' ').title()} | "
+                f"{control.execution_source.value.replace('_', ' ').title()} | "
+                f"{control.name} |"
             )
         return "\n".join(rows)
 
-    def _format_check_entry(self, check: BaseCheck) -> str:
-        lines = [
-            f"### `{check.check_id}` — {check.name}",
-            "",
-            f"**Severity:** {check.severity.value.title()}",
-            "",
-            f"**What it checks:** {check.description}",
-            "",
-            f"**Remediation:** {check.remediation_template or 'See structured remediation in findings.'}",  # noqa: E501
-            "",
-        ]
-        return "\n".join(lines)
+    @staticmethod
+    def _format_control_entry(control: AtomicControl) -> str:
+        methodology = control.methodology
+        aliases = ", ".join(f"`{alias}`" for alias in control.legacy_aliases) or "None"
+        primary_lens = methodology.primary_lens_reference or "Not assigned"
+        responsible_function = methodology.responsible_function or "Not assigned"
+        return "\n".join(
+            [
+                f"### `{control.control_id}` — {control.name}",
+                "",
+                f"- **Root condition:** `{control.root_condition_key}`",
+                f"- **Severity:** {control.default_severity.value.title()}",
+                f"- **Disposition:** {control.disposition.value.replace('_', ' ').title()}",
+                f"- **Executor:** {control.execution_source.value.replace('_', ' ').title()}",
+                f"- **Requires flow analysis:** {'Yes' if control.requires_flow_analysis else 'No'}",
+                f"- **Accepted legacy aliases:** {aliases}",
+                f"- **Why this is assessed:** {methodology.reason}",
+                f"- **Evidence source:** {methodology.evidence_source}",
+                f"- **What the evidence cannot prove:** {methodology.proof_limitations}",
+                f"- **Developer/admin meaning:** {methodology.developer_admin_meaning}",
+                f"- **Verification and closure:** {methodology.verification_criteria}",
+                f"- **Responsible function:** {responsible_function}",
+                f"- **Primary lens reference:** {primary_lens}",
+                "",
+            ]
+        )

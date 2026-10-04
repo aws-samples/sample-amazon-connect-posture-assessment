@@ -128,25 +128,29 @@ def _engine_with_phone_number(target_flow_id: str = "flow-A") -> AssessmentEngin
 
 
 class TestJourneyFindingsWiring:
-    def test_produces_journey_sec_001_for_unauthenticated_queue_path(self):
+    def test_produces_canonical_security_control_for_unauthenticated_queue_path(self):
         engine = _engine_with_phone_number()
         findings = engine._compute_journey_findings([_instance()])
         check_ids = {f.check_id for f in findings}
-        assert "journey-sec-001" in check_ids
+        assert "sec-flow-auth-001" in check_ids
 
-    def test_findings_carry_the_journey_check_ids_from_the_catalog(self):
-        # Guards against a future refactor accidentally renaming/dropping
-        # one of the four documented journey-* check IDs.
+    def test_findings_carry_only_canonical_catalog_ids(self):
         engine = _engine_with_phone_number()
         findings = engine._compute_journey_findings([_instance()])
-        for f in findings:
-            assert f.check_id.startswith("journey-")
+        assert {finding.check_id for finding in findings} == {
+            "sec-flow-auth-001",
+            "cost-containment-001",
+            "journey-res-001",
+            "journey-scope-001",
+        }
 
-    def test_no_contact_flows_produces_no_findings(self):
+    def test_no_contact_flows_produce_one_not_applicable_outcome_per_control(self):
         engine = _engine_with_phone_number()
         inst = _instance()
         inst.contact_flows = []
-        assert engine._compute_journey_findings([inst]) == []
+        findings = engine._compute_journey_findings([inst])
+        assert len(findings) == 4
+        assert all(finding.status.value == "not_applicable" for finding in findings)
 
     def test_no_instances_produces_no_findings(self):
         engine = _engine_with_phone_number()
@@ -201,7 +205,7 @@ class TestJourneyFindingsWiring:
         finally:
             journey_module.run_journey_mapping = real_run
 
-        assert any(f.check_id == "journey-sec-001" for f in findings)
+        assert any(f.check_id == "sec-flow-auth-001" for f in findings)
         assert any("iid-bad" in e for e in engine._execution_errors)
 
 

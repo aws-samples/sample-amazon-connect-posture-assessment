@@ -71,39 +71,102 @@ class TestAuthenticationPatternCheck:
 
 
 class TestErrorHandlingCheck:
-    def test_all_missing_errors_fails(self, make_check_context, sample_connect_instance):
-        # 5 error-capable actions, none with error transitions -> 100% > 20%.
+    def test_non_lambda_error_routing_one_missing_of_five_fails(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
         actions = [
             build_action(
                 f"a{i}",
-                "InvokeLambdaFunction",
-                {"FunctionArn": f"arn:...:fn{i}"},
-                next_action=f"a{i + 1}" if i < 4 else None,
+                "TransferToQueue",
+                {"QueueId": f"q{i}"},
+                next_action=f"a{i + 1}" if i < 4 else "done",
+                errors=(
+                    None if i == 0 else [{"NextAction": "fallback", "ErrorType": "NoMatchingError"}]
+                ),
             )
             for i in range(5)
         ]
+        actions.extend(
+            [
+                build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
+            ]
+        )
         flow = build_contact_flow(actions)
         inst = _inst(sample_connect_instance, flow)
-        finding = ErrorHandlingCompletenessCheck().execute(make_check_context(instance=inst))
-        assert finding.status == CheckStatus.FAIL
 
-    def test_errors_present_passes(self, make_check_context, sample_connect_instance):
+        # Act
+        finding = ErrorHandlingCompletenessCheck().execute(make_check_context(instance=inst))
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["reachable_non_lambda_error_capable_actions"] == 5
+        assert finding.evidence["missing_error_branches"] == 1
+        assert "threshold" in finding.description
+
+    def test_non_lambda_error_routing_all_reachable_actions_guarded_passes(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
         flow = build_contact_flow(
             [
                 build_action(
                     "a1",
-                    "InvokeLambdaFunction",
-                    {"FunctionArn": "arn:...:fn"},
-                    next_action="a2",
-                    errors=[{"NextAction": "a3", "ErrorType": "NoMatchingError"}],
+                    "TransferToQueue",
+                    {"QueueId": "q1"},
+                    next_action="done",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
-                build_action("a2", "DisconnectParticipant"),
-                build_action("a3", "MessageParticipant", {"Text": "sorry"}),
+                build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
             ]
         )
         inst = _inst(sample_connect_instance, flow)
+
+        # Act
         finding = ErrorHandlingCompletenessCheck().execute(make_check_context(instance=inst))
+
+        # Assert
         assert finding.status == CheckStatus.PASS
+        assert finding.evidence["missing_error_branches"] == 0
+
+    def test_non_lambda_error_routing_unreachable_missing_action_is_ignored(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action("entry", "DisconnectParticipant"),
+                build_action("orphan", "TransferToQueue", {"QueueId": "q1"}),
+            ]
+        )
+        inst = _inst(sample_connect_instance, flow)
+
+        # Act
+        finding = ErrorHandlingCompletenessCheck().execute(make_check_context(instance=inst))
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["unreachable_non_lambda_error_capable_actions"] == 1
+        assert finding.evidence["missing_error_branches"] == 0
+
+    def test_non_lambda_error_routing_invalid_entry_skips(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [build_action("action", "TransferToQueue", {"QueueId": "q1"})],
+            start_action="missing",
+        )
+        inst = _inst(sample_connect_instance, flow)
+
+        # Act
+        finding = ErrorHandlingCompletenessCheck().execute(make_check_context(instance=inst))
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["analysis_complete"] is False
 
 
 class TestLoopDetectionCheck:
@@ -388,6 +451,42 @@ class TestSequentialLambdaCheck:
         assert finding.status == CheckStatus.PASS
         assert finding.evidence["sequential_pairs"] == 0
 
+    def test_sequential_lambda_agentic_cx_interaction_between_calls_stops_sequence(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "a1",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": "arn:...:first"},
+                    next_action="agentic",
+                ),
+                build_action(
+                    "agentic",
+                    "ConnectParticipantWithAgenticCX",
+                    {
+                        "AgentConfiguration": {
+                            "WorkspaceId": "workspace-example-001",
+                            "ApplicationId": "application-example-001",
+                            "Alias": "customer-service",
+                        }
+                    },
+                    next_action="a2",
+                ),
+                build_action("a2", "InvokeLambdaFunction", {"FunctionArn": "arn:...:second"}),
+            ]
+        )
+        inst = _inst(sample_connect_instance, flow)
+
+        # Act
+        finding = SequentialLambdaCheck().execute(make_check_context(instance=inst))
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["sequential_pairs"] == 0
+
     def test_sequential_lambda_unreachable_pair_is_not_reported(
         self, make_check_context, sample_connect_instance
     ):
@@ -445,6 +544,37 @@ class TestSequentialLambdaCheck:
 
 
 class TestFlowComplexityCheck:
+    def test_flow_structure_agentic_cx_action_counts_as_integration_point(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "agentic",
+                    "ConnectParticipantWithAgenticCX",
+                    {
+                        "AgentConfiguration": {
+                            "WorkspaceId": "workspace-example-001",
+                            "ApplicationId": "application-example-001",
+                            "Alias": "customer-service",
+                        }
+                    },
+                    next_action="done",
+                ),
+                build_action("done", "DisconnectParticipant"),
+            ]
+        )
+        inst = _inst(sample_connect_instance, flow)
+
+        # Act
+        finding = FlowComplexityCheck().execute(make_check_context(instance=inst))
+
+        # Assert
+        metrics = finding.evidence["flow_structural_metrics"][0]
+        assert metrics["integration_points"] == 1
+        assert metrics["reachable_actions"] == 2
+
     def test_flow_structure_long_linear_flow_remains_observational_pass(
         self, make_check_context, sample_connect_instance
     ):
@@ -537,11 +667,11 @@ def test_register_behavior_checks():
     register_contact_flow_behavior_checks(registry)
     ids = {c.check_id for c in registry.get_all_checks()}
     assert {
-        "sec-flow-auth-001",
         "cx-personalization-001",
         "res-flow-errors-001",
         "res-flow-loops-001",
     } <= ids
+    assert "sec-flow-auth-001" not in ids
 
 
 def test_register_performance_checks():

@@ -146,6 +146,8 @@ class JourneyMapResult:
     dormant_flows: List[str] = field(default_factory=list)
     dynamic_edges: List[Dict[str, Any]] = field(default_factory=list)
     containment_scores: Dict[str, float] = field(default_factory=dict)
+    enumeration_complete: bool = True
+    enumeration_limitations: List[str] = field(default_factory=list)
 
     @property
     def total_journeys(self) -> int:

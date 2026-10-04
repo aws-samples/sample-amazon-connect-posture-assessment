@@ -15,6 +15,7 @@ _INTEGRATION_ACTION_TYPES = {
     "InvokeLambdaFunction",
     "ConnectToLexBot",
     "ConnectParticipantWithLexBot",
+    "ConnectParticipantWithAgenticCX",
     "TransferContactToPhoneNumber",
     "TransferToPhoneNumber",
     "InvokeFlowModule",

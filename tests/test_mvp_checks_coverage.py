@@ -5,6 +5,8 @@ Exercises pass/fail paths for each of the 10 original checks using
 the make_check_context fixture with varying instance configurations.
 """
 
+import pytest
+
 from amazon_connect_assessment.checks.cost_optimization_checks import (
     InefficientResourceAllocationCheck,
     OversizedConfigurationCheck,
@@ -43,6 +45,28 @@ class TestIAMServiceRoleCheckOriginal:
         sample_connect_instance.service_role = "not-an-arn"
         f = IAMServiceRoleCheck().execute(make_check_context(instance=sample_connect_instance))
         assert f.status == CheckStatus.FAIL
+
+    @pytest.mark.parametrize("partition", ["aws", "aws-us-gov", "aws-cn"])
+    def test_iam_service_role_supported_partition_pass(
+        self, partition, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        sample_connect_instance.service_role = (
+            f"arn:{partition}:iam::123456789012:role/path/ConnectServiceRole"
+        )
+
+        # Act
+        finding = IAMServiceRoleCheck().execute(
+            make_check_context(instance=sample_connect_instance)
+        )
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["service_role_arn_format_valid"] is True
+        assert finding.evidence["validation_scope"] == (
+            "service-role presence and IAM role ARN format only"
+        )
+        assert "least privilege" not in finding.description.lower()
 
     def test_valid_role_passes(self, make_check_context, sample_connect_instance):
         f = IAMServiceRoleCheck().execute(make_check_context(instance=sample_connect_instance))

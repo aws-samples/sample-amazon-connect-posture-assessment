@@ -27,6 +27,13 @@ from .models import (
     ConnectInstance,
     ContactFlowGraph,
     Finding,
+    FindingDisposition,
+)
+from .score_policy import (
+    FindingScoreClassification,
+    classify_finding,
+    compute_scored_control_counts,
+    is_control_failure,
 )
 
 
@@ -333,6 +340,7 @@ class AssessmentEngine:
             # advertised. See _compute_journey_findings for the per-
             # instance error handling.
             all_findings.extend(self._compute_journey_findings(analyzed_instances))
+            self._validate_emitted_findings(all_findings)
 
             # Generate summary and metadata
             self._update_progress("Generating final results")
@@ -593,6 +601,20 @@ class AssessmentEngine:
         error building the super-graph or scoring paths for one instance
         logs a warning and moves on rather than failing the assessment.
         """
+        registry = getattr(self, "check_registry", None)
+        selected_control_ids = (
+            registry.list_selected_journey_control_ids()
+            if registry is not None
+            else [
+                "sec-flow-auth-001",
+                "cost-containment-001",
+                "journey-res-001",
+                "journey-scope-001",
+            ]
+        )
+        if not selected_control_ids:
+            return []
+
         if self.config.get("skip_flow_analysis") or self.config.get("cli", {}).get(
             "skip_flow_analysis"
         ):
@@ -602,15 +624,14 @@ class AssessmentEngine:
             return []
 
         from . import journey
+        from .journey.journey_scorer import generate_journey_findings
+        from .journey.models import JourneyMapResult
         from .parsers import ContactFlowParser
 
         parser = ContactFlowParser()
         findings: List[Finding] = []
 
         for instance in instances:
-            if not instance.contact_flows:
-                continue
-
             parsed_flows: Dict[str, Any] = {}
             for flow in instance.contact_flows:
                 if not flow.content:
@@ -641,6 +662,18 @@ class AssessmentEngine:
                     )
 
             if not parsed_flows:
+                findings.extend(
+                    generate_journey_findings(
+                        JourneyMapResult(),
+                        instance_id=instance.instance_id,
+                        selected_control_ids=selected_control_ids,
+                        evaluation_limitation=(
+                            "no contact flow content could be parsed"
+                            if instance.contact_flows
+                            else None
+                        ),
+                    )
+                )
                 continue
 
             try:
@@ -649,6 +682,7 @@ class AssessmentEngine:
                     parsed_flows=parsed_flows,
                     factory=self.aws_client_factory,
                     config=self.config,
+                    selected_control_ids=selected_control_ids,
                 )
                 findings.extend(output.findings)
                 self.logger.info(
@@ -661,8 +695,59 @@ class AssessmentEngine:
                 error_msg = f"Journey mapping failed for instance {instance.instance_id}: {e}"
                 self.logger.warning(error_msg)
                 self._execution_errors.append(error_msg)
+                findings.extend(
+                    generate_journey_findings(
+                        JourneyMapResult(),
+                        instance_id=instance.instance_id,
+                        selected_control_ids=selected_control_ids,
+                        evaluation_limitation="journey mapping execution failed",
+                    )
+                )
 
         return findings
+
+    def _validate_emitted_findings(self, findings: List[Finding]) -> None:
+        """Reject non-canonical, duplicate, or unhydrated runtime outcomes."""
+        catalog = self.check_registry.get_atomic_control_registry()
+        if catalog is None:
+            return
+
+        seen: set[tuple[str, str]] = set()
+        selected_ids = set(self.check_registry.list_control_ids())
+        for finding in findings:
+            try:
+                canonical_id = catalog.resolve_id(finding.check_id)
+            except KeyError as error:
+                raise ValueError(
+                    f"Finding emitted unknown control ID '{finding.check_id}'"
+                ) from error
+            if finding.check_id != canonical_id:
+                raise ValueError(f"Finding emitted legacy alias ID '{finding.check_id}'")
+            if canonical_id not in selected_ids:
+                raise ValueError(f"Finding emitted unselected control ID '{canonical_id}'")
+            if not finding.instance_id:
+                raise ValueError(f"Finding '{canonical_id}' is missing instance_id")
+
+            control = catalog.get(canonical_id)
+            if finding.disposition != control.disposition:
+                raise ValueError(f"Finding '{canonical_id}' has non-canonical disposition")
+            if finding.methodology != control.methodology:
+                raise ValueError(f"Finding '{canonical_id}' has non-canonical methodology")
+            if self.check_registry.is_journey_control(canonical_id):
+                if finding.check_name != control.name:
+                    raise ValueError(f"Journey finding '{canonical_id}' has non-canonical name")
+                if finding.pillar != control.pillar:
+                    raise ValueError(f"Journey finding '{canonical_id}' has non-canonical pillar")
+                if finding.severity != control.default_severity:
+                    raise ValueError(f"Journey finding '{canonical_id}' has non-canonical severity")
+
+            outcome_key = (canonical_id, finding.instance_id)
+            if outcome_key in seen:
+                raise ValueError(
+                    "Duplicate control outcome for "
+                    f"control_id={canonical_id}, instance_id={finding.instance_id}"
+                )
+            seen.add(outcome_key)
 
     def _compute_journey_map(
         self, instances: List[ConnectInstance]
@@ -1340,7 +1425,9 @@ class AssessmentEngine:
 
     def _generate_summary(self, findings: List[Finding]) -> AssessmentSummary:
         total_checks = len(findings)
-        journey_findings = sum(1 for finding in findings if finding.check_id.startswith("journey-"))
+        journey_findings = sum(
+            1 for finding in findings if self.check_registry.is_journey_control(finding.check_id)
+        )
         registered_checks = total_checks - journey_findings
         passed_checks = sum(1 for f in findings if f.status == CheckStatus.PASS)
         failed_checks = sum(1 for f in findings if f.status == CheckStatus.FAIL)
@@ -1348,12 +1435,19 @@ class AssessmentEngine:
         skipped_checks = sum(1 for f in findings if f.status == CheckStatus.SKIPPED)
         not_applicable_checks = sum(1 for f in findings if f.status == CheckStatus.NOT_APPLICABLE)
 
-        # Count findings by severity (only failed checks)
-        failed_findings = [f for f in findings if f.status == CheckStatus.FAIL]
-        critical_findings = sum(1 for f in failed_findings if f.severity.value == "critical")
-        high_findings = sum(1 for f in failed_findings if f.severity.value == "high")
-        medium_findings = sum(1 for f in failed_findings if f.severity.value == "medium")
-        low_findings = sum(1 for f in failed_findings if f.severity.value == "low")
+        classifications = [classify_finding(finding) for finding in findings]
+        scored_control_numerator, scored_control_denominator = compute_scored_control_counts(
+            findings
+        )
+        scored_control_failures = sum(
+            classification == FindingScoreClassification.SCORED_FAIL
+            for classification in classifications
+        )
+        unevaluated_controls = sum(
+            classification == FindingScoreClassification.UNEVALUATED_CONTROL
+            for classification in classifications
+        )
+        control_failures = [finding for finding in findings if is_control_failure(finding)]
 
         return AssessmentSummary(
             total_checks=total_checks,
@@ -1361,13 +1455,34 @@ class AssessmentEngine:
             failed_checks=failed_checks,
             error_checks=error_checks,
             skipped_checks=skipped_checks,
-            critical_findings=critical_findings,
-            high_findings=high_findings,
-            medium_findings=medium_findings,
-            low_findings=low_findings,
+            critical_findings=sum(
+                finding.severity.value == "critical" for finding in control_failures
+            ),
+            high_findings=sum(finding.severity.value == "high" for finding in control_failures),
+            medium_findings=sum(finding.severity.value == "medium" for finding in control_failures),
+            low_findings=sum(finding.severity.value == "low" for finding in control_failures),
             not_applicable_checks=not_applicable_checks,
             registered_checks=registered_checks,
             journey_findings=journey_findings,
+            control_findings=sum(
+                finding.disposition == FindingDisposition.CONTROL for finding in findings
+            ),
+            manual_review_findings=sum(
+                finding.disposition == FindingDisposition.MANUAL_REVIEW for finding in findings
+            ),
+            informational_findings=sum(
+                finding.disposition == FindingDisposition.INFORMATIONAL for finding in findings
+            ),
+            scored_control_passes=scored_control_numerator,
+            scored_control_failures=scored_control_failures,
+            unevaluated_controls=unevaluated_controls,
+            not_applicable_controls=sum(
+                finding.disposition == FindingDisposition.CONTROL
+                and finding.status == CheckStatus.NOT_APPLICABLE
+                for finding in findings
+            ),
+            scored_control_numerator=scored_control_numerator,
+            scored_control_denominator=scored_control_denominator,
         )
 
     def _generate_metadata(self) -> AssessmentMetadata:

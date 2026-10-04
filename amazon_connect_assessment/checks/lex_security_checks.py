@@ -23,6 +23,14 @@ does not expose enough to judge it:
   often required choice. The check reports that it is on, and what protects the
   destination, rather than treating the operator's decision as a problem.
 
+Compliance and shared responsibility: Lex conversation logs and audio may
+contain personal, payment-card, or health data depending on the workload. Under
+the AWS shared responsibility model, customers must classify the data,
+determine which legal, regulatory, and contractual obligations apply, and
+configure retention, access, and encryption for each log destination. This
+check is an engineering signal, not a compliance determination. See
+https://aws.amazon.com/compliance/
+
 Amazon Lex V1 bots are not evaluated. Their conversation-log settings live on a
 different API shape (``lex-models:GetBotAlias``), and an instance whose only
 association is a V1 bot receives ``NOT_APPLICABLE`` naming that limitation, so a
@@ -330,7 +338,10 @@ class LexConversationLogEncryptionCheck(BaseCheck):
         return Remediation(
             summary=(
                 "Encrypt Lex audio conversation logs with a customer-managed KMS key, or turn "
-                "audio logging off if the recordings are not needed."
+                "audio logging off if the recordings are not needed. These logs may contain "
+                "personal, payment-card, or health data; determine the obligations that apply "
+                "and configure the destination under the AWS shared responsibility model "
+                "(https://aws.amazon.com/compliance/)."
             ),
             target_resources=[entry["bot_alias_arn"] for entry in unencrypted],
             steps=[

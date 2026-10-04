@@ -8,6 +8,8 @@ Verifies:
 - Original 10 MVP checks are always present (backward compat)
 """
 
+from unittest.mock import patch
+
 from amazon_connect_assessment.checks.mvp_checks import get_mvp_checks
 from amazon_connect_assessment.checks.registration import register_all_checks
 from amazon_connect_assessment.checks.registry import CheckRegistry
@@ -60,6 +62,9 @@ def test_skip_flow_analysis_reduces_count():
     # The flow-analysis modules contain checks that are absent.
     assert "sec-prompt-inject-001" not in skipped
     assert "perf-lambda-count-001" not in skipped
+    assert "ops-acxd-handoff-001" not in skipped
+    assert "ops-acxd-escalation-001" not in skipped
+    assert "res-acxd-error-routing-001" not in skipped
     # Instance-level checks still present.
     assert "sec-iam-deep-001" in skipped
     assert "ops-logging-001" in skipped
@@ -161,3 +166,79 @@ def test_pillar_severity_and_exclude_all_combine():
         assert check.pillar.value == "security"
         assert check.severity.value in ("critical", "high")
     assert "security-iam-001" not in registry
+
+
+def test_registration_alias_include_selects_canonical_journey_control_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(
+        registry,
+        check_ids={"journey-sec-001", "sec-flow-auth-001"},
+    )
+
+    # Assert
+    assert registry.list_check_ids() == []
+    assert registry.list_control_ids() == ["sec-flow-auth-001"]
+    assert registry.list_selected_journey_control_ids() == ["sec-flow-auth-001"]
+
+
+def test_registration_legacy_alias_exclusion_removes_canonical_base_check():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(registry, exclude_check_ids={"journey-cost-001"})
+
+    # Assert
+    assert "cost-containment-001" not in registry
+    assert "journey-cost-001" not in registry.list_check_ids()
+
+
+def test_registration_journey_severity_override_warns_and_keeps_catalog_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+    register_all_checks(registry)
+
+    # Act
+    with patch.object(registry.logger, "warning") as warning:
+        registry.load_checks_from_config({"journey-sec-001": {"severity": "high"}})
+
+    # Assert
+    assert registry.get_control_severity("sec-flow-auth-001").value == "low"
+    assert "not supported" in warning.call_args.args[0]
+
+
+def test_registration_existing_filters_keep_hydrated_metadata_on_selected_checks():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(
+        registry,
+        pillars={"security"},
+        severities={"critical", "high"},
+        exclude_check_ids={"security-iam-001"},
+    )
+
+    # Assert
+    assert registry.get_all_checks()
+    assert all(check.pillar.value == "security" for check in registry.get_all_checks())
+    assert all(check.severity.value in {"critical", "high"} for check in registry.get_all_checks())
+    assert all(check.methodology is not None for check in registry.get_all_checks())
+
+
+def test_registration_acxd_controls_enabled_flow_analysis_registers_all_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(registry)
+
+    # Assert
+    assert {
+        "ops-acxd-handoff-001",
+        "ops-acxd-escalation-001",
+        "res-acxd-error-routing-001",
+    } <= set(registry.list_check_ids())

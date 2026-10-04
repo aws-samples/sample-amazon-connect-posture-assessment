@@ -27,6 +27,8 @@ from amazon_connect_assessment.models import (
     CheckStatus,
     ConnectInstance,
     Finding,
+    FindingDisposition,
+    FindingMethodology,
     Pillar,
     Remediation,
     RemediationReference,
@@ -137,6 +139,15 @@ def _assessment() -> AssessmentResult:
                 references=[RemediationReference("Docs", "https://docs.aws.amazon.com/")],
                 applies_if="Recordings are enabled",
             ),
+            disposition=FindingDisposition.CONTROL,
+            methodology=FindingMethodology(
+                reason="Recordings require an explicit encryption-at-rest control.",
+                evidence_source="Amazon Connect storage configuration",
+                proof_limitations="Configuration does not prove key policy correctness.",
+                developer_admin_meaning="The returned storage mode needs remediation.",
+                verification_criteria="Rerun and confirm encrypted storage evidence.",
+            ),
+            instance_id=instance.instance_id,
         ),
         Finding(
             check_id="RES-001",
@@ -150,6 +161,15 @@ def _assessment() -> AssessmentResult:
             remediation="None needed.",
             evidence={},
             timestamp=when,
+            disposition=FindingDisposition.INFORMATIONAL,
+            methodology=FindingMethodology(
+                reason="Queue routing inventory supports an operational review.",
+                evidence_source="Amazon Connect queue configuration",
+                proof_limitations="Configuration does not prove runtime overflow behavior.",
+                developer_admin_meaning="This record is planning context, not compliance.",
+                verification_criteria="Review queue behavior with representative contacts.",
+            ),
+            instance_id=instance.instance_id,
         ),
     ]
     result = AssessmentResult(
@@ -159,7 +179,21 @@ def _assessment() -> AssessmentResult:
         region="us-east-1",
         instances=[instance],
         findings=findings,
-        summary=AssessmentSummary(2, 1, 1, 0, 0, 1, 0, 0, 0),
+        summary=AssessmentSummary(
+            2,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            control_findings=1,
+            informational_findings=1,
+            scored_control_failures=1,
+            scored_control_denominator=1,
+        ),
         metadata=AssessmentMetadata("1.0.0", 12.5, "111122223333", "us-east-1", "CI", "3.12"),
         execution_errors=["Throttled calling ListQueues"],
     )
@@ -207,7 +241,11 @@ def test_report_ui_fixture_exercises_optional_sections():
     assert failed["evidence"]["tables"] and failed["evidence"]["sections"]
     assert committed["journey"]["entries"][0]["diagram_model"]["layout"]["connectors"]
     assert committed["execution_errors"]
-    assert committed["filters"] == {"default_severity": "critical", "default_status": "fail"}
+    assert committed["filters"] == {
+        "default_severity": "critical",
+        "default_status": "fail",
+        "default_disposition": "control",
+    }
 
 
 def test_sample_report_embeds_current_ui_assets():

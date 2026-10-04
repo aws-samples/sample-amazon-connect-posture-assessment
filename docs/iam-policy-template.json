@@ -122,7 +122,8 @@
             ],
             "Resource": [
                 "arn:aws:iam::*:role/*",
-                "arn:aws:iam::*:policy/*"
+                "arn:aws:iam::*:policy/*",
+                "arn:aws:iam::aws:policy/*"
             ]
         },
         {

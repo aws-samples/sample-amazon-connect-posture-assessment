@@ -2,6 +2,7 @@
 Tests for cost optimization checks (Tasks 8, 9, 10 / Requirements 13-16, 28-32, 40-41).
 """
 
+import amazon_connect_assessment.checks.cost_intelligence_checks as cost_intelligence_checks
 from amazon_connect_assessment.aws_client_factory import AWSClientFactory
 from amazon_connect_assessment.checks.cost_containment_checks import (
     IVRToAgentDataContinuityCheck,
@@ -81,13 +82,49 @@ class TestUsageMetricsCheck:
 
 
 class TestPremiumFeaturesCostCheck:
-    def test_enabled_feature_fails(self, make_check_context, mock_aws_client_factory):
+    def test_premium_feature_enablement_inventory_passes_expected_result(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         mock_aws_client_factory.call_api_with_resilience.return_value = {
             "Attribute": {"Value": "true"}
         }
+
+        # Act
         finding = PremiumFeaturesCostCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["features_enabled"] == ["CONTACT_LENS"]
+        assert "enablement alone does not create charges" in finding.description.lower()
+
+    def test_partial_premium_feature_read_is_skipped_expected_result(
+        self, make_check_context, mock_aws_client_factory, monkeypatch
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        monkeypatch.setitem(
+            cost_intelligence_checks._PREMIUM_FEATURES,
+            "TEST_FEATURE",
+            {"label": "Test feature", "billing": "for test usage"},
+        )
+
+        def _attribute_read(client, operation, service, **kwargs):
+            if kwargs["AttributeType"] == "CONTACT_LENS":
+                return {"Attribute": {"Value": "true"}}
+            raise RuntimeError("transient read failure")
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _attribute_read
+
+        # Act
+        finding = PremiumFeaturesCostCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["features_enabled"] == ["CONTACT_LENS"]
+        assert finding.evidence["features_undetermined"] == ["TEST_FEATURE"]
+        assert finding.evidence["analysis_complete"] is False
 
     def test_no_features_passes(self, make_check_context, mock_aws_client_factory):
         _wire(mock_aws_client_factory)
@@ -303,10 +340,10 @@ def test_register_cost_containment_checks():
     register_cost_containment_checks(registry)
     ids = {c.check_id for c in registry.get_all_checks()}
     assert {
-        "cost-containment-001",
         "cost-wait-time-001",
         "cost-occupancy-001",
         "cost-fcr-001",
         "cost-acw-001",
         "cost-data-continuity-001",
     } <= ids
+    assert "cost-containment-001" not in ids

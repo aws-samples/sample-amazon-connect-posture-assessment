@@ -7,6 +7,7 @@ along with the context object that provides access to assessment data.
 
 import logging
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -14,6 +15,8 @@ from ..models import (
     CheckStatus,
     ConnectInstance,
     Finding,
+    FindingDisposition,
+    FindingMethodology,
     Pillar,
     Remediation,
     Severity,
@@ -39,6 +42,11 @@ class CheckContext:
     logger: logging.Logger
 
 
+_ACTIVE_CHECK_CONTEXT: ContextVar[Optional[CheckContext]] = ContextVar(
+    "active_check_context", default=None
+)
+
+
 class BaseCheck(ABC):
     """
     Abstract base class for all Amazon Connect assessment checks.
@@ -56,6 +64,8 @@ class BaseCheck(ABC):
         severity: Severity,
         description: str = "",
         remediation_template: str = "",
+        disposition: FindingDisposition = FindingDisposition.CONTROL,
+        methodology: Optional[FindingMethodology] = None,
     ):
         """
         Initialize a new assessment check.
@@ -67,6 +77,8 @@ class BaseCheck(ABC):
             severity: Severity level for findings from this check
             description: Detailed description of what this check validates
             remediation_template: Template for remediation guidance
+            disposition: Methodological role of findings from this check
+            methodology: Optional evidence and interpretation contract
         """
         self.check_id = check_id
         self.name = name
@@ -74,6 +86,8 @@ class BaseCheck(ABC):
         self.severity = severity
         self.description = description
         self.remediation_template = remediation_template
+        self.disposition = disposition
+        self.methodology = methodology
         self.logger = logging.getLogger(f"check.{check_id}")
 
     @abstractmethod
@@ -122,6 +136,7 @@ class BaseCheck(ABC):
         structured_remediation: Optional[Remediation] = None,
         remediation: str = None,
         severity: Optional[Severity] = None,
+        context: Optional[CheckContext] = None,
     ) -> Finding:
         """
         Helper method to create a Finding object for this check.
@@ -142,6 +157,8 @@ class BaseCheck(ABC):
                 check has multiple failure modes with different
                 severities (e.g. a HIGH failure for wildcard values and
                 a LOW observation for the "not-configured" case).
+            context: Optional execution context. ``safe_execute`` supplies it
+                automatically; direct helper callers may pass it explicitly.
 
         Returns:
             Finding: Configured Finding object
@@ -153,6 +170,7 @@ class BaseCheck(ABC):
         else:
             remediation_text = self.get_remediation_guidance(evidence)
 
+        active_context = context or _ACTIVE_CHECK_CONTEXT.get()
         return Finding(
             check_id=self.check_id,
             check_name=self.name,
@@ -165,6 +183,11 @@ class BaseCheck(ABC):
             remediation=remediation_text,
             evidence=evidence or {},
             structured_remediation=structured_remediation,
+            disposition=self.disposition,
+            methodology=self.methodology,
+            instance_id=(
+                active_context.instance.instance_id if active_context is not None else None
+            ),
         )
 
     @staticmethod
@@ -213,6 +236,7 @@ class BaseCheck(ABC):
                 f"'{required_permission}'. Grant it and re-run to evaluate."
             ),
             evidence={"required_permission": required_permission},
+            context=context,
         )
 
     def not_applicable(
@@ -251,6 +275,7 @@ class BaseCheck(ABC):
             description=f"Not applicable: {reason}",
             evidence=merged_evidence,
             structured_remediation=structured_remediation,
+            context=context,
         )
 
     def safe_execute(self, context: CheckContext) -> Finding:
@@ -266,6 +291,7 @@ class BaseCheck(ABC):
         Returns:
             Finding: Result of check execution or error finding
         """
+        token = _ACTIVE_CHECK_CONTEXT.set(context)
         try:
             self.logger.debug(f"Executing check {self.check_id}")
             result = self.execute(context)
@@ -279,7 +305,10 @@ class BaseCheck(ABC):
                 resource_type="ConnectInstance",
                 description=f"Check execution failed: {str(e)}",
                 evidence={"error": str(e), "error_type": type(e).__name__},
+                context=context,
             )
+        finally:
+            _ACTIVE_CHECK_CONTEXT.reset(token)
 
     def __str__(self) -> str:
         """String representation of the check."""

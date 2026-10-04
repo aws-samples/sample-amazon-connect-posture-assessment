@@ -4,6 +4,7 @@ from botocore.exceptions import ClientError
 
 from amazon_connect_assessment.aws_client_factory import AWSClientFactory
 from amazon_connect_assessment.checks.contact_flow_behavior_checks import (
+    ErrorHandlingCompletenessCheck,
     UnreachableActionsCheck,
     register_contact_flow_behavior_checks,
 )
@@ -229,7 +230,7 @@ class TestLambdaDependencyRiskCheck:
 
         # Assert
         assert finding.status == CheckStatus.FAIL
-        assert finding.evidence["vpc_attached_without_error_branch"] == 1
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 1
         assert [detail["action_id"] for detail in finding.evidence["details"]] == ["unguarded"]
         mock_aws_client_factory.get_lambda_function_resilient.assert_called_once_with(function_arn)
 
@@ -251,26 +252,31 @@ class TestLambdaDependencyRiskCheck:
                     "InvokeLambdaFunction",
                     {"FunctionArn": references[0]},
                     next_action="lambda-2",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
                 build_action(
                     "lambda-2",
                     "InvokeLambdaFunction",
                     {"LambdaFunctionARN": references[1]},
                     next_action="lambda-3",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
                 build_action(
                     "lambda-3",
                     "InvokeLambdaFunction",
                     {"FunctionArn": {"Value": references[2]}},
                     next_action="lambda-4",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
                 build_action(
                     "lambda-4",
                     "InvokeLambdaFunction",
                     {"LambdaFunctionARN": {"StaticValue": references[3]}},
                     next_action="done",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
                 build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
             ]
         )
         instance = _instance_with_flows(
@@ -285,6 +291,7 @@ class TestLambdaDependencyRiskCheck:
 
         # Assert
         assert finding.status == CheckStatus.PASS
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 0
         assert finding.evidence["reachable_lambda_call_sites"] == 4
         assert finding.evidence["lambda_functions_checked"] == 4
         actual_references = {
@@ -315,12 +322,12 @@ class TestLambdaDependencyRiskCheck:
         finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
 
         # Assert
-        assert finding.status == CheckStatus.NOT_APPLICABLE
+        assert finding.status == CheckStatus.PASS
         assert finding.evidence["unreachable_lambda_blocks"] == 1
         assert finding.evidence["reachable_lambda_call_sites"] == 0
         mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
 
-    def test_lambda_dependency_partial_access_denied_returns_skipped_not_pass(
+    def test_lambda_dependency_missing_error_with_partial_access_denied_fails_with_limitation(
         self, make_check_context, sample_connect_instance, mock_aws_client_factory
     ):
         # Arrange
@@ -351,12 +358,14 @@ class TestLambdaDependencyRiskCheck:
         finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
 
         # Assert
-        assert finding.status == CheckStatus.SKIPPED
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 2
         assert finding.evidence["lambda_functions_checked"] == 1
         assert finding.evidence["lambda_functions_access_denied"] == ["denied"]
-        assert finding.evidence["analysis_complete"] is False
+        assert finding.evidence["analysis_complete"] is True
+        assert finding.evidence["enrichment_complete"] is False
 
-    def test_lambda_dependency_partial_lookup_failure_returns_skipped_not_pass(
+    def test_lambda_dependency_missing_error_with_lookup_failure_fails_with_limitation(
         self, make_check_context, sample_connect_instance, mock_aws_client_factory
     ):
         # Arrange
@@ -387,7 +396,8 @@ class TestLambdaDependencyRiskCheck:
         finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
 
         # Assert
-        assert finding.status == CheckStatus.SKIPPED
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 2
         assert finding.evidence["lambda_functions_checked"] == 1
         assert (
             finding.evidence["lambda_function_lookup_failures"][0]["function_reference"] == "broken"
@@ -405,9 +415,14 @@ class TestLambdaDependencyRiskCheck:
                     "risky", "InvokeLambdaFunction", {"FunctionArn": "risky"}, next_action="denied"
                 ),
                 build_action(
-                    "denied", "InvokeLambdaFunction", {"FunctionArn": "denied"}, next_action="done"
+                    "denied",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": "denied"},
+                    next_action="done",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
                 ),
                 build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
             ]
         )
         instance = _instance_with_flows(
@@ -431,11 +446,44 @@ class TestLambdaDependencyRiskCheck:
 
         # Assert
         assert finding.status == CheckStatus.FAIL
-        assert finding.evidence["vpc_attached_without_error_branch"] == 1
-        assert finding.evidence["analysis_complete"] is False
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 1
+        assert finding.evidence["analysis_complete"] is True
+        assert finding.evidence["enrichment_complete"] is False
         assert "limited" in finding.description.lower()
 
-    def test_lambda_dependency_dynamic_reference_returns_skipped_not_pass(
+    def test_lambda_dependency_guarded_dynamic_reference_passes_with_enrichment_limitation(
+        self, make_check_context, sample_connect_instance, mock_aws_client_factory
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "lambda",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": {"Value": "$.Attributes.FunctionArn"}},
+                    next_action="done",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
+                ),
+                build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "DynamicGuarded", flow)
+        )
+
+        # Act
+        finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 0
+        assert finding.evidence["analysis_complete"] is True
+        assert finding.evidence["enrichment_complete"] is False
+        assert "does not change the Error-transition result" in finding.description
+        mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
+
+    def test_lambda_dependency_dynamic_reference_missing_error_fails_with_limitation(
         self, make_check_context, sample_connect_instance, mock_aws_client_factory
     ):
         # Arrange
@@ -458,9 +506,169 @@ class TestLambdaDependencyRiskCheck:
         finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
 
         # Assert
-        assert finding.status == CheckStatus.SKIPPED
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["lambda_call_sites_without_error_branch"] == 1
         assert finding.evidence["unresolved_call_sites"][0]["action_id"] == "lambda"
+        assert finding.evidence["enrichment_complete"] is False
         mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
+
+
+class TestErrorRoutingOwnership:
+    def test_error_routing_reachable_lambda_missing_error_only_lambda_control_fails(
+        self, make_check_context, sample_connect_instance, mock_aws_client_factory
+    ):
+        # Arrange
+        function_arn = "arn:aws:lambda:us-east-1:123:function:unguarded"
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "lambda",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": function_arn},
+                    next_action="done",
+                ),
+                build_action("done", "DisconnectParticipant"),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "LambdaOnly", flow)
+        )
+        mock_aws_client_factory.get_lambda_function_resilient.return_value = {
+            "Configuration": {"FunctionName": "unguarded", "VpcConfig": {}}
+        }
+        context = make_check_context(instance=instance)
+
+        # Act
+        flow_finding = ErrorHandlingCompletenessCheck().execute(context)
+        lambda_finding = LambdaDependencyRiskCheck().execute(context)
+
+        # Assert
+        assert flow_finding.status == CheckStatus.PASS
+        assert flow_finding.evidence["reachable_non_lambda_error_capable_actions"] == 0
+        assert lambda_finding.status == CheckStatus.FAIL
+        assert lambda_finding.evidence["lambda_call_sites_without_error_branch"] == 1
+        assert len(lambda_finding.evidence["details"]) == 1
+
+    def test_error_routing_reachable_non_lambda_missing_error_only_flow_control_fails(
+        self, make_check_context, sample_connect_instance, mock_aws_client_factory
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "transfer", "TransferToQueue", {"QueueId": "queue-1"}, next_action="done"
+                ),
+                build_action("done", "DisconnectParticipant"),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "NonLambdaOnly", flow)
+        )
+        context = make_check_context(instance=instance)
+
+        # Act
+        flow_finding = ErrorHandlingCompletenessCheck().execute(context)
+        lambda_finding = LambdaDependencyRiskCheck().execute(context)
+
+        # Assert
+        assert flow_finding.status == CheckStatus.FAIL
+        assert flow_finding.evidence["missing_error_branches"] == 1
+        assert lambda_finding.status == CheckStatus.PASS
+        assert lambda_finding.evidence["reachable_lambda_call_sites"] == 0
+        mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
+
+    def test_error_routing_default_sample_flow_defects_are_ignored_and_pass(
+        self, make_check_context, sample_connect_instance, mock_aws_client_factory
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "lambda",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": "arn:aws:lambda:us-east-1:123:function:sample"},
+                    next_action="transfer",
+                ),
+                build_action("transfer", "TransferToQueue", {"QueueId": "queue-1"}),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "Sample error routing", flow)
+        )
+        context = make_check_context(instance=instance)
+
+        # Act
+        flow_finding = ErrorHandlingCompletenessCheck().execute(context)
+        lambda_finding = LambdaDependencyRiskCheck().execute(context)
+
+        # Assert
+        assert flow_finding.status == CheckStatus.PASS
+        assert lambda_finding.status == CheckStatus.PASS
+        assert flow_finding.evidence["sample_flows_excluded"] == 1
+        assert lambda_finding.evidence["sample_flows_excluded"] == 1
+        mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
+
+    def test_error_routing_complete_clean_customer_flow_both_controls_pass(
+        self, make_check_context, sample_connect_instance, mock_aws_client_factory
+    ):
+        # Arrange
+        function_arn = "arn:aws:lambda:us-east-1:123:function:guarded"
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "lambda",
+                    "InvokeLambdaFunction",
+                    {"FunctionArn": function_arn},
+                    next_action="transfer",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
+                ),
+                build_action(
+                    "transfer",
+                    "TransferToQueue",
+                    {"QueueId": "queue-1"},
+                    next_action="done",
+                    errors=[{"NextAction": "fallback", "ErrorType": "NoMatchingError"}],
+                ),
+                build_action("done", "DisconnectParticipant"),
+                build_action("fallback", "DisconnectParticipant"),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "Complete", flow)
+        )
+        mock_aws_client_factory.get_lambda_function_resilient.return_value = {
+            "Configuration": {"FunctionName": "guarded", "VpcConfig": {"VpcId": "vpc-1"}}
+        }
+        context = make_check_context(instance=instance)
+
+        # Act
+        flow_finding = ErrorHandlingCompletenessCheck().execute(context)
+        lambda_finding = LambdaDependencyRiskCheck().execute(context)
+
+        # Assert
+        assert flow_finding.status == CheckStatus.PASS
+        assert lambda_finding.status == CheckStatus.PASS
+        assert flow_finding.evidence["missing_error_branches"] == 0
+        assert lambda_finding.evidence["lambda_call_sites_without_error_branch"] == 0
+
+    def test_error_routing_incomplete_clean_analysis_both_controls_skip(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "Unavailable", None)
+        )
+        context = make_check_context(instance=instance)
+
+        # Act
+        flow_finding = ErrorHandlingCompletenessCheck().execute(context)
+        lambda_finding = LambdaDependencyRiskCheck().execute(context)
+
+        # Assert
+        assert flow_finding.status == CheckStatus.SKIPPED
+        assert lambda_finding.status == CheckStatus.SKIPPED
+        assert flow_finding.evidence["analysis_complete"] is False
+        assert lambda_finding.evidence["analysis_complete"] is False
 
 
 class TestLegacySelfServiceTierCheck:
@@ -532,6 +740,45 @@ class TestLegacySelfServiceTierCheck:
         )
         instance = _instance_with_flows(
             sample_connect_instance, _contact_flow("flow-1", "LexBackedInput", flow)
+        )
+
+        # Act
+        finding = LegacySelfServiceTierCheck().execute(make_check_context(instance=instance))
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["eligible_reachable_queue_routes"] == 1
+        assert finding.evidence["dtmf_only_route_count"] == 0
+
+    def test_legacy_self_service_agentic_cx_on_same_route_suppresses_dtmf_candidate(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
+        flow = build_contact_flow(
+            [
+                build_action(
+                    "dtmf",
+                    "GetParticipantInput",
+                    {"Text": "Press 1 for support", "MaxDigits": 1},
+                    next_action="agentic",
+                ),
+                build_action(
+                    "agentic",
+                    "ConnectParticipantWithAgenticCX",
+                    {
+                        "AgentConfiguration": {
+                            "WorkspaceId": "workspace-example-001",
+                            "ApplicationId": "application-example-001",
+                            "Alias": "customer-service",
+                        }
+                    },
+                    next_action="queue",
+                ),
+                build_action("queue", "TransferToQueue", {"QueueId": "queue-1"}),
+            ]
+        )
+        instance = _instance_with_flows(
+            sample_connect_instance, _contact_flow("flow-1", "AgenticRoute", flow)
         )
 
         # Act

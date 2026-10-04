@@ -22,6 +22,7 @@ from amazon_connect_assessment.parsers import (
     calculate_flow_metrics,
     detect_cycles,
     detect_patterns,
+    reachable_from_entry,
 )
 from tests.conftest import build_action, build_contact_flow
 
@@ -38,6 +39,7 @@ _ACTION_TYPES = st.sampled_from(
         "TransferContactToPhoneNumber",
         "DisconnectParticipant",
         "CheckContactAttributes",
+        "ConnectParticipantWithAgenticCX",
         "SomeFutureUnknownType",  # exercises unknown-type preservation
     ]
 )
@@ -105,6 +107,72 @@ class TestRoundTrip:
         out = parser.serialize(graph)
         assert out["Actions"][0]["Type"] == "SomeFutureUnknownType"
         assert out["Actions"][0]["Parameters"] == {"custom": "value"}
+
+    def test_agentic_cx_realistic_export_preserves_parameters_and_reaches_all_routes(
+        self,
+    ):
+        # Arrange
+        parser = ContactFlowParser()
+        context_value_marker = "ACXD_CONTEXT_VALUE_MARKER_DO_NOT_RENDER"
+        agentic_action = build_action(
+            "agentic",
+            "ConnectParticipantWithAgenticCX",
+            {
+                "AgentConfiguration": {
+                    "WorkspaceId": "workspace-example-001",
+                    "ApplicationId": "application-example-001",
+                    "Alias": "customer-service",
+                },
+                "ContextVariables": {"accountToken": context_value_marker},
+                "SpeechRecognitionConfiguration": {"LanguageCode": "en-US"},
+                "AudioFillerConfiguration": {"Enabled": True},
+            },
+            next_action="completed",
+            conditions=[
+                {
+                    "NextAction": "escalated",
+                    "Condition": {"Operator": "Equals", "Operands": ["Escalation"]},
+                }
+            ],
+            errors=[
+                {"NextAction": "idle", "ErrorType": "InputTimeLimitExceeded"},
+                {"NextAction": "other", "ErrorType": "NoMatchingCondition"},
+                {"NextAction": "error", "ErrorType": "NoMatchingError"},
+            ],
+        )
+        flow = build_contact_flow(
+            [
+                build_action("entry", "MessageParticipant", next_action="agentic"),
+                agentic_action,
+                build_action("completed", "DisconnectParticipant"),
+                build_action("escalated", "TransferContactToQueue"),
+                build_action("idle", "MessageParticipant"),
+                build_action("other", "MessageParticipant"),
+                build_action("error", "MessageParticipant"),
+            ],
+            start_action="entry",
+        )
+
+        # Act
+        graph = parser.parse(flow)
+        serialized = parser.serialize(graph)
+
+        # Assert
+        assert graph.actions["agentic"].action_type == "ConnectParticipantWithAgenticCX"
+        assert graph.actions["agentic"].parameters == agentic_action["Parameters"]
+        assert reachable_from_entry(graph) == {
+            "entry",
+            "agentic",
+            "completed",
+            "escalated",
+            "idle",
+            "other",
+            "error",
+        }
+        serialized_action = next(
+            action for action in serialized["Actions"] if action["Identifier"] == "agentic"
+        )
+        assert serialized_action == agentic_action
 
 
 class TestMalformedInput:
@@ -216,6 +284,17 @@ class TestPatternDetection:
         parser = ContactFlowParser()
         flow = build_contact_flow([build_action("a1", "ConnectToLexBot", {"BotName": "faq"})])
         patterns = detect_patterns(parser.parse(flow))
+        assert any(p.pattern_type == "self_service" for p in patterns)
+
+    def test_agentic_cx_self_service_detected_expected_result(self):
+        # Arrange
+        parser = ContactFlowParser()
+        flow = build_contact_flow([build_action("a1", "ConnectParticipantWithAgenticCX", {})])
+
+        # Act
+        patterns = detect_patterns(parser.parse(flow))
+
+        # Assert
         assert any(p.pattern_type == "self_service" for p in patterns)
 
 
