@@ -22,16 +22,18 @@ This document identifies the security boundaries, trust zones, threat actors, at
 
 ## System overview
 
-The Amazon Connect Customer Posture Assessment Tool is a **read-only** assessment tool that:
+The Amazon Connect Customer Posture Assessment Tool is a **read-oriented** assessment tool that:
 - Runs as a CLI process on a user's workstation, AWS CloudShell, or a CI runner
 - Authenticates to AWS using existing credentials (profile, role assumption, or environment variables)
-- Makes read-only AWS API calls to Amazon Connect Customer and supporting services
+- Uses `List`, `Get`, `Describe`, and `Head` operations against Amazon Connect Customer and supporting services
 - Produces HTML/JSON/CSV/ASFF reports on the local filesystem
-- Optionally (`--s3-output`) uploads those reports to a dedicated, hardened S3 bucket in the assessed account
-- Never modifies, creates, or deletes any AWS resource it inspects
+- Optionally (`--s3-output`) creates or hardens the selected S3 report bucket and uploads reports
+- Never modifies, creates, or deletes any AWS resource it assesses
 
-The only write operation the tool can perform is creating and writing to its own
-`amazon-connect-assessment-report-*` bucket, and only when `--s3-output` is passed.
+The consequential opt-in write path is `--s3-output`. It may create the selected
+`amazon-connect-assessment-report-*` bucket, and it also applies Block Public
+Access and versioning and ensures default encryption on an existing selected
+bucket before upload.
 
 ---
 
@@ -62,8 +64,8 @@ The only write operation the tool can perform is creating and writing to its own
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Depth bounded at 50; paths capped at 200 per entry and 5000 globally. |
-| Combinatorial explosion from highly branching flows | Denial of Service | Medium | `max_paths` and `MAX_TOTAL_PATHS` caps prevent unbounded growth. Path enumeration short-circuits once limits are hit. |
+| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Static path enumeration is bounded at depth 50, 200 paths per phone number, and 5,000 paths globally. Path-local cycle edges are pruned without preventing the separate structural closure from reaching every statically resolvable node. |
+| Combinatorial explosion from highly branching flows | Denial of Service | Medium | Depth, per-number path, global path, and step caps prevent unbounded growth. A reached cap, dynamic target, or unresolved cross-flow reference marks enumeration incomplete; clean partial evidence is not treated as exhaustive proof. |
 | Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | The static report shell HTML-escapes its title and pins the inline bundle with a CSP hash, assessment data is serialized into a script-safe JSON island, React renders ordinary strings as text, and markdown disables raw HTML. |
 | Malformed flow JSON crashes the parser | Denial of Service | Low | Parser validates input type, skips non-dict actions gracefully, and uses `.get()` with defaults throughout. |
 | Dynamic attribute references used to confuse graph analysis | Spoofing | Low | Dynamic references are detected and recorded in `dynamic_references` — never followed as if they were static edges. |
@@ -90,7 +92,7 @@ The only write operation the tool can perform is creating and writing to its own
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| Auto-created report bucket is world-readable | Information Disclosure | High | Buckets are created with S3 Block Public Access (all four flags), default SSE-S3 encryption, and versioning enabled. |
+| Auto-created or pre-existing selected report bucket is publicly exposed | Information Disclosure | High | Before every upload, the publisher applies S3 Block Public Access (all four flags), enables versioning, and preserves existing default encryption or adds SSE-S3 when absent. This also changes an existing selected bucket and has no automatic rollback. |
 | Over-broad write permissions on the assessment role | Elevation of Privilege | Medium | The default CloudFormation role is read-only and does not grant S3 report-publishing writes. When `--s3-output` is enabled, operators must add a separate policy scoped to `arn:aws:s3:::amazon-connect-assessment-report-*` and its objects. Publishing is opt-in. |
 | Bucket-name takeover (global S3 namespace) | Spoofing | Low | `head_bucket` checks ownership before upload; a `403` (owned elsewhere) surfaces an error rather than silently uploading. Operators can override with `--s3-bucket`. |
 | Failed upload aborts the assessment | Denial of Service | Low | Upload failures are caught and reported; the assessment still succeeds and local reports remain. |
@@ -134,7 +136,7 @@ The only write operation the tool can perform is creating and writing to its own
 │      │ optional --s3-output                                   │
 └──────┼─────────────────────────────────────────────────────── ┘
        │                          │
-       │ HTTPS (TLS)              │ Read-only API calls (TLS)
+       │ HTTPS (TLS)              │ Read-oriented API calls (TLS)
        ▼                          ▼
 ┌────────────────────┐  ┌───────────────────────────────┐
 │ Z2: S3 report      │  │ Z2: AWS APIs                   │
@@ -161,7 +163,7 @@ The only write operation the tool can perform is creating and writing to its own
 1. The execution host is not compromised — if it is, all bets are off (the attacker already has credential access).
 2. AWS API responses are authentic (TLS verified by boto3/botocore).
 3. Contact flow JSON may contain arbitrary string values but conforms to the Connect flow schema structure (dict with `Actions` array).
-4. When `--s3-output` is used, the operator intends to create/write the report bucket in the assessed account.
+4. When `--s3-output` is used, the operator intends to create or modify the selected report bucket in the assessed account by applying hardening settings and uploading reports.
 
 ---
 

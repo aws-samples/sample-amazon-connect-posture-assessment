@@ -2,6 +2,8 @@
 Tests for cost optimization checks (Tasks 8, 9, 10 / Requirements 13-16, 28-32, 40-41).
 """
 
+import pytest
+
 import amazon_connect_assessment.checks.cost_intelligence_checks as cost_intelligence_checks
 from amazon_connect_assessment.aws_client_factory import AWSClientFactory
 from amazon_connect_assessment.checks.cost_containment_checks import (
@@ -12,7 +14,9 @@ from amazon_connect_assessment.checks.cost_containment_checks import (
     register_cost_containment_checks,
 )
 from amazon_connect_assessment.checks.cost_intelligence_checks import (
+    HoursOfOperationMismatchCheck,
     PremiumFeaturesCostCheck,
+    UnusedPhoneNumbersCheck,
     UsageMetricsCheck,
     register_cost_intelligence_checks,
 )
@@ -22,7 +26,7 @@ from amazon_connect_assessment.cost.cost_estimator import (
     estimate_containment_savings,
     estimate_unused_numbers_cost,
 )
-from amazon_connect_assessment.models import CheckStatus, ContactFlow
+from amazon_connect_assessment.models import CheckStatus, ContactFlow, FindingDisposition
 from tests.conftest import build_action, build_contact_flow
 
 
@@ -45,6 +49,50 @@ def _instance_with_flow(instance, flow_json, name="TestFlow"):
 
 
 # --- Task 8: cost intelligence checks ---
+
+
+def test_cost_inventory_direct_constructors_use_informational_disposition():
+    # Arrange
+    check_types = [
+        UsageMetricsCheck,
+        UnusedPhoneNumbersCheck,
+        PremiumFeaturesCostCheck,
+        HoursOfOperationMismatchCheck,
+    ]
+
+    # Act
+    dispositions = [check_type().disposition for check_type in check_types]
+
+    # Assert
+    assert dispositions == [FindingDisposition.INFORMATIONAL] * len(check_types)
+
+
+@pytest.mark.parametrize(
+    "check_type, expected_operation",
+    [
+        (UsageMetricsCheck, "cloudwatch:GetMetricStatistics"),
+        (UnusedPhoneNumbersCheck, "connect:ListPhoneNumbersV2"),
+        (HoursOfOperationMismatchCheck, "connect:ListHoursOfOperations"),
+    ],
+)
+def test_cost_inventory_non_access_api_error_returns_skipped(
+    check_type, expected_operation, make_check_context, mock_aws_client_factory
+):
+    # Arrange
+    _wire(mock_aws_client_factory)
+    mock_aws_client_factory.call_api_with_resilience.side_effect = RuntimeError(
+        "transient read failure"
+    )
+
+    # Act
+    finding = check_type().execute(make_check_context())
+
+    # Assert
+    assert finding.status == CheckStatus.SKIPPED
+    assert finding.evidence["analysis_complete"] is False
+    assert finding.evidence["operation"] == expected_operation
+    assert finding.evidence["error_type"] == "RuntimeError"
+    assert finding.evidence["error_code"] is None
 
 
 class TestUsageMetricsCheck:

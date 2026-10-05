@@ -907,7 +907,7 @@ _CONTROLS = (
             "For each literal, decide whether it varies by environment/region; externalize only values with a real portability requirement.",
         ),
         _base_executor("resilience_advanced_checks", "HardcodedRoutingCheck"),
-        False,
+        True,
     ),
     _control(
         "res-lambda-dependency-001",

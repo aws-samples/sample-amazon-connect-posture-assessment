@@ -170,8 +170,11 @@ They exclude Amazon default sample flows and aggregate one outcome per control
 and instance. `ops-acxd-handoff-001` inventories the reachable Connect-side
 workspace, application, and alias references plus optional feature presence and
 context-variable names; values are never retained. `ops-acxd-escalation-001`
-identifies handoffs without an explicit `Escalation` condition as manual-review
-candidates because human escalation depends on workload intent.
+checks whether a reachable handoff has an authored condition operand whose
+case-insensitive exact token is `Escalation`. It reports missing exact tokens as
+manual-review candidates because the token does not prove that escalation
+succeeded or reached an agent at runtime, and human escalation depends on
+workload intent.
 `res-acxd-error-routing-001` requires `InputTimeLimitExceeded` and
 `NoMatchingError` routes. `NoMatchingCondition` is reported as the readable
 **Other outcome** branch but does not substitute for either required resilience
@@ -186,6 +189,16 @@ when complete analysis finds no reachable Agentic CX action. These controls call
 no Agentic CX APIs and cannot prove anything about application prompts, tools,
 logic, deployment, or runtime outcomes.
 
+## Hardcoded routing execution
+
+`res-hardcoded-routing-001` requires parsed customer-authored flow content, so
+`--skip-flow-analysis` excludes it from the selected execution plan. When flow
+analysis is enabled, it is an informational inventory control: a complete empty
+flow inventory reports `Pass` with zero observed literals, while observed
+literals remain review context rather than a scored failure. Incomplete parsing
+reports `Skipped` with the partial inventory retained. AWS sample flows are
+excluded and phone-number values are masked.
+
 ## Journey-backed execution
 
 The four Journey-backed controls use phone-number and contact-flow topology, but
@@ -199,9 +212,16 @@ they are catalog records rather than a second findings model:
   closure under Cost Optimization.
 
 The journey pipeline resolves phone-number associations, builds an instance-wide
-flow graph, performs bounded path enumeration, and emits one aggregate outcome
-for each selected Journey-backed control. `--skip-flow-analysis` excludes all
-controls that require flow analysis, including these four.
+flow graph, and performs bounded static path enumeration with a maximum depth of
+50, 200 paths per phone number, and 5,000 paths per run. Path-local cycle edges
+are pruned, while the separate iterative structural closure still reaches every
+statically resolvable node. A depth, path, or step cap, dynamic target, or
+unresolved flow reference marks enumeration incomplete. These limits prevent an
+exhaustive-runtime claim: a known structural defect can still fail, while clean
+but incomplete evidence is not treated as proof that every possible route is
+safe. The pipeline emits one aggregate outcome for each selected Journey-backed
+control. `--skip-flow-analysis` excludes all controls that require flow analysis,
+including these four.
 
 ## Filter behavior
 
@@ -211,10 +231,11 @@ then pillar, effective severity, explicit `--checks` inclusion,
 every active filter.
 
 `--checks`, `--exclude-checks`, config keys, and validation accept canonical IDs
-and the two legacy aliases. Inputs are normalized and deduplicated before
-selection. `--list-checks` displays the unified selected controls, including
-Journey-backed controls, with severity and disposition. It never displays an
-alias.
+and the two legacy aliases described in [Canonical identity and evidence
+contract](#canonical-identity-and-evidence-contract). Inputs are normalized and
+deduplicated before selection. `--list-checks` displays the unified selected
+controls, including Journey-backed controls, with severity and disposition. It
+never displays an alias.
 
 Examples:
 
@@ -226,10 +247,8 @@ amazon-connect-assessment --list-checks
 amazon-connect-assessment --region us-east-1 \
   --checks sec-cloudtrail-001 journey-res-001
 
-# A legacy input alias selects the canonical control
-amazon-connect-assessment --region us-east-1 --checks journey-sec-001
-
-# Exclude flow analysis and every flow-dependent control
+# Exclude flow analysis and every flow-dependent control, including
+# res-hardcoded-routing-001
 amazon-connect-assessment --region us-east-1 --skip-flow-analysis
 ```
 

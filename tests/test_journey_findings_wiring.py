@@ -26,7 +26,7 @@ from typing import Any, Dict
 from unittest.mock import MagicMock
 
 from amazon_connect_assessment.engine import AssessmentEngine
-from amazon_connect_assessment.models import ConnectInstance, ContactFlow
+from amazon_connect_assessment.models import CheckStatus, ConnectInstance, ContactFlow
 from amazon_connect_assessment.parsers import ContactFlowParser
 
 # A flow with no authentication, a queue transfer, and no self-service
@@ -236,3 +236,47 @@ class TestFlowIdBackfillRegression:
         engine = _engine_with_phone_number()
         findings = engine._compute_journey_findings([_instance()])
         assert len(findings) >= 1
+
+
+def test_journey_findings_unusable_discovered_flow_emits_skipped_outcomes_expected_result():
+    # Arrange
+    engine = _engine_with_phone_number()
+    instance = _instance()
+    instance.contact_flows[0].content = {}
+
+    # Act
+    findings = engine._compute_journey_findings([instance])
+
+    # Assert
+    assert len(findings) == 4
+    assert all(finding.status == CheckStatus.SKIPPED for finding in findings)
+    assert all(finding.instance_id == "iid-1" for finding in findings)
+
+
+def test_journey_findings_partial_flow_inventory_keeps_defect_and_limits_clean_result_expected_result():
+    # Arrange
+    engine = _engine_with_phone_number()
+    instance = _instance()
+    instance.contact_flows.append(
+        ContactFlow(
+            id="flow-empty",
+            arn="arn:aws:connect:us-east-1:111:instance/iid-1/contact-flow/flow-empty",
+            name="Empty Flow",
+            type="CONTACT_FLOW",
+            state="ACTIVE",
+            content={},
+        )
+    )
+
+    # Act
+    findings = engine._compute_journey_findings([instance])
+    findings_by_id = {finding.check_id: finding for finding in findings}
+
+    # Assert
+    assert findings_by_id["sec-flow-auth-001"].status == CheckStatus.FAIL
+    assert findings_by_id["journey-res-001"].status == CheckStatus.SKIPPED
+    assert findings_by_id["journey-res-001"].evidence["enumeration_complete"] is False
+    assert (
+        "structurally unusable"
+        in findings_by_id["journey-res-001"].evidence["enumeration_limitations"][0]
+    )

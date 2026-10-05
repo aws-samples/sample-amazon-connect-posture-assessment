@@ -120,6 +120,7 @@ class CheckRegistry:
         self._checks_by_severity[check.severity] = [
             c for c in severity_list if c.check_id != canonical_id
         ]
+        self._remove_selected_control(canonical_id)
         self.logger.debug(f"Unregistered check: {canonical_id}")
 
     def get_check(self, check_id: str) -> BaseCheck:
@@ -278,48 +279,65 @@ class CheckRegistry:
         return list(self._checks.keys())
 
     def list_control_ids(self) -> List[str]:
-        """Return every selected canonical control ID in catalog order."""
-        return self._selected_control_ids.copy()
+        """Return the canonical control plan, with a safe legacy fallback."""
+        if self._atomic_control_registry is not None:
+            return self._selected_control_ids.copy()
+
+        from .control_registry import ExecutionSource, get_atomic_control_registry
+
+        catalog = get_atomic_control_registry()
+        if self._checks:
+            return list(self._checks)
+        return [
+            control.control_id
+            for control in catalog.controls
+            if control.execution_source == ExecutionSource.JOURNEY
+        ]
 
     def list_selected_journey_control_ids(self) -> List[str]:
         """Return selected canonical controls owned by Journey execution."""
-        return self._selected_journey_control_ids.copy()
+        if self._atomic_control_registry is not None:
+            return self._selected_journey_control_ids.copy()
+        if self._checks:
+            return []
+        from .control_registry import ExecutionSource, get_atomic_control_registry
+
+        return [
+            control.control_id
+            for control in get_atomic_control_registry().controls
+            if control.execution_source == ExecutionSource.JOURNEY
+        ]
 
     def get_selected_controls(self) -> List["AtomicControl"]:
         """Return selected canonical control metadata in execution-plan order."""
-        if self._atomic_control_registry is None:
-            return []
-        return [
-            self._atomic_control_registry.get(control_id)
-            for control_id in self._selected_control_ids
-        ]
+        from .control_registry import get_atomic_control_registry
+
+        catalog = self._atomic_control_registry or get_atomic_control_registry()
+        return [catalog.get(control_id) for control_id in self.list_control_ids()]
 
     def get_atomic_control_registry(self) -> Optional["AtomicControlRegistry"]:
         """Return the attached immutable catalog, if registration configured one."""
         return self._atomic_control_registry
 
     def is_journey_control(self, control_id: str) -> bool:
-        """Return whether a known control is owned by Journey execution."""
-        if self._atomic_control_registry is None:
-            return control_id.startswith("journey-")
-        from .control_registry import ExecutionSource
+        """Return whether a known canonical control is owned by Journey execution."""
+        from .control_registry import ExecutionSource, get_atomic_control_registry
 
+        catalog = self._atomic_control_registry or get_atomic_control_registry()
         try:
-            return (
-                self._atomic_control_registry.get(control_id).execution_source
-                == ExecutionSource.JOURNEY
-            )
+            return catalog.get(control_id).execution_source == ExecutionSource.JOURNEY
         except KeyError:
-            return control_id.startswith("journey-")
+            return False
 
     def get_control_severity(self, control_id: str) -> Severity:
         """Return the effective selected severity for a canonical control."""
         canonical_id = self.resolve_control_id(control_id)
         if canonical_id in self._checks:
             return self._checks[canonical_id].severity
-        if self._atomic_control_registry is None:
-            raise KeyError(f"Unknown control ID: {control_id}")
-        return self._atomic_control_registry.get(canonical_id).default_severity
+        from .control_registry import get_atomic_control_registry
+
+        catalog = self._atomic_control_registry or get_atomic_control_registry()
+        return catalog.get(canonical_id).default_severity
 
     def _remove_selected_control(self, control_id: str) -> None:
         canonical_id = self.resolve_control_id(control_id)
@@ -356,117 +374,15 @@ class CheckRegistry:
         self.logger.debug("Cleared all registered checks")
 
     def load_checks_from_config(self, checks_config: Dict[str, Dict]) -> None:
+        """Apply compatibility overrides through the shared live-config handler.
+
+        New callers should pass ``checks_config`` to ``register_all_checks`` so
+        selection and severity filters are evaluated together. This method is
+        retained for callers that update an already-built registry.
         """
-        Apply per-check configuration overrides to already-registered checks.
+        from .registration import apply_live_check_config
 
-        By the time this runs (called from ``cli.initialize_assessment_components``
-        after ``register_all_checks``), every check is already a live
-        ``BaseCheck`` instance sitting in this registry — checks are Python
-        classes registered via each module's ``register_*()`` function, not
-        built dynamically from config. So "loading checks from config" can't
-        mean constructing new check objects; it means applying config-file
-        overrides to the ones that already exist. That's what this method
-        now actually does:
-
-        - ``enabled: false`` → unregisters the check entirely (matches what
-          ``--exclude-checks`` does at the registration layer).
-        - ``severity: "<level>"`` → overrides the check's severity in place,
-          so findings from that check report at the configured level instead
-          of the class's built-in default.
-
-        Previously this method only logged what it *would* do and never
-        mutated the registry or any check — every value under ``checks:`` in
-        assessment_config.yaml was silently a no-op despite the config
-        README documenting both fields as live behavior.
-
-        ``parameters``, ``remediation_template``, and ``description``
-        overrides are intentionally not yet implemented — they would need
-        each concrete check's ``execute()`` to consult
-        ``context.config["checks"][self.check_id]["parameters"]`` and none
-        currently do, so silently accepting those keys here would repeat
-        the same "documented but does nothing" problem for a subset of the
-        surface. They're logged as ignored so a config author notices.
-
-        Args:
-            checks_config: Dictionary containing check configurations, keyed
-                by check_id. Each value may have ``enabled`` (bool) and/or
-                ``severity`` (one of "critical"/"high"/"medium"/"low").
-        """
-        if not checks_config:
-            return
-
-        self.logger.info(f"Applying configuration overrides for {len(checks_config)} check(s)")
-
-        disabled_count = 0
-        severity_override_count = 0
-
-        for requested_check_id, check_config in checks_config.items():
-            if not isinstance(check_config, dict):
-                continue
-
-            check_id = self.resolve_control_id(requested_check_id)
-            control = None
-            if self._atomic_control_registry is not None:
-                try:
-                    control = self._atomic_control_registry.get(check_id)
-                except KeyError:
-                    pass
-            if check_id not in self._checks and control is None:
-                self.logger.warning(
-                    f"Config references check '{requested_check_id}' which is unknown; "
-                    "ignoring its configuration."
-                )
-                continue
-
-            enabled = check_config.get("enabled", True)
-            if not enabled:
-                if check_id in self._checks:
-                    self.unregister_check(check_id)
-                self._remove_selected_control(check_id)
-                disabled_count += 1
-                self.logger.debug(f"Control {check_id} disabled via configuration")
-                continue
-
-            severity_name = check_config.get("severity")
-            if severity_name:
-                try:
-                    new_severity = Severity(severity_name.lower())
-                except (AttributeError, ValueError):
-                    self.logger.warning(
-                        f"Ignoring invalid severity override '{severity_name}' "
-                        f"for check '{check_id}'; must be one of "
-                        f"{[s.value for s in Severity]}"
-                    )
-                else:
-                    from .control_registry import ExecutionSource
-
-                    if control is not None and control.execution_source == ExecutionSource.JOURNEY:
-                        self.logger.warning(
-                            "Severity override for Journey control '%s' is not supported; "
-                            "using catalog severity '%s'.",
-                            check_id,
-                            control.default_severity.value,
-                        )
-                    elif self._override_base_check_severity(check_id, new_severity):
-                        severity_override_count += 1
-                        self.logger.debug(
-                            "Check %s severity overridden to %s",
-                            check_id,
-                            new_severity.value,
-                        )
-
-            unsupported_keys = set(check_config.keys()) - {"enabled", "severity"}
-            if unsupported_keys:
-                self.logger.warning(
-                    f"Check '{check_id}' config has unsupported override "
-                    f"key(s) {sorted(unsupported_keys)}; only 'enabled' and "
-                    "'severity' are currently applied."
-                )
-
-        self.logger.info(
-            f"Configuration overrides applied: {disabled_count} check(s) "
-            f"disabled, {severity_override_count} severity override(s)"
-        )
+        apply_live_check_config(self, checks_config)
 
     def __len__(self) -> int:
         """Return the number of registered checks."""

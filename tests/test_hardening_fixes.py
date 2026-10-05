@@ -143,7 +143,9 @@ def test_storage_encryption_paginated_configs_are_deduplicated_with_complete_evi
     assert len(finding.evidence["storage"]["CALL_RECORDINGS"]) == 4
 
 
-def test_storage_encryption_stream_only_config_passes(make_check_context, mock_aws_client_factory):
+def test_storage_encryption_stream_only_config_returns_skipped(
+    make_check_context, mock_aws_client_factory
+):
     # Arrange
     factory = mock_aws_client_factory
     _wire(factory)
@@ -159,8 +161,13 @@ def test_storage_encryption_stream_only_config_passes(make_check_context, mock_a
     finding = InstanceStorageEncryptionCheck().execute(make_check_context())
 
     # Assert
-    assert finding.status == CheckStatus.PASS
+    assert finding.status == CheckStatus.SKIPPED
+    assert finding.evidence["analysis_complete"] is False
     assert finding.evidence["unencrypted_resource_types"] == []
+    stream_evidence = finding.evidence["storage"]["AGENT_EVENTS"][0]
+    assert stream_evidence["stream_resource_arn"] == "a"
+    assert stream_evidence["encryption_evaluated"] is False
+    assert stream_evidence["encrypted"] is None
 
 
 # --- ACGR -------------------------------------------------------------------
@@ -335,19 +342,19 @@ def test_evidence_source_failure_omits_sensitive_error_message():
 # --- Registration -----------------------------------------------------------
 
 
-def test_registration_no_valid_check_ids_raises_value_error():
+def test_registration_unknown_check_ids_raise_typed_error_expected_result():
     # Arrange
     registry = CheckRegistry()
 
     # Act / Assert
-    with pytest.raises(ValueError, match="None of the requested check IDs"):
+    with pytest.raises(ValueError, match="Unknown check ID"):
         register_all_checks(registry, check_ids={"does-not-exist"})
 
 
 # --- Path enumerator --------------------------------------------------------
 
 
-def test_journey_enumerator_loop_and_step_limits_are_recorded():
+def test_journey_enumerator_loop_evidence_preserves_complete_result_expected_result():
     # Arrange
     def node(aid, typ):
         return JourneyNode(
@@ -368,6 +375,6 @@ def test_journey_enumerator_loop_and_step_limits_are_recorded():
     _, step_limitations = _enumerate_from_entry(graph, "f::a", "+1", "DID", 200, 50, max_steps=1)
 
     # Assert
-    assert paths and not complete
+    assert paths and complete
     assert any("loop-back" in item for item in limitations)
     assert any("step limit" in item for item in step_limitations)

@@ -1,5 +1,7 @@
 """Tests for phone-number masking in journey finding evidence."""
 
+import pytest
+
 from amazon_connect_assessment.journey.journey_scorer import _mask_number
 
 
@@ -57,16 +59,12 @@ class TestJourneyFindingInstance:
         assert all(finding.resource_id == "inst-1" for finding in findings)
         assert all(finding.instance_id == "inst-1" for finding in findings)
 
-    def test_journey_findings_missing_instance_use_canonical_placeholder(self):
+    def test_journey_finding_missing_instance_rejects_generation_expected_result(self):
         # Arrange
         from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
 
         result = self._result()
 
-        # Act
-        findings = generate_journey_findings(result)
-
-        # Assert
-        assert findings
-        assert all(finding.resource_id == "instance" for finding in findings)
-        assert all(finding.instance_id == "instance" for finding in findings)
+        # Act / Assert
+        with pytest.raises(TypeError, match="instance_id"):
+            generate_journey_findings(result)

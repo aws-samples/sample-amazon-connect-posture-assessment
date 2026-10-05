@@ -44,6 +44,9 @@ const MARKDOWN_CSS = `
 .acr-print-record dt { font-weight: bold; }
 .acr-print-record dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .acr-print-evidence { break-inside: auto; }
+.acr-print-remediation ol, .acr-print-remediation ul { margin: 0; padding-inline-start: 20px; }
+.acr-print-remediation li, .acr-print-remediation pre { break-inside: avoid; }
+.acr-print-remediation pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 @media print { .acr-no-print { display: none !important; } }
 `;
 

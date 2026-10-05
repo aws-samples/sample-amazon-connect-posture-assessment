@@ -900,6 +900,52 @@ def _cloudtrail_event_tdg_identifiers(event: Any) -> set[str]:
     return identifiers
 
 
+def _cloudtrail_event_outcome(event: Any) -> dict[str, Any]:
+    """Classify a LookupEvents record without exposing its error message."""
+    raw_event = _mapping_value_case_insensitive(event, "CloudTrailEvent")
+    if not isinstance(raw_event, str):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is missing",
+        }
+    try:
+        parsed_event = json.loads(raw_event)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is malformed",
+        }
+    if not isinstance(parsed_event, dict):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is not an object",
+        }
+
+    raw_error_code = _mapping_value_case_insensitive(parsed_event, "errorCode")
+    raw_error_message = _mapping_value_case_insensitive(parsed_event, "errorMessage")
+    error_code_present = raw_error_code not in (None, "")
+    error_message_present = raw_error_message not in (None, "")
+    if error_code_present or error_message_present:
+        return {
+            "outcome": "failed",
+            "error_code": str(raw_error_code) if error_code_present else None,
+            "error_message_present": error_message_present,
+            "reason": "CloudTrailEvent records an API error",
+        }
+    return {
+        "outcome": "successful",
+        "error_code": None,
+        "error_message_present": False,
+        "reason": None,
+    }
+
+
 class ACGRFailoverTestCheck(BaseCheck):
     """Find recent UpdateTrafficDistribution evidence scoped to an assessed TDG."""
 
@@ -980,6 +1026,7 @@ class ACGRFailoverTestCheck(BaseCheck):
         next_token: Optional[str] = None
         seen_tokens: set[str] = set()
         pagination_complete = False
+        pages_scanned = 0
 
         try:
             for _ in range(_MAX_CLOUDTRAIL_EVENT_PAGES):
@@ -1001,6 +1048,7 @@ class ACGRFailoverTestCheck(BaseCheck):
                     "cloudtrail",
                     **kwargs,
                 )
+                pages_scanned += 1
                 events.extend(resp.get("Events") or [])
                 returned_token = resp.get("NextToken")
                 if not returned_token:
@@ -1015,25 +1063,12 @@ class ACGRFailoverTestCheck(BaseCheck):
                 return self.skipped_for_access_denied(context, "cloudtrail:LookupEvents")
             raise
 
-        if not pagination_complete:
-            return self.create_finding(
-                status=CheckStatus.SKIPPED,
-                resource_id=instance.instance_id,
-                resource_type="ConnectInstance",
-                description=(
-                    "Skipped: CloudTrail LookupEvents pagination did not complete, so the "
-                    "bounded lookback evidence is incomplete."
-                ),
-                evidence={
-                    "evidence_complete": False,
-                    "lookback_days": _FAILOVER_TEST_LOOKBACK_DAYS,
-                    "candidate_event_count": len(events),
-                },
-                context=context,
-            )
-
         matched_events: List[Dict[str, Any]] = []
+        successful_matched_events: List[Dict[str, Any]] = []
+        failed_matched_events: List[Dict[str, Any]] = []
+        malformed_matched_events: List[Dict[str, Any]] = []
         matched_tdgs: set[str] = set()
+        successful_matched_tdgs: set[str] = set()
         unrelated_count = 0
         malformed_count = 0
 
@@ -1042,50 +1077,108 @@ class ACGRFailoverTestCheck(BaseCheck):
             matching_identifiers = identifiers.intersection(identifier_to_tdg)
             if matching_identifiers:
                 matched_events.append(event)
-                matched_tdgs.update(identifier_to_tdg[value] for value in matching_identifiers)
+                event_tdgs = {identifier_to_tdg[value] for value in matching_identifiers}
+                matched_tdgs.update(event_tdgs)
+                outcome = _cloudtrail_event_outcome(event)
+                observation = {
+                    "event_time": str(event.get("EventTime", "")),
+                    "matched_tdgs": sorted(event_tdgs),
+                    "error_code": outcome["error_code"],
+                    "error_message_present": outcome["error_message_present"],
+                }
+                if outcome["outcome"] == "successful":
+                    successful_matched_events.append(event)
+                    successful_matched_tdgs.update(event_tdgs)
+                elif outcome["outcome"] == "failed":
+                    failed_matched_events.append(observation)
+                else:
+                    malformed_matched_events.append({**observation, "reason": outcome["reason"]})
             elif identifiers:
                 unrelated_count += 1
             else:
                 malformed_count += 1
 
+        limitations = []
+        if not pagination_complete:
+            limitations.append(
+                "CloudTrail LookupEvents pagination did not complete within the bounded scan"
+            )
         evidence = {
-            "evidence_complete": True,
+            "evidence_complete": pagination_complete,
+            "pagination_complete": pagination_complete,
+            "pages_scanned": pages_scanned,
+            "limitations": limitations,
             "lookback_days": _FAILOVER_TEST_LOOKBACK_DAYS,
             "assessed_tdg_identifiers": sorted(identifier_to_tdg),
             "candidate_event_count": len(events),
             "matched_event_count": len(matched_events),
+            "successful_matched_event_count": len(successful_matched_events),
+            "failed_matched_event_count": len(failed_matched_events),
+            "malformed_matched_event_count": len(malformed_matched_events),
+            "failed_matched_events": failed_matched_events,
+            "malformed_matched_events": malformed_matched_events,
             "unrelated_event_count": unrelated_count,
             "malformed_event_count": malformed_count,
             "matched_tdgs": sorted(matched_tdgs),
+            "successful_matched_tdgs": sorted(successful_matched_tdgs),
             "update_traffic_distribution_event_count": len(events),
         }
 
-        if matched_events:
-            evidence["most_recent_matched_event_time"] = str(matched_events[0].get("EventTime", ""))
+        if successful_matched_events:
+            evidence["most_recent_matched_event_time"] = str(
+                successful_matched_events[0].get("EventTime", "")
+            )
+            limitation_note = (
+                " LookupEvents pagination was incomplete, but the observed successful event "
+                "is sufficient positive evidence."
+                if not pagination_complete
+                else ""
+            )
             return self.create_finding(
                 status=CheckStatus.PASS,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    f"Found {len(matched_events)} UpdateTrafficDistribution CloudTrail "
-                    f"event(s) scoped to {len(matched_tdgs)} assessed traffic distribution "
-                    f"group(s) in the last {_FAILOVER_TEST_LOOKBACK_DAYS} days. The event "
-                    "proves a configured traffic-distribution change, not successful "
-                    "end-to-end failover."
+                    f"Found {len(successful_matched_events)} successful "
+                    "UpdateTrafficDistribution CloudTrail event(s) scoped to "
+                    f"{len(successful_matched_tdgs)} assessed traffic distribution group(s) "
+                    f"in the last {_FAILOVER_TEST_LOOKBACK_DAYS} days. The event proves a "
+                    "configured traffic-distribution change, not successful end-to-end "
+                    f"failover.{limitation_note}"
                 ),
                 evidence=evidence,
                 context=context,
             )
 
+        if not pagination_complete:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    "Skipped: CloudTrail LookupEvents pagination did not complete, and no "
+                    "successful scoped event was observed in the partial evidence."
+                ),
+                evidence=evidence,
+                context=context,
+            )
+
+        failed_attempt_note = (
+            f" {len(failed_matched_events)} scoped attempt(s) recorded API errors and "
+            f"{len(malformed_matched_events)} scoped observation(s) had malformed or missing "
+            "CloudTrailEvent payloads; neither is successful evidence."
+            if failed_matched_events or malformed_matched_events
+            else ""
+        )
         return self.create_finding(
             status=CheckStatus.FAIL,
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
             description=(
-                "ACGR is configured but no UpdateTrafficDistribution CloudTrail event could "
-                "be matched to an assessed traffic distribution group in the last "
+                "ACGR is configured but no successful UpdateTrafficDistribution CloudTrail "
+                "event could be matched to an assessed traffic distribution group in the last "
                 f"{_FAILOVER_TEST_LOOKBACK_DAYS} days. Unrelated or unscopable events do not "
-                "demonstrate that this deployment exercised traffic movement."
+                f"demonstrate that this deployment exercised traffic movement.{failed_attempt_note}"
             ),
             evidence=evidence,
             structured_remediation=Remediation(
@@ -2015,6 +2108,16 @@ class LambdaDependencyRiskCheck(BaseCheck):
                     "Lambda error-routing analysis was incomplete and cannot report PASS: "
                     + "; ".join(analysis_limitations)
                     + "."
+                ),
+                evidence=evidence,
+            )
+
+        if reachable_call_sites == 0:
+            return self.not_applicable(
+                context,
+                reason=(
+                    "Complete flow analysis found no reachable, customer-authored Lambda "
+                    "call sites to evaluate."
                 ),
                 evidence=evidence,
             )

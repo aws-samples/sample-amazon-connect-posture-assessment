@@ -83,10 +83,12 @@ For installation failures, see [troubleshooting.md](troubleshooting.md).
 
 ## AWS Access
 
-The assessment is read-only against the
+The assessment uses read-oriented `List`, `Get`, `Describe`, and `Head`
+operations against the
 [Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html)
-resources it inspects. The optional `--s3-output` feature writes only to its
-report bucket.
+resources and supporting services it inspects. The consequential opt-in
+`--s3-output` feature creates or hardens the selected report bucket and uploads
+reports.
 
 Confirm the active identity and region access:
 
@@ -204,7 +206,8 @@ python -m amazon_connect_assessment.cli \
   --pillars security resilience \
   --severity critical high
 
-# Skip flow analysis, including ContactFlowAnalyzer API calls
+# Skip flow analysis and every flow-dependent control, including
+# res-hardcoded-routing-001.
 python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --skip-flow-analysis
@@ -231,8 +234,14 @@ AND-filtered selection. Journey-backed controls appear in `--list-checks` with
 their pillar, severity, and disposition.
 
 For backward compatibility, `journey-sec-001` selects `sec-flow-auth-001` and
-`journey-cost-001` selects `cost-containment-001`. Listings and reports emit
-only canonical IDs.
+`journey-cost-001` selects `cost-containment-001`. Listings, current examples,
+and reports emit only canonical IDs.
+
+Journey analysis statically enumerates paths with maximum depth 50, 200 paths
+per phone number, and 5,000 paths per run. Cycle edges are pruned per path
+without reducing structural node reachability. A reached cap, dynamic target,
+or unresolved flow reference makes the result incomplete; the tool retains
+partial evidence and does not claim that every runtime route was evaluated.
 
 ## Report Operations
 
@@ -270,8 +279,9 @@ current scope, pillar, filter, sort order, and page.
 
 Evidence automatically uses a Cloudscape table when the detail panel is wide
 enough and responsive cards when it is narrow. Long values remain available
-for copying. Print output expands the complete evidence rather than the
-abbreviated display value.
+for copying. Print output expands complete descriptions, methodology,
+remediation or review actions, and evidence rather than abbreviated display
+values.
 
 ### Export scope
 
@@ -287,6 +297,8 @@ The top-level **Export** menu has intentionally different scope rules:
 
 CLI-generated JSON and CSV files also contain the complete assessment run. If
 the run used `--instance-id`, that complete run is already single-instance.
+Assessment and finding timestamps are exported as UTC ISO 8601 values; HTML
+labels them `UTC`, ASFF uses `Z`, and generated filename timestamps use UTC.
 PDF is a browser print/save operation, not a CLI output format.
 
 See [report-formats.md](report-formats.md) for the JSON, CSV, HTML, and ASFF
@@ -297,10 +309,12 @@ contracts. ASFF contains failed controls only.
 The three ACXD controls inspect reachable
 `ConnectParticipantWithAgenticCX` actions in parsed customer-authored Connect
 flows. They report Connect-side handoff inventory, required error routes, and
-an explicit escalation-route review candidate. They do not call Agentic CX
-Designer APIs or prove application internals, builds, deployments, alias
-resolution, runtime containment, or guardrails. Context-variable values are
-not retained in evidence.
+whether an authored condition contains the case-insensitive exact token
+`Escalation` for manual review. That token does not prove a successful
+escalated-to-agent runtime outcome. The controls do not call Agentic CX Designer
+APIs or prove application internals, builds, deployments, alias resolution,
+runtime containment, or guardrails. Context-variable values are not retained
+in evidence.
 
 ### Publish reports to S3
 
@@ -313,8 +327,12 @@ python -m amazon_connect_assessment.cli \
 
 The default bucket is
 `amazon-connect-assessment-report-<account_id>`. Override it with
-`--s3-bucket`. The bucket is created with Block Public Access, SSE-S3
-encryption, and versioning enabled.
+`--s3-bucket`. Before upload, the publisher applies Block Public Access and
+versioning to a new or existing selected bucket and preserves existing default
+encryption or adds SSE-S3 when none is configured. Enabling this option can
+therefore modify an existing bucket, and those hardening changes do not roll
+back automatically if upload later fails. Review the selected bucket and grant
+write access deliberately.
 
 Required additional permissions include:
 
@@ -395,12 +413,6 @@ jobs:
           path: reports/
           retention-days: 90
 ```
-
-### GitLab CI
-
-Install the package in a Python 3.12 image, run the CLI, and publish
-`reports/` as job artifacts. The repository's `.gitlab-ci.yml` provides the
-project-specific pipeline configuration.
 
 ## Further Help
 

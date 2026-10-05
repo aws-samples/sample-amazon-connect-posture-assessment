@@ -10,8 +10,13 @@ Verifies:
 
 from unittest.mock import patch
 
+import pytest
+
 from amazon_connect_assessment.checks.mvp_checks import get_mvp_checks
-from amazon_connect_assessment.checks.registration import register_all_checks
+from amazon_connect_assessment.checks.registration import (
+    UnknownControlSelectionError,
+    register_all_checks,
+)
 from amazon_connect_assessment.checks.registry import CheckRegistry
 
 
@@ -242,3 +247,68 @@ def test_registration_acxd_controls_enabled_flow_analysis_registers_all_expected
         "ops-acxd-escalation-001",
         "res-acxd-error-routing-001",
     } <= set(registry.list_check_ids())
+
+
+def test_registration_empty_check_set_uses_full_plan_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(registry, check_ids=set())
+
+    # Assert
+    assert "security-iam-001" in registry.list_control_ids()
+    assert "sec-flow-auth-001" in registry.list_control_ids()
+    assert "cost-containment-001" in registry.list_control_ids()
+
+
+def test_registration_mixed_known_unknown_selection_rejects_request_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act / Assert
+    with pytest.raises(UnknownControlSelectionError, match="unknown-control-001"):
+        register_all_checks(
+            registry,
+            check_ids={"security-iam-001", "unknown-control-001"},
+        )
+
+
+def test_registry_unregister_selected_check_cleans_plan_indexes_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+    register_all_checks(registry, check_ids={"ops-logging-001"})
+
+    # Act
+    registry.unregister_check("ops-logging-001")
+
+    # Assert
+    assert registry.list_check_ids() == []
+    assert registry.list_control_ids() == []
+    assert registry.list_selected_journey_control_ids() == []
+
+
+def test_registry_unattached_catalog_uses_canonical_journey_fallback_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    selected_ids = registry.list_selected_journey_control_ids()
+
+    # Assert
+    assert "sec-flow-auth-001" in selected_ids
+    assert "cost-containment-001" in selected_ids
+    assert registry.is_journey_control("sec-flow-auth-001") is True
+    assert registry.is_journey_control("journey-unknown-001") is False
+
+
+def test_registration_skip_flow_analysis_removes_hardcoded_routing_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+
+    # Act
+    register_all_checks(registry, skip_flow_analysis=True)
+
+    # Assert
+    assert "res-hardcoded-routing-001" not in registry.list_control_ids()
+    assert "res-hardcoded-routing-001" not in registry.list_check_ids()

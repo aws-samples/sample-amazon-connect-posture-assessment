@@ -117,3 +117,21 @@ class TestCombinedOverrides:
         # A malformed config (string instead of dict) must not crash.
         registry.load_checks_from_config({"ops-logging-001": "not-a-dict"})
         assert len(registry) == before
+
+
+def test_check_registry_config_disable_cleans_selected_plan_expected_result():
+    # Arrange
+    registry = CheckRegistry()
+    register_all_checks(registry, check_ids={"ops-logging-001"})
+    check = registry.get_check("ops-logging-001")
+    pillar = check.pillar
+    severity = check.severity
+
+    # Act
+    registry.load_checks_from_config({"ops-logging-001": {"enabled": False}})
+
+    # Assert
+    assert registry.list_check_ids() == []
+    assert registry.list_control_ids() == []
+    assert registry.get_checks_by_pillar(pillar) == []
+    assert registry.get_checks_by_severity(severity) == []

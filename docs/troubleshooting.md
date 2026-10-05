@@ -172,7 +172,8 @@ Several options:
 # Target one instance instead of all
 python -m amazon_connect_assessment.cli --region us-east-1 --instance-id <id>
 
-# Skip flow-dependent controls and ContactFlowAnalyzer API calls
+# Skip flow analysis, every flow-dependent control, and most flow-content API
+# work. This excludes res-hardcoded-routing-001.
 python -m amazon_connect_assessment.cli --region us-east-1 --skip-flow-analysis
 
 # Increase parallelism (default is 2x CPU cores)
@@ -259,15 +260,28 @@ layout does not update, close and reopen the detail panel or reload the report.
 
 ### Printed/PDF findings differ from the on-screen table
 
-This is expected. Browser print/save-as-PDF includes every finding and full
-evidence in the current **Report scope**, not only the current property filter,
-pillar tab, sort order, or page. Choose the intended instance before printing.
-Use the table's **Export page (CSV)** action when you need the current filtered
-page instead.
+This is expected. Browser print/save-as-PDF includes every finding with its
+complete description, methodology, remediation or review action, and evidence
+in the current **Report scope**, not only the current property filter, pillar
+tab, sort order, or page. Choose the intended instance before printing. Use the
+table's **Export page (CSV)** action when you need the current filtered page
+instead.
+
+### Custom report template fails before assessment
+
+A custom `template_dir` is strict. It must exist, contain
+`assessment_report.html`, and use every required static `@@NAME@@` placeholder
+without unsupported placeholders or legacy Jinja syntax. The report generator
+fails fast and does not fall back to the packaged shell. Migrate custom shells
+to the placeholder list in [Report Formats](report-formats.md#custom-report-shell-templates).
 
 ### `--s3-output`: upload didn't complete
 
-The assessment still succeeds and local reports are written even if the S3 upload fails. Common causes:
+`--s3-output` is a consequential opt-in write. Before upload, it hardens an
+existing selected bucket as well as a newly created bucket by applying Block
+Public Access and versioning and ensuring default encryption. These changes do
+not roll back automatically if the later upload fails. The assessment still
+succeeds and local reports are written. Common causes:
 
 - **Missing permissions** — the identity needs `s3:CreateBucket`, `s3:PutObject`, `s3:ListBucket`, and the bucket-hardening puts (`s3:PutBucketPublicAccessBlock`, `s3:PutEncryptionConfiguration`, `s3:PutBucketVersioning`) on `arn:aws:s3:::amazon-connect-assessment-report-*`. These are separate from the read-only assessment policy and must be granted explicitly when `--s3-output` is enabled.
 - **Bucket name taken** — S3 bucket names are globally unique. If `amazon-connect-assessment-report-<account_id>` is already owned elsewhere, pass `--s3-bucket <your-unique-name>`.

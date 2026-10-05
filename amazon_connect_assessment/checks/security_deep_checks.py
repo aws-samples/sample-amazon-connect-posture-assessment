@@ -55,10 +55,23 @@ _BROAD_WRITE_PREFIXES = (
     "invoke",
 )
 _READ_ONLY_ACTION_PREFIXES = ("get", "list", "describe")
+_BATCH_READ_ONLY_PREFIXES = ("get", "describe", "check")
+_BATCH_WRITE_PREFIXES = (
+    "write",
+    "execute",
+    "create",
+    "delete",
+    "put",
+    "stop",
+    "grant",
+    "revoke",
+    "associate",
+    "disassociate",
+)
 
 
 def _is_broad_write_action(action: str) -> bool:
-    """True for ``*``/``svc:*`` and write-verb actions; read-only wildcards are excluded."""
+    """True for ``*``/``svc:*`` and write-capable actions on broad resources."""
     normalized = action.lower()
     if normalized in {"*", "*:*"}:
         return True
@@ -67,6 +80,13 @@ def _is_broad_write_action(action: str) -> bool:
         return False
     if name == "*":
         return True
+    if name.startswith("batch"):
+        batched_name = name.removeprefix("batch")
+        if batched_name.startswith(_BATCH_READ_ONLY_PREFIXES):
+            return False
+        if batched_name.startswith(_BATCH_WRITE_PREFIXES):
+            return True
+        return False
     if name.startswith(_READ_ONLY_ACTION_PREFIXES):
         return False
     if name.startswith(_BROAD_WRITE_PREFIXES):
@@ -590,11 +610,16 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 for cfg in configs:
                     kms = self._kms_type(cfg)
                     bucket = (cfg.get("S3Config") or {}).get("BucketName")
+                    stream_resource_arn = (cfg.get("KinesisStreamConfig") or {}).get(
+                        "StreamArn"
+                    ) or (cfg.get("KinesisFirehoseConfig") or {}).get("FirehoseArn")
                     evidence["storage"].setdefault(resource_type, []).append(
                         {
                             "kms_key_type": kms,
                             "bucket": bucket,
                             "storage_type": cfg.get("StorageType"),
+                            "stream_resource_arn": stream_resource_arn,
+                            "encryption_evaluated": kms != "stream_managed",
                             "encrypted": None if kms == "stream_managed" else kms != "none",
                             "customer_managed_key_configured": kms == "customer_managed",
                         }
@@ -613,19 +638,25 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                     {
                         "resource_type": resource_type,
                         "error_type": type(e).__name__,
+                        "error_code": _error_code(e),
                         "access_denied": bool(factory.is_access_denied(e)),
                     }
                 )
 
-        limitations = (
-            [f"{len(failed_reads)} storage resource type read(s) did not complete"]
-            if failed_reads
-            else []
-        )
+        limitations = []
+        if failed_reads:
+            limitations.append(
+                f"{len(failed_reads)} storage resource type read(s) did not complete"
+            )
+        if stream_managed:
+            limitations.append(
+                f"{len(stream_managed)} storage resource type(s) use external streams whose "
+                "encryption was not evaluated"
+            )
         evidence.update(
             {
                 "resource_types_failed": failed_reads,
-                "analysis_complete": not failed_reads,
+                "analysis_complete": not limitations,
                 "limitations": limitations,
                 "unencrypted_resource_types": unencrypted,
                 "aws_managed_encryption_resource_types": aws_managed,
@@ -654,7 +685,7 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 ),
             )
 
-        if failed_reads:
+        if limitations:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
@@ -917,8 +948,8 @@ class ApprovedOriginsCheck(BaseCheck):
         )
 
 
-def _selector_condition_matches(value: str, field_selector: dict) -> bool:
-    """Evaluate an advanced selector field against one candidate event value."""
+def _selector_condition_matches(value: str, field_selector: dict) -> Optional[bool]:
+    """Return whether a supported advanced-selector condition matches a candidate."""
     conditions = {
         "Equals": lambda candidate, expected: candidate == expected,
         "NotEquals": lambda candidate, expected: candidate != expected,
@@ -927,19 +958,35 @@ def _selector_condition_matches(value: str, field_selector: dict) -> bool:
         "EndsWith": lambda candidate, expected: candidate.endswith(expected),
         "NotEndsWith": lambda candidate, expected: not candidate.endswith(expected),
     }
-    for operator, matcher in conditions.items():
-        if operator not in field_selector:
+    recognized_condition = False
+    for operator, raw_expected_values in field_selector.items():
+        if operator == "Field":
             continue
-        expected_values = _as_list(field_selector[operator])
+        matcher = conditions.get(operator)
+        if matcher is None:
+            return None
+        if isinstance(raw_expected_values, str):
+            expected_values = [raw_expected_values]
+        elif isinstance(raw_expected_values, list) and all(
+            isinstance(expected, str) for expected in raw_expected_values
+        ):
+            expected_values = raw_expected_values
+        else:
+            return None
+        if not expected_values:
+            return None
+        recognized_condition = True
         if operator.startswith("Not"):
             if not all(matcher(value, expected) for expected in expected_values):
                 return False
         elif not any(matcher(value, expected) for expected in expected_values):
             return False
-    return True
+    return True if recognized_condition else None
 
 
-def _advanced_selector_covers_connect_writes(selector: dict) -> tuple[bool, str]:
+def _advanced_selector_covers_connect_writes(
+    selector: dict,
+) -> tuple[Optional[bool], str]:
     candidates = {
         "eventCategory": "Management",
         "readOnly": "false",
@@ -947,20 +994,26 @@ def _advanced_selector_covers_connect_writes(selector: dict) -> tuple[bool, str]
     }
     fields = selector.get("FieldSelectors", []) or []
     if not isinstance(fields, list):
-        return False, "Advanced selector FieldSelectors is not a list."
+        return None, "Advanced selector FieldSelectors is not a list."
     if not any(
         isinstance(field_selector, dict) and field_selector.get("Field") == "eventCategory"
         for field_selector in fields
     ):
-        return False, "Advanced selector does not identify management events."
+        return None, "Advanced selector does not identify an event category."
 
     for field_selector in fields:
         if not isinstance(field_selector, dict):
-            return False, "Advanced selector contains a malformed field selector."
+            return None, "Advanced selector contains a malformed field selector."
         field = field_selector.get("Field")
         if field not in candidates:
-            return False, f"Unsupported advanced selector field {field!r} prevents proof."
-        if not _selector_condition_matches(candidates[field], field_selector):
+            return None, f"Unsupported advanced selector field {field!r} prevents proof."
+        condition_matches = _selector_condition_matches(candidates[field], field_selector)
+        if condition_matches is None:
+            return None, (
+                f"Advanced selector field {field!r} has malformed or unsupported "
+                "conditions that prevent proof."
+            )
+        if condition_matches is False:
             return False, (
                 f"Advanced selector field {field!r} excludes the Connect management "
                 "write-event candidate."
@@ -986,12 +1039,12 @@ def _basic_selector_covers_connect_writes(selector: dict) -> tuple[bool, str]:
     )
 
 
-def _selector_coverage_reasoning(response: dict) -> tuple[bool, list[dict]]:
+def _selector_coverage_reasoning(response: dict) -> tuple[Optional[bool], list[dict]]:
     reasoning: list[dict] = []
-    covered = False
+    selector_states: list[Optional[bool]] = []
     for index, selector in enumerate(response.get("EventSelectors", []) or []):
         qualifies, reason = _basic_selector_covers_connect_writes(selector)
-        covered = covered or qualifies
+        selector_states.append(qualifies)
         reasoning.append(
             {
                 "selector_type": "basic",
@@ -1002,7 +1055,7 @@ def _selector_coverage_reasoning(response: dict) -> tuple[bool, list[dict]]:
         )
     for index, selector in enumerate(response.get("AdvancedEventSelectors", []) or []):
         qualifies, reason = _advanced_selector_covers_connect_writes(selector)
-        covered = covered or qualifies
+        selector_states.append(qualifies)
         reasoning.append(
             {
                 "selector_type": "advanced",
@@ -1020,7 +1073,12 @@ def _selector_coverage_reasoning(response: dict) -> tuple[bool, list[dict]]:
                 "reason": "GetEventSelectors returned no basic or advanced selectors.",
             }
         )
-    return covered, reasoning
+        return False, reasoning
+    if any(state is True for state in selector_states):
+        return True, reasoning
+    if any(state is None for state in selector_states):
+        return None, reasoning
+    return False, reasoning
 
 
 class CloudTrailIntegrationCheck(BaseCheck):
@@ -1112,10 +1170,18 @@ class CloudTrailIntegrationCheck(BaseCheck):
                 qualifying_trails.append(trail_name or trail_identifier)
             trail_evidence.append(item)
 
+        indeterminate_selector_trails = [
+            item["trail_name"] or item["trail_arn"]
+            for item in trail_evidence
+            if item["is_logging"] is True
+            and item["selector_covers_connect_management_writes"] is None
+        ]
         evidence = {
             "trail_count": len(trails),
             "qualifying_trails": qualifying_trails,
-            "inspection_complete": not detail_failures,
+            "inspection_complete": not detail_failures and not indeterminate_selector_trails,
+            "selector_analysis_complete": not indeterminate_selector_trails,
+            "indeterminate_selector_trails": indeterminate_selector_trails,
             "trail_details": trail_evidence,
             "detail_failures": detail_failures,
             "limitations": [
@@ -1127,7 +1193,9 @@ class CloudTrailIntegrationCheck(BaseCheck):
 
         if qualifying_trails:
             qualifier = (
-                " Other returned trails could not be fully inspected." if detail_failures else ""
+                " Other returned trails could not be fully inspected."
+                if detail_failures or indeterminate_selector_trails
+                else ""
             )
             return self.create_finding(
                 status=CheckStatus.PASS,
@@ -1141,15 +1209,15 @@ class CloudTrailIntegrationCheck(BaseCheck):
                 evidence=evidence,
             )
 
-        if detail_failures:
+        if detail_failures or indeterminate_selector_trails:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    "CloudTrail trail details could not be fully inspected, so the "
-                    "absence of active Connect management write-event coverage could "
-                    "not be established."
+                    "CloudTrail trail details or advanced selectors could not be fully "
+                    "evaluated, so the absence of active Connect management write-event "
+                    "coverage could not be established."
                 ),
                 evidence=evidence,
             )

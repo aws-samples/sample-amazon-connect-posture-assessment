@@ -51,8 +51,8 @@ The HTML report spans two ownership boundaries:
   chart drill-downs, adaptive evidence cards/tables, browser CSV/JSON exports,
   and print/save-as-PDF behavior.
 
-The committed frontend bundle lets Python users run without Node. When
-`frontend/` changes, run:
+The committed frontend bundle lets Python users run without Node. The frontend
+source is maintained in this repository. When `frontend/` changes, run:
 
 ```bash
 cd frontend
@@ -66,6 +66,16 @@ cd ..
 `npm run check` verifies that the committed bundle under
 `amazon_connect_assessment/templates/app/` matches the maintained frontend
 source.
+
+The packaged report shell uses a static, single-pass placeholder contract:
+`@@STYLE_SRC@@`, `@@SCRIPT_SRC@@`, `@@REPORT_TITLE@@`, `@@APP_CSS@@`,
+`@@REPORT_DATA_JSON@@`, and `@@APP_JS@@`. Replacement values are not rescanned,
+and ordinary text values are HTML-escaped. If a caller supplies `template_dir`,
+`ReportGenerator` fails immediately when the directory or
+`assessment_report.html` is missing, when a required placeholder is absent,
+when an unsupported placeholder is present, or when legacy Jinja syntax remains.
+It never silently falls back to the packaged template. Custom templates must be
+migrated to the static placeholders before use.
 
 ---
 
@@ -455,7 +465,8 @@ into view.
 Evidence rendering is adaptive. Structured records use a Cloudscape table when
 the container width is at least `max(320px, column_count × 160px)` and cards
 when it is narrower. A resize observer updates the choice as the details panel
-changes width. Print rendering uses complete, unabridged evidence values.
+changes width. Print rendering uses complete, unabridged descriptions,
+methodology, remediation or review actions, and evidence values.
 
 Export scope is deliberate. Top-level HTML report JSON and CSV actions export
 the complete embedded run, independent of the current instance selector and
@@ -475,7 +486,7 @@ GitHub Actions runs on every push and PR to `main`:
 - **Type check** — mypy
 - **Security audit** — pip-audit on dependencies
 
-See `.github/workflows/ci.yml` (GitHub) or `.gitlab-ci.yml` (GitLab) for the full definition.
+See `.github/workflows/ci.yml` for the full definition.
 
 ---
 

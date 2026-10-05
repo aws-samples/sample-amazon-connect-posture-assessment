@@ -300,7 +300,7 @@ class TestLambdaDependencyRiskCheck:
         }
         assert actual_references == set(references)
 
-    def test_lambda_dependency_unreachable_call_is_ignored(
+    def test_lambda_dependency_only_unreachable_call_returns_not_applicable(
         self, make_check_context, sample_connect_instance, mock_aws_client_factory
     ):
         # Arrange
@@ -322,7 +322,7 @@ class TestLambdaDependencyRiskCheck:
         finding = LambdaDependencyRiskCheck().execute(make_check_context(instance=instance))
 
         # Assert
-        assert finding.status == CheckStatus.PASS
+        assert finding.status == CheckStatus.NOT_APPLICABLE
         assert finding.evidence["unreachable_lambda_blocks"] == 1
         assert finding.evidence["reachable_lambda_call_sites"] == 0
         mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
@@ -573,11 +573,11 @@ class TestErrorRoutingOwnership:
         # Assert
         assert flow_finding.status == CheckStatus.FAIL
         assert flow_finding.evidence["missing_error_branches"] == 1
-        assert lambda_finding.status == CheckStatus.PASS
+        assert lambda_finding.status == CheckStatus.NOT_APPLICABLE
         assert lambda_finding.evidence["reachable_lambda_call_sites"] == 0
         mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()
 
-    def test_error_routing_default_sample_flow_defects_are_ignored_and_pass(
+    def test_error_routing_default_sample_flow_returns_flow_pass_and_lambda_not_applicable(
         self, make_check_context, sample_connect_instance, mock_aws_client_factory
     ):
         # Arrange
@@ -603,7 +603,7 @@ class TestErrorRoutingOwnership:
 
         # Assert
         assert flow_finding.status == CheckStatus.PASS
-        assert lambda_finding.status == CheckStatus.PASS
+        assert lambda_finding.status == CheckStatus.NOT_APPLICABLE
         assert flow_finding.evidence["sample_flows_excluded"] == 1
         assert lambda_finding.evidence["sample_flows_excluded"] == 1
         mock_aws_client_factory.get_lambda_function_resilient.assert_not_called()

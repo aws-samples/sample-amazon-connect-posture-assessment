@@ -399,7 +399,7 @@ class ParallelAssessmentEngine(AssessmentEngine):
         findings: List[Finding],
     ) -> AssessmentResult:
         """Create the final assessment result with all data."""
-        self._validate_emitted_findings(findings)
+        findings = self._finalize_findings(findings, instances)
         summary = self._generate_summary(findings)
         metadata = self._generate_metadata()
 

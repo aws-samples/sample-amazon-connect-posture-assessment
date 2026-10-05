@@ -1,9 +1,10 @@
 """Report generation for the Amazon Connect Customer Posture Assessment Tool.
 
-The HTML report uses the React/Cloudscape application imported from the main
-AWS Samples repository. A static HTML shell (single-pass ``@@NAME@@`` placeholders) inlines the committed application
-bundle and one script-safe JSON data island. JSON and CSV exports share the same
-canonical finding, disposition, methodology, and scored-control contracts.
+The HTML report uses the React/Cloudscape application maintained in this
+repository. A static HTML shell with single-pass ``@@NAME@@`` placeholders
+inlines the committed application bundle and one script-safe JSON data island.
+JSON and CSV exports share the same canonical finding, disposition,
+methodology, and scored-control contracts.
 """
 
 import base64
@@ -92,6 +93,10 @@ class ReportGenerator:
 
     _TEMPLATE_NAME = "assessment_report.html"
     _PLACEHOLDER = re.compile(r"@@([A-Z_]+)@@")
+    _REQUIRED_PLACEHOLDERS = frozenset(
+        {"APP_CSS", "APP_JS", "REPORT_DATA_JSON", "REPORT_TITLE", "SCRIPT_SRC", "STYLE_SRC"}
+    )
+    _LEGACY_JINJA_MARKERS = ("{{", "{%", "{#")
     # Placeholders whose values are already script/style-safe (bundle text with
     # closing tags neutralised, the JSON island, generated CSP sources). Every
     # other placeholder is HTML-escaped.
@@ -100,16 +105,56 @@ class ReportGenerator:
     )
 
     def _resolve_template_path(self, template_dir: Optional[str]) -> Path:
-        """Locate the report shell template (custom directory or packaged)."""
-        if template_dir and os.path.exists(template_dir):
-            self.logger.info(f"Using custom template directory: {template_dir}")
+        """Locate and validate the report shell template.
+
+        Custom templates must use every ``@@NAME@@`` placeholder in
+        ``_REQUIRED_PLACEHOLDERS``. Legacy Jinja syntax is unsupported because
+        report generation no longer depends on Jinja.
+        """
+        if template_dir is not None:
             directory = Path(template_dir)
+            if not directory.is_dir():
+                raise FileNotFoundError(
+                    f"Custom report template directory does not exist or is not a directory: "
+                    f"{directory}"
+                )
+            self.logger.info(f"Using custom template directory: {template_dir}")
         else:
             directory = Path(__file__).parent / "templates" / "html"
+
         path = directory / self._TEMPLATE_NAME
         if not path.is_file():
             raise FileNotFoundError(f"Could not find report template at {path}")
+        if template_dir is not None:
+            self._validate_custom_template(path.read_text(encoding="utf-8"), path)
         return path
+
+    @classmethod
+    def _validate_custom_template(cls, template: str, path: Path) -> None:
+        """Reject unsupported syntax and incomplete custom shell contracts."""
+        if any(marker in template for marker in cls._LEGACY_JINJA_MARKERS):
+            raise ValueError(
+                f"Custom report template {path} uses legacy Jinja syntax. "
+                "Migrate {{ ... }}, {% ... %}, and {# ... #} expressions to the required "
+                "@@NAME@@ placeholders."
+            )
+
+        placeholders = set(cls._PLACEHOLDER.findall(template))
+        missing = sorted(cls._REQUIRED_PLACEHOLDERS - placeholders)
+        if missing:
+            required = ", ".join(f"@@{name}@@" for name in sorted(cls._REQUIRED_PLACEHOLDERS))
+            missing_text = ", ".join(f"@@{name}@@" for name in missing)
+            raise ValueError(
+                f"Custom report template {path} is missing required placeholders: "
+                f"{missing_text}. Required placeholders: {required}."
+            )
+
+        unsupported = sorted(placeholders - cls._REQUIRED_PLACEHOLDERS)
+        if unsupported:
+            names = ", ".join(f"@@{name}@@" for name in unsupported)
+            raise ValueError(
+                f"Custom report template {path} has unsupported placeholders: {names}."
+            )
 
     @classmethod
     def _render_template(cls, template: str, values: Dict[str, str]) -> str:
@@ -214,7 +259,7 @@ class ReportGenerator:
                 )
             report_data = {
                 "assessment_id": assessment_result.assessment_id,
-                "timestamp": assessment_result.timestamp.isoformat(),
+                "timestamp": to_utc(assessment_result.timestamp).isoformat(),
                 "account_id": assessment_result.account_id,
                 "region": assessment_result.region,
                 "journey_map_entries": json.loads(
@@ -330,7 +375,7 @@ class ReportGenerator:
             "remediation": finding.remediation,
             "structured_remediation": self._serialize_remediation(finding.structured_remediation),
             "evidence": finding.evidence,
-            "timestamp": finding.timestamp.isoformat(),
+            "timestamp": to_utc(finding.timestamp).isoformat(),
             "disposition": finding.disposition.value,
             "instance_id": finding.instance_id,
             "score_classification": classify_finding(finding).value,
@@ -537,7 +582,7 @@ class ReportGenerator:
 
                     row = [
                         assessment_result.assessment_id,
-                        finding.timestamp.isoformat(),
+                        to_utc(finding.timestamp).isoformat(),
                         assessment_result.account_id,
                         assessment_result.region,
                         instance_id,
@@ -605,7 +650,7 @@ class ReportGenerator:
             Generated filename
         """
         # Extract variables for substitution
-        timestamp = assessment_result.timestamp.strftime("%Y%m%d_%H%M%S")
+        timestamp = to_utc(assessment_result.timestamp).strftime("%Y%m%d_%H%M%S")
         account_id = assessment_result.account_id
         region = assessment_result.region
         assessment_id = assessment_result.assessment_id
@@ -765,6 +810,7 @@ class ReportGenerator:
         return {
             **serialized,
             "key": str(index),
+            "timestamp": self._format_datetime(finding.timestamp),
             "instance_id": instance_id,
             "resource_label": self._render_instance_label(finding.resource_id, alias_by_id),
             "instance": (
@@ -1444,11 +1490,9 @@ class ReportGenerator:
 
     @staticmethod
     def _humanize_key(key: Any) -> str:
-        """Turn ``hardcoded_details`` into ``Hardcoded details``."""
-        import html as _html
-
-        s = str(key).replace("_", " ").strip()
-        return _html.escape(s[:1].upper() + s[1:]) if s else ""
+        """Turn ``hardcoded_details`` into raw React-safe label text."""
+        text = str(key).replace("_", " ").strip()
+        return text[:1].upper() + text[1:] if text else ""
 
     @classmethod
     def _abbrev_arn(cls, arn: str) -> str:

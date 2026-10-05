@@ -62,6 +62,22 @@ def _truncate(text: str, max_length: int) -> str:
     return text[: max_length - len(marker)] + marker
 
 
+_ASFF_LEGACY_ID_ALIASES = {
+    "sec-flow-auth-001": "journey-sec-001",
+    "cost-containment-001": "journey-cost-001",
+}
+_ASFF_CANONICAL_CHECK_ALIASES = {
+    legacy_id: canonical_id for canonical_id, legacy_id in _ASFF_LEGACY_ID_ALIASES.items()
+}
+
+
+def _asff_check_identity(check_id: str) -> tuple[str, str]:
+    """Return canonical field identity and stable legacy provider identity."""
+    canonical_id = _ASFF_CANONICAL_CHECK_ALIASES.get(check_id, check_id)
+    provider_id = _ASFF_LEGACY_ID_ALIASES.get(canonical_id, canonical_id)
+    return canonical_id, provider_id
+
+
 def finding_to_asff(
     finding: Finding,
     account_id: str,
@@ -75,7 +91,9 @@ def finding_to_asff(
     severity_info = _SEVERITY_MAP.get(finding.severity, {"Label": "INFORMATIONAL", "Normalized": 0})
 
     methodology = finding.methodology
+    canonical_check_id, provider_check_id = _asff_check_identity(finding.check_id)
     product_fields = {
+        "amazon-connect-assessment/check-id": canonical_check_id,
         "amazon-connect-assessment/disposition": finding.disposition.value,
     }
     if finding.instance_id:
@@ -98,14 +116,9 @@ def finding_to_asff(
                     value, _MAX_PRODUCT_FIELD_LENGTH
                 )
 
-    finding_identity = (
-        f"{finding.instance_id}/{finding.resource_id}"
-        if finding.instance_id
-        else finding.resource_id
-    )
     return {
         "SchemaVersion": "2018-10-08",
-        "Id": f"{generator_id}/{finding.check_id}/{finding_identity}",
+        "Id": f"{generator_id}/{provider_check_id}/{finding.resource_id}",
         "ProductArn": f"arn:aws:securityhub:{region}:{account_id}:product/{account_id}/default",
         "GeneratorId": generator_id,
         "ProductFields": product_fields,

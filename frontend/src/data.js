@@ -56,6 +56,16 @@ export function defaultFilterQuery(data) {
 
 export const SEVERITIES = ['critical', 'high', 'medium', 'low'];
 export const SEVERITY_RANK = Object.fromEntries(SEVERITIES.map((s, i) => [s, i]));
+const CANONICAL_JOURNEY_CHECK_IDS = new Set([
+  'sec-flow-auth-001',
+  'cost-containment-001',
+  'journey-res-001',
+  'journey-scope-001',
+]);
+const LEGACY_JOURNEY_CHECK_ALIASES = {
+  'journey-sec-001': 'sec-flow-auth-001',
+  'journey-cost-001': 'cost-containment-001',
+};
 export const SEVERITY_COLOR = {
   critical: colorChartsStatusCritical,
   high: colorChartsStatusHigh,
@@ -113,6 +123,28 @@ export function printableFindings(findings) {
       (SEVERITY_RANK[a.severity] ?? SEVERITIES.length) - (SEVERITY_RANK[b.severity] ?? SEVERITIES.length) ||
       String(a.check_name).localeCompare(String(b.check_name)),
   );
+}
+
+export function printableRemediation(finding) {
+  const structured = finding.structured_remediation;
+  if (!structured) {
+    return finding.remediation_html
+      ? { kind: 'flat', html: finding.remediation_html }
+      : { kind: 'none' };
+  }
+  return {
+    kind: 'structured',
+    summary: structured.summary ?? '',
+    applies_if: structured.applies_if ?? '',
+    steps: [...(structured.steps ?? [])].sort((a, b) => Number(a.order) - Number(b.order)),
+    target_resources: [...(structured.target_resources ?? [])],
+    references: [...(structured.references ?? [])],
+  };
+}
+
+function isJourneyFinding(finding) {
+  const canonicalId = LEGACY_JOURNEY_CHECK_ALIASES[finding.check_id] ?? finding.check_id;
+  return CANONICAL_JOURNEY_CHECK_IDS.has(canonicalId);
 }
 
 // Only http(s), mailto and relative URLs may become link targets.
@@ -223,8 +255,9 @@ function riskScore(findings) {
   return Math.min(100, Math.trunc(failed.reduce((sum, finding) => sum + (weights[finding.severity] ?? 1), 0) / (failed.length * 10) * 100));
 }
 
-function scopedStats(data, findings, instances) {
+function scopedStats(data, findings, instances, assessmentUnattributedFindings) {
   const summary = summarize(findings);
+  const journeyFindings = findings.filter(isJourneyFinding).length;
   const severity_breakdown = Object.fromEntries(
     SEVERITIES.map((severity) => [severity, findings.filter(
       (finding) => finding.score_classification === 'scored_fail' && finding.severity === severity,
@@ -236,9 +269,12 @@ function scopedStats(data, findings, instances) {
   ]));
   const passRate = summary.scored_control_pass_rate;
   return {
-    ...data.stats,
     ...summary,
-    total_records: findings.length,
+    total_checks: findings.length,
+    registered_checks: findings.length - journeyFindings,
+    journey_findings: journeyFindings,
+    unattributed_findings: findings.filter((finding) => !finding.instance_id).length,
+    assessment_unattributed_findings: assessmentUnattributedFindings,
     pass_rate: passRate === null ? null : Math.round(passRate * 10) / 10,
     pass_rate_display: passRate === null ? 'Not scored' : `${passRate.toFixed(1)}%`,
     risk_score: riskScore(findings),
@@ -255,6 +291,8 @@ function scopedStats(data, findings, instances) {
     severity_breakdown,
     pillar_issues,
     instances_assessed: instances.length,
+    execution_time: data.stats.execution_time,
+    execution_time_scope: 'assessment',
     has_critical_issues: severity_breakdown.critical > 0,
     has_high_issues: severity_breakdown.high > 0,
   };
@@ -305,7 +343,7 @@ function scopedCharts(data, findings) {
 
 const pillarTitle = (id) => id.split('_').map(capitalize).join(' ');
 
-function scopedExecutive(data, findings) {
+function scopedExecutive(data, findings, assessmentUnattributedFindings, selectedInstanceId) {
   const failed = findings.filter((finding) => finding.score_classification === 'scored_fail');
   const critical = failed.filter((finding) => finding.severity === 'critical');
   const high = failed.filter((finding) => finding.severity === 'high');
@@ -321,6 +359,16 @@ function scopedExecutive(data, findings) {
   if (summary.manual_review_candidates) {
     const count = summary.manual_review_candidates;
     insights.push({ type: 'info', message: `${count} manual-review candidate${count === 1 ? '' : 's'} require validation before closure.` });
+  }
+  if (assessmentUnattributedFindings) {
+    const count = assessmentUnattributedFindings;
+    const records = `finding${count === 1 ? '' : 's'}`;
+    insights.push({
+      type: 'info',
+      message: selectedInstanceId
+        ? `${count} unattributed ${records} are excluded from this instance scope and remain available in All instances.`
+        : `${count} unattributed ${records} are included only in All instances because no instance could be determined.`,
+    });
   }
   const recommendations = [];
   if (critical.length) recommendations.push({ priority: 'critical', title: 'Address Critical Failed Controls', description: `Review and remediate ${critical.length} critical failed controls.`, findings_count: critical.length, query: FILTER_QUERIES.failedSeverity('critical') });
@@ -347,17 +395,24 @@ function scopedFilters(findings) {
 
 export function scopeReportData(data, instanceId = 'all') {
   const selected = instanceId && instanceId !== 'all' ? instanceId : null;
+  const unattributedFindings = data.findings.filter((finding) => !finding.instance_id);
   const findings = data.findings.filter((finding) => !selected || finding.instance_id === selected);
   const instances = data.instances.filter((instance) => !selected || instance.id === selected);
   const journeyEntries = data.journey.entries.filter((entry) => !selected || entry.instance_id === selected);
-  const executive = scopedExecutive(data, findings);
+  const executive = scopedExecutive(data, findings, unattributedFindings.length, selected);
   return {
     ...data,
     scope_instance_id: selected,
+    unattributed_findings_count: unattributedFindings.length,
+    scope_notice: unattributedFindings.length
+      ? selected
+        ? `${unattributedFindings.length} unattributed findings excluded from this instance scope.`
+        : `${unattributedFindings.length} unattributed findings included only in All instances.`
+      : null,
     findings,
     instances,
     journey: { ...data.journey, entries: journeyEntries },
-    stats: scopedStats(data, findings, instances),
+    stats: scopedStats(data, findings, instances, unattributedFindings.length),
     charts: scopedCharts(data, findings),
     insights: executive.insights,
     recommendations: executive.recommendations,

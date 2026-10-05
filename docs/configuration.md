@@ -272,7 +272,11 @@ journey_map:
 The HTML Caller Journey Map is phone-number driven: it renders every available
 contact flow targeted by an inbound number. It has no `top_n` setting. The
 `journey_map` values above control the separate journey-scoring pipeline and its
-findings.
+findings. That pipeline performs bounded static enumeration, not exhaustive
+runtime exploration: it uses depth 50 and 200 paths per phone number by default,
+with a fixed 5,000-path run cap. Cycle edges are pruned without reducing static
+structural reachability; reached caps, dynamic targets, and unresolved flow
+references mark enumeration incomplete.
 
 ## Check Configuration Options
 
@@ -309,7 +313,9 @@ problem. `--validate-config` runs the same checks and exits. The following are v
 - The output directory must be a directory, or creatable: its nearest existing parent must
   be a writable directory.
 - The filename template may only use `{timestamp}`, `{account_id}`, `{region}`, and
-  `{assessment_id}`, and must produce a filename, not a path.
+  `{assessment_id}`, and must produce a filename, not a path. Unknown or legacy
+  placeholders fail validation before AWS is contacted; they are not rendered
+  as literal text or silently ignored.
 - `--s3-bucket` must be a valid S3 bucket name; `--diff` must be an existing JSON report;
   `--log-file` must be in an existing, writable directory.
 - `--resume-assessment` must have a checkpoint (and cannot be combined with `--no-checkpoints`).

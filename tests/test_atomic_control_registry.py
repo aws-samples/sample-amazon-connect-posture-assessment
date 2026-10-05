@@ -289,3 +289,14 @@ def test_atomic_catalog_execution_sources_match_increment_2b_expected_result():
         "journey-res-001",
         "journey-scope-001",
     }
+
+
+def test_atomic_control_registry_hardcoded_routing_requires_flow_analysis_expected_result():
+    # Arrange
+    registry = get_atomic_control_registry()
+
+    # Act
+    control = registry.get("res-hardcoded-routing-001")
+
+    # Assert
+    assert control.requires_flow_analysis is True

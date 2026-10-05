@@ -1,7 +1,7 @@
 """Shared methodology policy for classifying and scoring findings."""
 
 from enum import Enum
-from typing import Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from .models import CheckStatus, Finding, FindingDisposition
 
@@ -27,6 +27,16 @@ def classify_finding(finding: Finding) -> FindingScoreClassification:
     if finding.status == CheckStatus.FAIL:
         return FindingScoreClassification.SCORED_FAIL
     return FindingScoreClassification.UNEVALUATED_CONTROL
+
+
+def count_finding_classifications(
+    findings: Iterable[Finding],
+) -> Dict[FindingScoreClassification, int]:
+    """Return counts for every shared score classification."""
+    counts = {classification: 0 for classification in FindingScoreClassification}
+    for finding in findings:
+        counts[classify_finding(finding)] += 1
+    return counts
 
 
 def compute_scored_control_counts(findings: Iterable[Finding]) -> Tuple[int, int]:

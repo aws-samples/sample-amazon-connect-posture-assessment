@@ -1,8 +1,43 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Header } from '@cloudscape-design/components';
-import { capitalize, dispositionLabel, flattenEvidenceForPrint, printableFindings, scoreClassificationLabel, statusLabel } from './data';
+import { capitalize, dispositionLabel, flattenEvidenceForPrint, printableFindings, printableRemediation, scoreClassificationLabel, statusLabel } from './data';
 import { Markdown } from './FindingDetail';
+
+function PrintRemediation({ remediation }) {
+  if (remediation.kind === 'none') return <p>No remediation guidance.</p>;
+  if (remediation.kind === 'flat') return <Markdown html={remediation.html} />;
+  return (
+    <div className="acr-print-remediation">
+      <p><strong>{remediation.summary}</strong></p>
+      {remediation.applies_if && <p><strong>Applies if relevant:</strong> {remediation.applies_if}</p>}
+      <ol>
+        {remediation.steps.map((step) => (
+          <li key={step.order}>
+            <Markdown html={step.instruction_html} />
+            {step.console_path && <p><strong>Console:</strong> {step.console_path}</p>}
+            {step.command && <pre><code>{step.command}</code></pre>}
+          </li>
+        ))}
+      </ol>
+      {remediation.target_resources.length > 0 && (
+        <p><strong>Targets:</strong> {remediation.target_resources.join(', ')}</p>
+      )}
+      {remediation.references.length > 0 && (
+        <div>
+          <strong>References</strong>
+          <ul>
+            {remediation.references.map((reference) => (
+              <li key={reference.url + reference.title}>
+                {reference.title}{reference.url ? ` (${reference.url})` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Stand-in for the interactive findings table when printing: that table shows one
 // filtered page, so a PDF of it would silently drop most findings. The complete
@@ -32,6 +67,7 @@ export default function PrintFindings({ data, pillarLabel }) {
       <div className="acr-print-finding-list">
         {findings.map((f) => {
           const evidence = flattenEvidenceForPrint(f.evidence);
+          const remediation = printableRemediation(f);
           return (
             <article className="acr-print-finding" key={f.key}>
               <h3>{f.check_name}</h3>
@@ -55,9 +91,13 @@ export default function PrintFindings({ data, pillarLabel }) {
                     <dt>What the evidence cannot prove</dt><dd>{f.methodology.proof_limitations}</dd>
                     <dt>What this means</dt><dd>{f.methodology.developer_admin_meaning}</dd>
                     <dt>Verification and closure</dt><dd>{f.methodology.verification_criteria}</dd>
+                    {f.responsible_function && <><dt>Responsible function</dt><dd>{f.responsible_function}</dd></>}
+                    {f.primary_lens_reference && <><dt>Primary lens reference</dt><dd>{f.primary_lens_reference}</dd></>}
                   </dl>
                 </>
               )}
+              <h4>{f.action_label}</h4>
+              <PrintRemediation remediation={remediation} />
               {evidence.length > 0 && (
                 <>
                   <h4>Evidence</h4>

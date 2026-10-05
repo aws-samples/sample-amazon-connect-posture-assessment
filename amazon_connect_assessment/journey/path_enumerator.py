@@ -68,11 +68,15 @@ def enumerate_journeys_with_completeness(
     all_journeys: List[JourneyPath] = []
     limitations: List[str] = []
 
-    for entry in phone_entries:
+    for entry_index, entry in enumerate(phone_entries):
         if not entry.contact_flow_id:
+            limitations.append("phone entry is missing an associated contact flow")
             continue
         entry_key = super_graph.entry_points.get(entry.contact_flow_id)
         if not entry_key:
+            limitations.append(
+                f"contact flow {entry.contact_flow_id} is missing a graph entry point"
+            )
             continue
 
         paths, entry_limitations = _enumerate_from_entry(
@@ -86,18 +90,26 @@ def enumerate_journeys_with_completeness(
         all_journeys.extend(paths)
         limitations.extend(entry_limitations)
         if len(all_journeys) >= MAX_TOTAL_PATHS:
+            exceeded_limit = len(all_journeys) > MAX_TOTAL_PATHS
+            unprocessed_entries = entry_index < len(phone_entries) - 1
             all_journeys = all_journeys[:MAX_TOTAL_PATHS]
-            limitations.append(f"global path limit {MAX_TOTAL_PATHS} reached")
-            logger.warning(
-                f"Global path limit ({MAX_TOTAL_PATHS}) reached; stopping enumeration early"
-            )
-            break
+            if exceeded_limit or unprocessed_entries:
+                limitations.append(f"global path limit {MAX_TOTAL_PATHS} reached")
+                logger.warning(
+                    f"Global path limit ({MAX_TOTAL_PATHS}) reached; stopping enumeration early"
+                )
+                break
 
     limitations = list(dict.fromkeys(limitations))
+    coverage_limitations = [
+        limitation
+        for limitation in limitations
+        if not limitation.startswith("loop-back edges pruned")
+    ]
     logger.info(
         f"Enumerated {len(all_journeys)} journey paths across {len(phone_entries)} phone numbers"
     )
-    return all_journeys, not limitations, limitations
+    return all_journeys, not coverage_limitations, limitations
 
 
 def _enumerate_from_entry(
@@ -125,6 +137,7 @@ def _enumerate_from_entry(
         node = graph.get_node(current_key)
 
         if node is None:
+            limitations.append(f"graph node {current_key} is missing")
             continue
 
         current_path = path_nodes + [node]
@@ -193,6 +206,7 @@ def _enumerate_from_entry(
             # whether/how to surface it, rather than conflating it with an
             # actual dead end.
             if node.action_type in _CROSS_FLOW_ACTION_TYPES:
+                limitations.append("unresolved dynamic transfer target")
                 paths.append(
                     JourneyPath(
                         entry_number=entry_number,
@@ -239,8 +253,8 @@ def _enumerate_from_entry(
 
     if loop_backs_dropped:
         limitations.append(
-            "loop-back edges were not followed (cycles in the flow graph); "
-            "paths that would revisit a node are not enumerated"
+            f"loop-back edges pruned: {loop_backs_dropped}; cycles were present but ordinary "
+            "node revisits were not enumerated"
         )
     if stack and not any(item.startswith("per-entry step limit") for item in limitations):
         limitations.append(f"per-entry path limit {max_paths} reached")

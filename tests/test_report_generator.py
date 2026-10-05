@@ -1074,3 +1074,70 @@ def test_template_renderer_is_single_pass_and_escapes_text():
         {"REPORT_TITLE": '<b>"x"</b> @@APP_JS@@', "APP_JS": "@@REPORT_TITLE@@"},
     )
     assert rendered == "<t>&lt;b&gt;&quot;x&quot;&lt;/b&gt; @@APP_JS@@</t><s>@@REPORT_TITLE@@</s>"
+
+
+def _write_custom_template(template_dir, content: str) -> None:
+    template_dir.mkdir()
+    (template_dir / "assessment_report.html").write_text(content, encoding="utf-8")
+
+
+def test_custom_template_directory_missing_fails_instead_of_falling_back(tmp_path):
+    # Arrange
+    missing = tmp_path / "missing-templates"
+
+    # Act / Assert
+    with pytest.raises(FileNotFoundError, match="Custom report template directory"):
+        ReportGenerator(template_dir=str(missing))
+
+
+def test_custom_template_with_legacy_jinja_syntax_fails_with_migration_error(tmp_path):
+    # Arrange
+    template_dir = tmp_path / "templates"
+    _write_custom_template(
+        template_dir,
+        "{{ title }} @@STYLE_SRC@@ @@SCRIPT_SRC@@ @@REPORT_TITLE@@ "
+        "@@APP_CSS@@ @@APP_JS@@ @@REPORT_DATA_JSON@@",
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="legacy Jinja syntax.*@@NAME@@"):
+        ReportGenerator(template_dir=str(template_dir))
+
+
+def test_custom_template_missing_required_placeholders_lists_complete_contract(tmp_path):
+    # Arrange
+    template_dir = tmp_path / "templates"
+    _write_custom_template(template_dir, "<title>@@REPORT_TITLE@@</title>")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="missing required placeholders") as error:
+        ReportGenerator(template_dir=str(template_dir))
+    for placeholder in ReportGenerator._REQUIRED_PLACEHOLDERS:
+        assert f"@@{placeholder}@@" in str(error.value)
+
+
+def test_custom_template_with_unsupported_placeholder_fails_fast(tmp_path):
+    # Arrange
+    template_dir = tmp_path / "templates"
+    placeholders = " ".join(
+        f"@@{name}@@" for name in sorted(ReportGenerator._REQUIRED_PLACEHOLDERS)
+    )
+    _write_custom_template(template_dir, f"{placeholders} @@UNKNOWN_VALUE@@")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="unsupported placeholders: @@UNKNOWN_VALUE@@"):
+        ReportGenerator(template_dir=str(template_dir))
+
+
+def test_humanize_key_returns_raw_special_characters_for_react_text_rendering():
+    # Arrange
+    key = "<queue_&_routing>"
+
+    # Act
+    label = ReportGenerator._humanize_key(key)
+    evidence = ReportGenerator._evidence_view({key: "safe text"})
+
+    # Assert
+    assert label == "<queue & routing>"
+    assert evidence["pairs"][0]["label"] == "<queue & routing>"
+    assert "&lt;" not in label

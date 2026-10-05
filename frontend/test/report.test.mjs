@@ -18,6 +18,7 @@ import {
   loadReportData,
   makeFilterRequest,
   printableFindings,
+  printableRemediation,
   safeHref,
   scopeReportData,
 } from '../src/data.js';
@@ -272,6 +273,57 @@ describe('printableFindings', () => {
   });
 });
 
+describe('printable remediation', () => {
+  it('normalizes complete structured remediation in step order without the flat fallback', () => {
+    const finding = {
+      remediation_html: '<p>flat fallback</p>',
+      structured_remediation: {
+        summary: 'Summary',
+        applies_if: 'Applicable',
+        steps: [
+          { order: 2, instruction_html: '<p>Second</p>', command: 'second', console_path: 'Console / Second' },
+          { order: 1, instruction_html: '<p>First</p>', command: 'first', console_path: 'Console / First' },
+        ],
+        target_resources: ['queue-1'],
+        references: [{ title: 'Guide', url: 'https://docs.aws.amazon.com/guide' }],
+      },
+    };
+
+    const remediation = printableRemediation(finding);
+
+    assert.equal(remediation.kind, 'structured');
+    assert.equal(remediation.summary, 'Summary');
+    assert.equal(remediation.applies_if, 'Applicable');
+    assert.deepEqual(remediation.steps.map((step) => step.order), [1, 2]);
+    assert.deepEqual(remediation.target_resources, ['queue-1']);
+    assert.deepEqual(remediation.references, [{ title: 'Guide', url: 'https://docs.aws.amazon.com/guide' }]);
+    assert.equal('html' in remediation, false);
+  });
+
+  it('uses flat remediation only when structured remediation is absent', () => {
+    assert.deepEqual(
+      printableRemediation({ remediation_html: '<p>Flat guidance</p>', structured_remediation: null }),
+      { kind: 'flat', html: '<p>Flat guidance</p>' },
+    );
+    assert.deepEqual(printableRemediation({ remediation_html: '', structured_remediation: null }), { kind: 'none' });
+  });
+
+  it('renders every required print section once through the shared normalization path', () => {
+    const source = readFileSync(new URL('../src/PrintFindings.jsx', import.meta.url), 'utf8');
+    const occurrences = (needle) => source.split(needle).length - 1;
+
+    assert.ok(source.includes('const remediation = printableRemediation(f);'));
+    assert.ok(source.includes('<PrintRemediation remediation={remediation} />'));
+    assert.equal(occurrences('f.action_label'), 1);
+    assert.equal(occurrences('f.responsible_function'), 2);
+    assert.equal(occurrences('<dt>Responsible function</dt>'), 1);
+    assert.equal(occurrences('f.primary_lens_reference'), 2);
+    assert.equal(occurrences('<dt>Primary lens reference</dt>'), 1);
+    assert.ok(source.includes('flattenEvidenceForPrint(f.evidence)'));
+    assert.ok(!source.includes('dangerouslySetInnerHTML'));
+  });
+});
+
 describe('safeHref', () => {
   it('allows http, https, mailto and relative URLs', () => {
     for (const url of ['https://docs.aws.amazon.com/x', 'HTTP://a.b', 'mailto:a@b.c', '/docs/x', 'page.html']) {
@@ -292,6 +344,12 @@ describe('markdown rendering', () => {
     assert.ok(!source.includes('dangerouslySetInnerHTML'));
     assert.ok(source.includes('RETURN_DOM_FRAGMENT'));
     assert.ok(source.includes('replaceChildren'));
+  });
+  it('keeps backend-humanized evidence labels in React text properties', () => {
+    const source = readFileSync(new URL('../src/FindingDetail.jsx', import.meta.url), 'utf8');
+    assert.ok(source.includes('label: p.label'));
+    assert.ok(source.includes('headerText={section.title}'));
+    assert.ok(!source.includes('dangerouslySetInnerHTML'));
   });
 });
 
@@ -320,12 +378,53 @@ describe('report instance scope', () => {
     assert.deepEqual(scoped.journey.entries.map((entry) => entry.instance_id), ['i-0002']);
     assert.deepEqual(scoped.stats.scored_control_numerator, 1);
     assert.deepEqual(scoped.stats.scored_control_denominator, 1);
+    assert.deepEqual(scoped.stats.total_checks, 3);
+    assert.deepEqual(scoped.stats.registered_checks, 3);
+    assert.deepEqual(scoped.stats.journey_findings, 0);
+    assert.deepEqual(scoped.stats.execution_time, data.stats.execution_time);
+    assert.deepEqual(scoped.stats.execution_time_scope, 'assessment');
     assert.deepEqual(scoped.stats.manual_review_candidates, 1);
     assert.deepEqual(scoped.stats.unevaluated_controls, 1);
     assert.deepEqual(scoped.charts.status_distribution.data, [1, 0, 1, 0, 1, 0]);
     assert.match(scoped.insights.at(-1).message, /manual-review candidate/);
     assert.deepEqual(scoped.recommendations, []);
     assert.deepEqual(data, before, 'original report data is not mutated');
+  });
+
+  it('counts canonical Journey controls from scoped findings', () => {
+    const data = twoInstanceReport();
+    data.findings[2].check_id = 'sec-flow-auth-001';
+
+    const scoped = scopeReportData(data, 'i-0002');
+
+    assert.equal(scoped.stats.total_checks, 3);
+    assert.equal(scoped.stats.journey_findings, 1);
+    assert.equal(scoped.stats.registered_checks, 2);
+  });
+
+  it('includes unattributed findings only in All scope and exposes their policy', () => {
+    const data = twoInstanceReport();
+    const unattributed = { ...data.findings[0], key: 'unattributed', instance_id: null, instance: 'unknown' };
+    data.findings.push(unattributed);
+
+    const all = scopeReportData(data, 'all');
+    const primary = scopeReportData(data, 'i-0001');
+    const secondary = scopeReportData(data, 'i-0002');
+
+    assert.equal(all.findings.filter((finding) => finding.key === 'unattributed').length, 1);
+    assert.equal(primary.findings.some((finding) => finding.key === 'unattributed'), false);
+    assert.equal(secondary.findings.some((finding) => finding.key === 'unattributed'), false);
+    assert.equal(all.stats.total_checks, data.findings.length);
+    assert.equal(primary.stats.total_checks, 2);
+    assert.equal(secondary.stats.total_checks, 3);
+    assert.equal(all.stats.unattributed_findings, 1);
+    assert.equal(primary.stats.unattributed_findings, 0);
+    assert.equal(primary.stats.assessment_unattributed_findings, 1);
+    assert.equal(all.unattributed_findings_count, 1);
+    assert.match(all.scope_notice, /included only in All instances/);
+    assert.match(primary.scope_notice, /excluded from this instance scope/);
+    assert.match(all.insights.at(-1).message, /included only in All instances/);
+    assert.match(primary.insights.at(-1).message, /excluded from this instance scope/);
   });
 
   it('returns fresh derived collections for all instances and preserves totals', () => {

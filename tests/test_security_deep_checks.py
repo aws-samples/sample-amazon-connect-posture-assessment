@@ -65,6 +65,95 @@ class TestIAMServiceRolePolicyCheck:
         assert finding.status == CheckStatus.FAIL
         assert "least-privilege" in finding.description.lower()
 
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "dynamodb:BatchWriteItem",
+            "dynamodb:BatchExecuteStatement",
+            "example:BatchCreateThing",
+            "example:BatchDeleteThing",
+            "example:BatchPutThing",
+            "example:BatchStopThing",
+            "example:BatchGrantThing",
+            "example:BatchRevokeThing",
+            "example:BatchAssociateThing",
+            "example:BatchDisassociateThing",
+        ],
+    )
+    def test_iam_batch_write_action_on_wildcard_resource_returns_fail(
+        self, action, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        factory.list_role_policies_resilient.return_value = {"PolicyNames": ["batch-write"]}
+        factory.get_role_policy_resilient.return_value = {
+            "PolicyDocument": {
+                "Statement": [{"Effect": "Allow", "Action": action, "Resource": "*"}]
+            }
+        }
+        factory.list_attached_role_policies_resilient.return_value = {"AttachedPolicies": []}
+
+        # Act
+        finding = IAMServiceRolePolicyCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["least_privilege_violations"][0]["action"] == action
+
+    def test_iam_batch_write_actions_on_scoped_resource_return_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        actions = ["dynamodb:BatchWriteItem", "dynamodb:BatchExecuteStatement"]
+        factory.list_role_policies_resilient.return_value = {"PolicyNames": ["scoped-batch"]}
+        factory.get_role_policy_resilient.return_value = {
+            "PolicyDocument": {
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": actions,
+                        "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/example",
+                    }
+                ]
+            }
+        }
+        factory.list_attached_role_policies_resilient.return_value = {"AttachedPolicies": []}
+
+        # Act
+        finding = IAMServiceRolePolicyCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["least_privilege_violations"] == []
+
+    @pytest.mark.parametrize(
+        "action",
+        ["dynamodb:BatchGetItem", "example:BatchDescribeThing", "example:BatchCheckThing"],
+    )
+    def test_iam_batch_read_action_on_wildcard_resource_returns_pass(
+        self, action, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        factory.list_role_policies_resilient.return_value = {"PolicyNames": ["batch-read"]}
+        factory.get_role_policy_resilient.return_value = {
+            "PolicyDocument": {
+                "Statement": [{"Effect": "Allow", "Action": action, "Resource": "*"}]
+            }
+        }
+        factory.list_attached_role_policies_resilient.return_value = {"AttachedPolicies": []}
+
+        # Act
+        finding = IAMServiceRolePolicyCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["least_privilege_violations"] == []
+
     def test_out_of_scope_action_fails(self, make_check_context, mock_aws_client_factory):
         _wire_real_access_denied(mock_aws_client_factory)
         f = mock_aws_client_factory
@@ -445,6 +534,34 @@ class TestInstanceStorageEncryptionCheck:
         assert finding.evidence["analysis_complete"] is False
         assert finding.evidence["resource_types_failed"][0]["resource_type"] == "CHAT_TRANSCRIPTS"
 
+    @pytest.mark.parametrize("error_code", ["InvalidRequestException", "ResourceNotFoundException"])
+    def test_storage_uncertain_api_error_returns_skipped_with_error_code(
+        self, error_code, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+
+        def _configs(instance_id, resource_type):
+            if resource_type == "CHAT_TRANSCRIPTS":
+                raise ClientError(
+                    {"Error": {"Code": error_code, "Message": "uncertain"}},
+                    "ListInstanceStorageConfigs",
+                )
+            return {"StorageConfigs": []}
+
+        factory.list_instance_storage_configs_resilient.side_effect = _configs
+
+        # Act
+        finding = InstanceStorageEncryptionCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        failure = finding.evidence["resource_types_failed"][0]
+        assert failure["resource_type"] == "CHAT_TRANSCRIPTS"
+        assert failure["error_code"] == error_code
+        assert finding.evidence["analysis_complete"] is False
+
     def test_missing_encryption_with_partial_evidence_stays_fail_expected_result(
         self, make_check_context, mock_aws_client_factory
     ):
@@ -640,6 +757,86 @@ class TestCloudTrailIntegrationCheck:
         # Assert
         assert finding.status == CheckStatus.FAIL
         assert "eventSource" in str(finding.evidence["trail_details"][0]["selector_reasoning"])
+
+    def test_cloudtrail_advanced_unsupported_field_returns_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        factory.describe_trails_resilient.return_value = {"trailList": [{"Name": "audit"}]}
+        factory.get_trail_status_resilient.return_value = {"IsLogging": True}
+        selectors = _advanced_selector()
+        selectors["AdvancedEventSelectors"][0]["FieldSelectors"].append(
+            {"Field": "resources.type", "Equals": ["AWS::Connect::Instance"]}
+        )
+        factory.get_trail_event_selectors_resilient.return_value = selectors
+
+        # Act
+        finding = CloudTrailIntegrationCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["selector_analysis_complete"] is False
+        assert finding.evidence["indeterminate_selector_trails"] == ["audit"]
+        reasoning = finding.evidence["trail_details"][0]["selector_reasoning"][0]
+        assert reasoning["qualifies"] is None
+
+    def test_cloudtrail_advanced_malformed_selector_returns_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        factory.describe_trails_resilient.return_value = {"trailList": [{"Name": "audit"}]}
+        factory.get_trail_status_resilient.return_value = {"IsLogging": True}
+        factory.get_trail_event_selectors_resilient.return_value = {
+            "AdvancedEventSelectors": [
+                {"Name": "malformed", "FieldSelectors": {"Field": "eventCategory"}}
+            ]
+        }
+
+        # Act
+        finding = CloudTrailIntegrationCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["selector_analysis_complete"] is False
+        reasoning = finding.evidence["trail_details"][0]["selector_reasoning"][0]
+        assert reasoning["qualifies"] is None
+        assert "not a list" in reasoning["reason"]
+
+    def test_cloudtrail_known_coverage_with_unknown_selector_returns_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire_real_access_denied(mock_aws_client_factory)
+        factory = mock_aws_client_factory
+        factory.describe_trails_resilient.return_value = {
+            "trailList": [{"Name": "verified"}, {"Name": "unknown"}]
+        }
+        factory.get_trail_status_resilient.side_effect = [
+            {"IsLogging": True},
+            {"IsLogging": True},
+        ]
+        unknown_selector = _advanced_selector()
+        unknown_selector["AdvancedEventSelectors"][0]["FieldSelectors"][0][
+            "UnsupportedOperator"
+        ] = ["Management"]
+        factory.get_trail_event_selectors_resilient.side_effect = [
+            _basic_selector(read_write_type="WriteOnly"),
+            unknown_selector,
+        ]
+
+        # Act
+        finding = CloudTrailIntegrationCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["qualifying_trails"] == ["verified"]
+        assert finding.evidence["inspection_complete"] is False
+        assert finding.evidence["indeterminate_selector_trails"] == ["unknown"]
+        assert "could not be fully inspected" in finding.description
 
     def test_cloudtrail_advanced_connect_source_pass(
         self, make_check_context, mock_aws_client_factory

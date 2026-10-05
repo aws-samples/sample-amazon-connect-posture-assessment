@@ -26,7 +26,9 @@ design records for the Amazon Connect Customer Posture Assessment Tool.
 - [Check catalog](check-catalog.md) — all 64 canonical controls, dispositions, methodology, executor ownership, aliases, and unified filter behavior.
 - [Report formats](report-formats.md) — HTML, JSON, CSV, and failed-control-only ASFF contracts, including the scored-control denominator.
 - [Performance guide](performance-optimization.md) — parallel execution, retry tuning, and journey-scoring bounds.
-- [IAM policy template](iam-policy-template.json) — canonical read permissions for the assessment.
+- [IAM policy template](iam-policy-template.json) — canonical read-oriented
+  `List`, `Get`, `Describe`, and `Head` permissions for the assessment; optional
+  S3 publishing writes are documented separately.
 
 ## AWS Documentation
 

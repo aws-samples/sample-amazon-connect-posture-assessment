@@ -10,30 +10,27 @@ from .registry import CheckRegistry
 logger = logging.getLogger("check_registration")
 
 
-def _normalize_ids(
-    registry: CheckRegistry,
-    control_ids: Optional[Set[str]],
-    *,
-    require_any: bool = False,
-) -> Optional[set[str]]:
-    """Resolve requested IDs to canonical IDs.
+class UnknownControlSelectionError(ValueError):
+    """Raised when an explicit control selection contains unknown IDs."""
 
-    With ``require_any`` a non-empty request that resolves to zero valid IDs is an
-    error rather than a silent empty selection (which would run no checks).
-    """
-    if control_ids is None:
+
+def _normalize_ids(
+    control_ids: Optional[Set[str]],
+) -> Optional[set[str]]:
+    """Resolve an explicit selection to canonical IDs without dropping typos."""
+    if not control_ids:
         return None
     normalized: set[str] = set()
+    unknown: set[str] = set()
     catalog = get_atomic_control_registry()
     for requested_id in control_ids:
         try:
             normalized.add(catalog.resolve_id(requested_id))
         except KeyError:
-            logger.warning("Requested control ID '%s' is unknown", requested_id)
-    if require_any and control_ids and not normalized:
-        raise ValueError(
-            "None of the requested check IDs are valid: "
-            f"{', '.join(sorted(control_ids))}; run --list-checks to see valid IDs"
+            unknown.add(requested_id)
+    if unknown:
+        raise UnknownControlSelectionError(
+            f"Unknown check ID(s): {', '.join(sorted(unknown))}; run --list-checks to see valid IDs"
         )
     return normalized
 
@@ -54,6 +51,72 @@ def _normalize_config(
             continue
         normalized[canonical_id] = value
     return normalized
+
+
+def apply_live_check_config(
+    registry: CheckRegistry,
+    checks_config: Optional[Mapping[str, Any]],
+) -> None:
+    """Apply compatibility overrides to an already-built live registry."""
+    if not checks_config:
+        return
+
+    normalized_config = _normalize_config(checks_config)
+    disabled_count = 0
+    severity_override_count = 0
+    catalog = registry.get_atomic_control_registry() or get_atomic_control_registry()
+
+    for control_id, control_config in normalized_config.items():
+        control = catalog.get(control_id)
+        enabled = control_config.get("enabled", True)
+        if enabled is False:
+            if control_id in registry:
+                registry.unregister_check(control_id)
+            else:
+                registry._remove_selected_control(control_id)
+            disabled_count += 1
+            continue
+        if not isinstance(enabled, bool):
+            registry.logger.warning(
+                "Ignoring non-boolean enabled override for control '%s'", control_id
+            )
+
+        severity_name = control_config.get("severity")
+        if severity_name:
+            try:
+                new_severity = Severity(str(severity_name).lower())
+            except ValueError:
+                registry.logger.warning(
+                    "Ignoring invalid severity override '%s' for control '%s'; must be one of %s",
+                    severity_name,
+                    control_id,
+                    [severity.value for severity in Severity],
+                )
+            else:
+                if control.execution_source == ExecutionSource.JOURNEY:
+                    registry.logger.warning(
+                        "Severity override for Journey control '%s' is not supported; "
+                        "using catalog severity '%s'.",
+                        control_id,
+                        control.default_severity.value,
+                    )
+                elif registry._override_base_check_severity(control_id, new_severity):
+                    severity_override_count += 1
+
+        unsupported_keys = set(control_config) - {"enabled", "severity"}
+        if unsupported_keys:
+            registry.logger.warning(
+                "Control '%s' config has unsupported override key(s) %s; only 'enabled' "
+                "and BaseCheck 'severity' are currently applied.",
+                control_id,
+                sorted(unsupported_keys),
+            )
+
+    registry.logger.info(
+        "Configuration overrides applied: %d control(s) disabled, %d severity override(s)",
+        disabled_count,
+        severity_override_count,
+    )
 
 
 def register_all_checks(
@@ -95,6 +158,8 @@ def register_all_checks(
     register_capacity_checks(registry)
     register_advanced_resilience_checks(registry, include_flow_checks=not skip_flow_analysis)
     register_cost_containment_checks(registry, include_flow_checks=not skip_flow_analysis)
+    if skip_flow_analysis and "res-hardcoded-routing-001" in registry:
+        registry.unregister_check("res-hardcoded-routing-001")
 
     if not skip_flow_analysis:
         register_acxd_checks(registry)
@@ -111,8 +176,8 @@ def register_all_checks(
     )
     registry.set_atomic_control_registry(catalog)
 
-    included_ids = _normalize_ids(registry, check_ids, require_any=True)
-    excluded_ids = _normalize_ids(registry, exclude_check_ids) or set()
+    included_ids = _normalize_ids(check_ids)
+    excluded_ids = _normalize_ids(exclude_check_ids) or set()
     normalized_config = _normalize_config(checks_config)
 
     effective_severities = {

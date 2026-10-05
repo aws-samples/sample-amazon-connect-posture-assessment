@@ -14,6 +14,8 @@ All checks degrade to SKIPPED on access denied and emit structured remediation.
 from ..cost.cost_estimator import estimate_unused_numbers_cost
 from ..models import (
     CheckStatus,
+    Finding,
+    FindingDisposition,
     Pillar,
     Remediation,
     RemediationStep,
@@ -29,6 +31,38 @@ from .base import BaseCheck, CheckContext
 _CONCURRENT_CALLS_METRIC_GROUP = "VoiceCalls"
 
 
+def _error_code(error: BaseException) -> str | None:
+    """Return a structured AWS error code without retaining the error message."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        if isinstance(code, str):
+            return code
+    return None
+
+
+def _skipped_for_api_error(
+    check: BaseCheck,
+    context: CheckContext,
+    *,
+    operation: str,
+    error: Exception,
+) -> Finding:
+    return check.create_finding(
+        status=CheckStatus.SKIPPED,
+        resource_id=context.instance.instance_id,
+        resource_type="ConnectInstance",
+        description=f"{operation} did not complete, so the inventory cannot report PASS.",
+        evidence={
+            "analysis_complete": False,
+            "operation": operation,
+            "error_type": type(error).__name__,
+            "error_code": _error_code(error),
+        },
+        context=context,
+    )
+
+
 class UsageMetricsCheck(BaseCheck):
     """Analyze CloudWatch usage metrics for over-provisioning (Req 13)."""
 
@@ -38,6 +72,7 @@ class UsageMetricsCheck(BaseCheck):
             name="CloudWatch Usage Metrics Analysis",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
+            disposition=FindingDisposition.INFORMATIONAL,
             description=(
                 "Queries CloudWatch for call volume metrics over 30 days "
                 "to identify unused or under-utilized instances."
@@ -72,7 +107,12 @@ class UsageMetricsCheck(BaseCheck):
         except Exception as e:
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "cloudwatch:GetMetricStatistics")
-            raise
+            return _skipped_for_api_error(
+                self,
+                context,
+                operation="cloudwatch:GetMetricStatistics",
+                error=e,
+            )
 
         datapoints = resp.get("Datapoints", [])
         evidence = {
@@ -135,6 +175,7 @@ class UnusedPhoneNumbersCheck(BaseCheck):
             name="Claimed Phone Number Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
+            disposition=FindingDisposition.INFORMATIONAL,
             description=(
                 "Inventories claimed phone numbers and estimates a worst-case monthly "
                 "holding cost for separate traffic and ownership verification."
@@ -156,7 +197,12 @@ class UnusedPhoneNumbersCheck(BaseCheck):
         except Exception as e:
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "connect:ListPhoneNumbersV2")
-            resp = {"ListPhoneNumbersSummaryList": []}
+            return _skipped_for_api_error(
+                self,
+                context,
+                operation="connect:ListPhoneNumbersV2",
+                error=e,
+            )
 
         numbers = resp.get("ListPhoneNumbersSummaryList", []) or []
         if not numbers:
@@ -254,6 +300,7 @@ class PremiumFeaturesCostCheck(BaseCheck):
             name="Premium Feature Enablement Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
+            disposition=FindingDisposition.INFORMATIONAL,
             description=(
                 "Inventories the Contact Lens instance attribute as enabled or disabled. "
                 "Enablement itself is free; usage within contact flows is billed."
@@ -286,6 +333,7 @@ class PremiumFeaturesCostCheck(BaseCheck):
                     {
                         "attribute": attr_type,
                         "error_type": type(e).__name__,
+                        "error_code": _error_code(e),
                         "access_denied": bool(factory.is_access_denied(e)),
                     }
                 )
@@ -352,6 +400,7 @@ class HoursOfOperationMismatchCheck(BaseCheck):
             name="Hours of Operation Inventory",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.LOW,
+            disposition=FindingDisposition.INFORMATIONAL,
             description=(
                 "Inventories returned Hours of Operation schedule summaries for "
                 "separate schedule, traffic, staffing, and association review."
@@ -374,7 +423,12 @@ class HoursOfOperationMismatchCheck(BaseCheck):
         except Exception as e:
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "connect:ListHoursOfOperations")
-            resp = {"HoursOfOperationSummaryList": []}
+            return _skipped_for_api_error(
+                self,
+                context,
+                operation="connect:ListHoursOfOperations",
+                error=e,
+            )
 
         hoo_list = resp.get("HoursOfOperationSummaryList", []) or []
         evidence = {"hours_of_operation_count": len(hoo_list)}

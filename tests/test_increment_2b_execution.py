@@ -35,6 +35,7 @@ from amazon_connect_assessment.models import (
     CheckStatus,
     ConnectInstance,
     ContactFlow,
+    FindingDisposition,
     Pillar,
     Severity,
 )
@@ -484,3 +485,146 @@ def test_journey_containment_non_agent_self_service_does_not_hide_agent_candidat
     assert findings[0].status == CheckStatus.FAIL
     assert findings[0].evidence["candidate_path_count"] == 1
     assert findings[0].evidence["representative_paths"][0]["terminal_type"] == "agent_queue"
+
+
+def test_engine_missing_selected_outcome_backfills_error_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    engine.logger = MagicMock()
+    engine._execution_errors = []
+    instance = ConnectInstance(
+        instance_id="instance-1",
+        instance_arn="arn:aws:connect:us-east-1:111111111111:instance/instance-1",
+        identity_management_type="CONNECT_MANAGED",
+        inbound_calls_enabled=True,
+        outbound_calls_enabled=True,
+    )
+
+    # Act
+    findings = engine._finalize_findings([], [instance])
+
+    # Assert
+    assert len(findings) == 1
+    assert findings[0].check_id == "journey-res-001"
+    assert findings[0].instance_id == "instance-1"
+    assert findings[0].status == CheckStatus.ERROR
+    assert "synthesized ERROR outcome" in engine._execution_errors[0]
+
+
+def test_engine_unknown_emitted_control_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+    finding.check_id = "unknown-control-001"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="unknown control ID"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_legacy_alias_emission_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"sec-flow-auth-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["sec-flow-auth-001"],
+    )[0]
+    finding.check_id = "journey-sec-001"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="legacy alias"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_unselected_emitted_control_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["sec-flow-auth-001"],
+    )[0]
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="unselected control ID"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_unexpected_instance_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="other-instance",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="unexpected instance_id"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_disposition_drift_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+    finding.disposition = FindingDisposition.INFORMATIONAL
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="non-canonical disposition"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_methodology_drift_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+    finding.methodology = None
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="non-canonical methodology"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_missing_instance_id_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+    finding.instance_id = None
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="missing instance_id"):
+        engine._validate_emitted_findings([finding], {"instance-1"})

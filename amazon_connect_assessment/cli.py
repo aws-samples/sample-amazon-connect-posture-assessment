@@ -30,7 +30,11 @@ from .engine import AssessmentEngine
 from .logging_config import configure_aws_logging, setup_logging
 from .models import CheckStatus, FindingDisposition
 from .report_generator import ReportGenerator
-from .score_policy import compute_scored_control_counts
+from .score_policy import (
+    FindingScoreClassification,
+    compute_scored_control_counts,
+    count_finding_classifications,
+)
 
 REPORTS_DIRECTORY = "reports"
 
@@ -892,7 +896,7 @@ def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) 
     (instance ID, permissions) are in AssessmentEngine.validate_configuration.
     """
     from .checks.control_registry import get_atomic_control_registry
-    from .checks.registration import register_all_checks
+    from .checks.registration import UnknownControlSelectionError, register_all_checks
     from .report.s3_publisher import is_valid_bucket_name
     from .report_generator import validate_report_filename
 
@@ -970,8 +974,8 @@ def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) 
     try:
         effective = CheckRegistry()
         register_all_checks(effective, **check_registration_filters(config))
-    except ValueError:
-        # No valid --checks IDs; reported below as unknown check ID(s).
+    except UnknownControlSelectionError:
+        # Unknown explicit IDs are reported below with their originating flag.
         pass
     finally:
         logging.disable(previous_disable)
@@ -1404,6 +1408,7 @@ def run_assessment(
         findings = list(getattr(result, "findings", []))
         total_records = len(findings) if findings else result.summary.total_checks
         if findings:
+            classification_counts = count_finding_classifications(findings)
             scored_passes, scored_denominator = compute_scored_control_counts(findings)
             failed_controls = scored_denominator - scored_passes
             manual_reviews = sum(
@@ -1417,11 +1422,9 @@ def run_assessment(
             informational_records = sum(
                 finding.disposition == FindingDisposition.INFORMATIONAL for finding in findings
             )
-            unevaluated_controls = sum(
-                finding.disposition == FindingDisposition.CONTROL
-                and finding.status in (CheckStatus.ERROR, CheckStatus.SKIPPED)
-                for finding in findings
-            )
+            unevaluated_controls = classification_counts[
+                FindingScoreClassification.UNEVALUATED_CONTROL
+            ]
             not_applicable_records = sum(
                 finding.status == CheckStatus.NOT_APPLICABLE for finding in findings
             )

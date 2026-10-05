@@ -158,7 +158,7 @@ def _representative_path(path: JourneyPath) -> Dict[str, Any]:
 
 def _canonical_finding(
     control_id: str,
-    instance_id: Optional[str],
+    instance_id: str,
     status: CheckStatus,
     description: str,
     remediation: str,
@@ -168,14 +168,15 @@ def _canonical_finding(
     from ..checks.control_registry import get_atomic_control_registry
 
     control = get_atomic_control_registry().get(control_id)
-    canonical_instance_id = instance_id or "instance"
+    if not instance_id or not instance_id.strip():
+        raise ValueError("Journey finding generation requires a non-empty instance_id")
     return Finding(
         check_id=control.control_id,
         check_name=control.name,
         pillar=control.pillar,
         severity=control.default_severity,
         status=status,
-        resource_id=canonical_instance_id,
+        resource_id=instance_id,
         resource_type="ConnectInstance",
         description=description,
         remediation=remediation,
@@ -183,7 +184,7 @@ def _canonical_finding(
         structured_remediation=structured_remediation,
         disposition=control.disposition,
         methodology=control.methodology,
-        instance_id=canonical_instance_id,
+        instance_id=instance_id,
     )
 
 
@@ -203,7 +204,7 @@ def _coverage_evidence(result: JourneyMapResult) -> Dict[str, Any]:
 
 def generate_journey_findings(
     result: JourneyMapResult,
-    instance_id: Optional[str] = None,
+    instance_id: str,
     selected_control_ids: Optional[Iterable[str]] = None,
     evaluation_limitation: Optional[str] = None,
 ) -> List[Finding]:
@@ -232,19 +233,37 @@ def generate_journey_findings(
 
         if control_id == "journey-scope-001":
             if not result.tier_assignments and not result.dormant_flows:
+                status = (
+                    CheckStatus.NOT_APPLICABLE
+                    if result.enumeration_complete
+                    else CheckStatus.SKIPPED
+                )
                 findings.append(
                     _canonical_finding(
                         control_id,
                         instance_id,
-                        CheckStatus.NOT_APPLICABLE,
-                        "No parsed flow inventory was available for a phone-reachability review.",
+                        status,
+                        (
+                            "No parsed flow inventory was available for a phone-reachability "
+                            "review."
+                            if result.enumeration_complete
+                            else "Flow inventory coverage was incomplete, so phone-reachability "
+                            "scope could not be fully evaluated."
+                        ),
                         "Provide readable contact flow inventory and rerun the assessment.",
-                        {"reason": "no_flow_inventory"},
+                        {
+                            **coverage,
+                            "reason": (
+                                "no_flow_inventory"
+                                if result.enumeration_complete
+                                else "incomplete_flow_inventory"
+                            ),
+                        },
                     )
                 )
                 continue
             dormant_flows = sorted(result.dormant_flows)
-            status = CheckStatus.FAIL if dormant_flows else CheckStatus.PASS
+            status = CheckStatus.FAIL if dormant_flows else _no_candidate_status(result)
             description = (
                 f"{len(dormant_flows)} flow(s) are outside the discovered phone-anchored "
                 "static closure and require an ownership and usage review."
@@ -260,6 +279,7 @@ def generate_journey_findings(
                     "Review associations, dynamic references, other channels, ownership, and "
                     "observed usage before changing any flow.",
                     {
+                        **coverage,
                         "dormant_flow_count": len(dormant_flows),
                         "dormant_flow_ids": dormant_flows,
                         "dynamic_reference_count": len(result.dynamic_edges),
@@ -269,14 +289,30 @@ def generate_journey_findings(
             continue
 
         if not result.journeys:
+            incomplete = not result.enumeration_complete
             findings.append(
                 _canonical_finding(
                     control_id,
                     instance_id,
-                    CheckStatus.NOT_APPLICABLE,
-                    "No phone-number journeys made this control applicable.",
-                    "Associate an inbound phone number with a readable contact flow to evaluate it.",
-                    {"reason": "no_phone_number_journeys"},
+                    CheckStatus.SKIPPED if incomplete else CheckStatus.NOT_APPLICABLE,
+                    (
+                        "Journey coverage was incomplete, so this control could not be fully "
+                        "evaluated."
+                        if incomplete
+                        else "No phone-number journeys made this control applicable."
+                    ),
+                    "Resolve traversal limitations and rerun the assessment."
+                    if incomplete
+                    else "Associate an inbound phone number with a readable contact flow to "
+                    "evaluate it.",
+                    {
+                        **coverage,
+                        "reason": (
+                            "incomplete_journey_coverage"
+                            if incomplete
+                            else "no_phone_number_journeys"
+                        ),
+                    },
                 )
             )
             continue

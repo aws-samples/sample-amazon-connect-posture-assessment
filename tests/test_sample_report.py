@@ -7,6 +7,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from amazon_connect_assessment import __version__
 from amazon_connect_assessment.checks.control_registry import get_atomic_control_registry
 from amazon_connect_assessment.models import CheckStatus, FindingDisposition
 from amazon_connect_assessment.report_generator import ReportGenerator
@@ -83,6 +84,17 @@ def test_sample_result_preserves_catalog_metadata_and_representative_outcomes():
         assert finding.disposition == control.disposition
         assert finding.methodology is control.methodology
         assert finding.instance_id is not None
+
+
+def test_sample_metadata_tool_version_matches_package_version():
+    # Arrange
+    expected_version = __version__
+
+    # Act
+    result = SAMPLE_REPORT.build_sample_result(SAMPLE_REPORT.SAMPLE_SEED)
+
+    # Assert
+    assert result.metadata.tool_version == expected_version
 
 
 def test_sample_summary_matches_shared_scored_control_policy():

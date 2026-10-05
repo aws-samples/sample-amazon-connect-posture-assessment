@@ -38,8 +38,9 @@ claim portable benchmark numbers.
 # Larger batch size (default: 10)
 --batch-size 20
 
-# Skip all currently flow-dependent controls and ContactFlowAnalyzer API calls
-# (currently 25; use --list-checks as the dynamic source of truth)
+# Skip flow analysis, every flow-dependent control, and most flow-content API work
+# This excludes res-hardcoded-routing-001 (use --list-checks as the dynamic source
+# of truth)
 --skip-flow-analysis
 
 # Scope to a single instance
@@ -95,12 +96,20 @@ numbers and the branching complexity of parsed flows. The pipeline:
 
 - calls `ListPhoneNumbersV2` with pagination;
 - builds a super-graph from already parsed flows in memory; and
-- runs bounded DFS from each phone-number entry point, capped at 200 paths per
-  number and 5,000 paths for the run.
+- runs bounded iterative static enumeration from each phone-number entry point,
+  with maximum depth 50, 200 paths per number, and 5,000 paths for the run.
 
-`--skip-flow-analysis` skips Journey mapping entirely. Instance-level checks
-have different API costs, so use verbose logs and measured runs to identify the
-slowest work in your environment rather than relying on fixed timing estimates.
+Cycle edges are pruned per path, but the separate iterative structural closure
+still reaches every statically resolvable node. Enumeration is marked incomplete
+when it reaches a depth, path, or step cap or encounters a dynamic or unresolved
+cross-flow target. This means clean partial evidence is not presented as
+exhaustive proof, while a known structural defect remains reportable.
+
+`--skip-flow-analysis` skips Journey mapping and excludes every control that
+requires flow analysis, including `res-hardcoded-routing-001`. Instance-level
+checks have different API costs, so use verbose logs and measured runs to
+identify the slowest work in your environment rather than relying on fixed
+timing estimates.
 
 ---
 

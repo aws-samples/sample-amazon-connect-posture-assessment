@@ -11,7 +11,7 @@ import {
   SpaceBetween,
 } from '@cloudscape-design/components';
 import AdaptiveEvidence from './AdaptiveEvidence';
-import { evidenceCellFullValue, safeHref } from './data';
+import { evidenceCellFullValue, printableRemediation, safeHref } from './data';
 import { DispositionBadge, SeverityBadge, Status } from './Findings';
 
 // Finding markdown is rendered server-side by markdown-it with raw HTML, images
@@ -98,15 +98,14 @@ function EvidenceBlock({ block }) {
 }
 
 function Remediation({ finding }) {
-  const rem = finding.structured_remediation;
-  if (!rem) {
-    return finding.remediation_html ? <Markdown html={finding.remediation_html} /> : <Box color="text-status-inactive">No remediation guidance.</Box>;
-  }
+  const remediation = printableRemediation(finding);
+  if (remediation.kind === 'none') return <Box color="text-status-inactive">No remediation guidance.</Box>;
+  if (remediation.kind === 'flat') return <Markdown html={remediation.html} />;
   return (
     <SpaceBetween size="m">
-      <Box fontWeight="bold">{rem.summary}</Box>
-      {rem.applies_if && <Alert type="info">Applies if relevant: {rem.applies_if}</Alert>}
-      {rem.steps.map((step) => (
+      <Box fontWeight="bold">{remediation.summary}</Box>
+      {remediation.applies_if && <Alert type="info">Applies if relevant: {remediation.applies_if}</Alert>}
+      {remediation.steps.map((step) => (
         <SpaceBetween key={step.order} size="xs">
           <Box variant="h4">Step {step.order}</Box>
           <Markdown html={step.instruction_html} />
@@ -114,13 +113,13 @@ function Remediation({ finding }) {
           {step.command && <CodeView content={step.command} actions={<Copy text={step.command} />} />}
         </SpaceBetween>
       ))}
-      {rem.target_resources.length > 0 && (
-        <KeyValuePairs items={[{ label: 'Targets', value: rem.target_resources.join(', ') }]} />
+      {remediation.target_resources.length > 0 && (
+        <KeyValuePairs items={[{ label: 'Targets', value: remediation.target_resources.join(', ') }]} />
       )}
-      {rem.references.length > 0 && (
+      {remediation.references.length > 0 && (
         <SpaceBetween size="xxs">
           <Box variant="h4">References</Box>
-          {rem.references.map((ref) => {
+          {remediation.references.map((ref) => {
             const href = safeHref(ref.url);
             return href ? (
               <Link key={ref.url + ref.title} href={href} external>

@@ -3,10 +3,10 @@
 The CLI writes reports to `output.directory`, which defaults to `./reports`.
 Filename templates are basenames; directory separators are rejected.
 
-All formats use the same 64-control catalog. Findings emit canonical IDs only.
-The legacy input aliases `journey-sec-001` and `journey-cost-001` are accepted
-for selection, but output uses `sec-flow-auth-001` and
-`cost-containment-001`.
+All formats use the same 64-control catalog and emit canonical IDs only.
+Migration note: the legacy input aliases `journey-sec-001` and
+`journey-cost-001` remain accepted for selection, but output uses
+`sec-flow-auth-001` and `cost-containment-001`.
 
 Generate one or more formats with:
 
@@ -48,6 +48,8 @@ bundle, fonts, report-data JSON, and Journey Map into one offline file. It inclu
 - observed evidence and remediation or review action;
 - adaptive evidence records that remain readable in narrow detail panels and
   preserve complete values in print;
+- complete printed descriptions, methodology, remediation or review actions,
+  and evidence for every finding in the selected report scope;
 - methodology sections for why the control exists, evidence source, proof
   limitations, developer/admin meaning, and verification criteria;
 - the phone-number-driven Caller Journey Map when flow analysis is enabled.
@@ -65,7 +67,7 @@ JSON is the complete machine-readable result. Top-level fields are:
 | Field | Description |
 |---|---|
 | `assessment_id` | Unique assessment identifier. |
-| `timestamp` | Assessment timestamp in ISO 8601 format. |
+| `timestamp` | Assessment timestamp as an ISO 8601 UTC value. Naive input datetimes are treated as UTC; timezone-aware values are converted to UTC. |
 | `account_id` | AWS account assessed. |
 | `region` | AWS region assessed. |
 | `summary` | Status, disposition, and scored-control totals. |
@@ -75,6 +77,11 @@ JSON is the complete machine-readable result. Top-level fields are:
 | `journey_map_status` | Reason the Journey Map is empty, or `null`. |
 | `metadata` | Tool version and execution metadata. |
 | `execution_errors` | Errors retained while the assessment continued. |
+
+Each finding timestamp follows the same UTC contract. CSV timestamps are UTC
+ISO 8601 values, HTML displays finding timestamps with a `UTC` suffix, ASFF uses
+UTC `Z` timestamps, and generated filename timestamps use UTC
+`YYYYMMDD_HHMMSS`.
 
 Each `findings` item includes:
 
@@ -125,7 +132,24 @@ aws securityhub batch-import-findings \
 
 ASFF uses resource type `Other`, preserves the Connect-specific resource type in
 tags, and includes disposition and bounded methodology fields in
-`ProductFields`.
+`ProductFields`. Finding identity is stable for the same provider control ID and
+resource ID, so re-importing an updated result updates the existing Security Hub
+finding instead of creating a duplicate. The two renamed Journey controls retain
+their historical provider IDs for this compatibility boundary; reports and
+catalogs still use canonical IDs. Journey aggregation can change resource
+identity from a phone number to an instance, so that migration is a new logical
+finding rather than an identity collision.
+
+## Custom report shell templates
+
+Maintainer integrations that construct `ReportGenerator(template_dir=...)` must
+provide an existing directory containing `assessment_report.html`. Custom shells
+use the static placeholders `@@STYLE_SRC@@`, `@@SCRIPT_SRC@@`,
+`@@REPORT_TITLE@@`, `@@APP_CSS@@`, `@@REPORT_DATA_JSON@@`, and `@@APP_JS@@`.
+Construction fails fast for a missing directory or shell, missing required or
+unsupported placeholders, or legacy Jinja syntax. The renderer does not silently
+fall back to the packaged shell, and replacement values are applied once rather
+than rescanned.
 
 ## Filename templates
 

@@ -248,3 +248,81 @@ def test_asff_methodology_content_is_bounded_and_preserved(tmp_path):
     assert fields["amazon-connect-assessment/verification-criteria"] == (
         "Capture approved evidence"
     )
+
+
+def test_asff_top_level_identity_preserves_legacy_resource_shape_with_instance_id():
+    # Arrange
+    finding = _finding(instance_id="instance-123", resource_id="flow-123")
+
+    # Act
+    payload = finding_to_asff(
+        finding,
+        account_id="123456789012",
+        region="us-east-1",
+    )
+
+    # Assert
+    assert payload["Id"] == "amazon-connect-assessment/sec-toll-fraud-001/flow-123"
+
+
+@pytest.mark.parametrize(
+    ("canonical_id", "legacy_provider_id"),
+    [
+        ("sec-flow-auth-001", "journey-sec-001"),
+        ("cost-containment-001", "journey-cost-001"),
+    ],
+)
+def test_asff_renamed_journey_identity_uses_legacy_alias_and_canonical_field(
+    canonical_id, legacy_provider_id
+):
+    # Arrange
+    finding = _finding(
+        check_id=canonical_id,
+        instance_id="instance-123",
+        resource_id="flow-123",
+    )
+
+    # Act
+    payload = finding_to_asff(
+        finding,
+        account_id="123456789012",
+        region="us-east-1",
+    )
+
+    # Assert
+    assert payload["Id"] == (f"amazon-connect-assessment/{legacy_provider_id}/flow-123")
+    assert payload["ProductFields"]["amazon-connect-assessment/check-id"] == canonical_id
+
+
+@pytest.mark.parametrize(
+    ("canonical_id", "legacy_id"),
+    [
+        ("sec-flow-auth-001", "journey-sec-001"),
+        ("cost-containment-001", "journey-cost-001"),
+    ],
+)
+def test_asff_legacy_and_canonical_journey_ids_resolve_to_same_golden_identity(
+    canonical_id, legacy_id
+):
+    # Arrange
+    canonical = _finding(check_id=canonical_id, resource_id="flow-123")
+    legacy = _finding(check_id=legacy_id, resource_id="flow-123")
+
+    # Act
+    canonical_payload = finding_to_asff(
+        canonical,
+        account_id="123456789012",
+        region="us-east-1",
+    )
+    legacy_payload = finding_to_asff(
+        legacy,
+        account_id="123456789012",
+        region="us-east-1",
+    )
+
+    # Assert
+    assert canonical_payload["Id"] == legacy_payload["Id"]
+    assert (
+        canonical_payload["ProductFields"]["amazon-connect-assessment/check-id"]
+        == (legacy_payload["ProductFields"]["amazon-connect-assessment/check-id"])
+    )

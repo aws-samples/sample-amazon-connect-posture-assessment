@@ -36,6 +36,7 @@ from sample_contact_flows import (  # noqa: E402
     dormant_flow_specs,
 )
 
+from amazon_connect_assessment import __version__  # noqa: E402
 from amazon_connect_assessment.checks.base import BaseCheck  # noqa: E402
 from amazon_connect_assessment.checks.control_registry import (  # noqa: E402
     AtomicControl,
@@ -505,7 +506,7 @@ def build_sample_result(seed: int) -> AssessmentResult:
     )
 
     metadata = AssessmentMetadata(
-        tool_version="0.1.0",
+        tool_version=__version__,
         execution_time_seconds=42.7,
         aws_account_id=SAMPLE_ACCOUNT_ID,
         aws_region=SAMPLE_REGION,

@@ -241,3 +241,48 @@ def test_readme_offline_report_does_not_claim_cdn_dependencies():
     assert "without a CDN" in report_section
     assert "Chart.js" not in report_section
     assert "Font Awesome" not in report_section
+
+
+def test_public_documentation_describes_bounded_and_safe_runtime_contracts():
+    # Arrange
+    readme = README_PATH.read_text(encoding="utf-8")
+    current_documentation = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            README_PATH,
+            CATALOG_PATH,
+            REPO_ROOT / "docs" / "configuration.md",
+            REPO_ROOT / "docs" / "development-guide.md",
+            REPO_ROOT / "docs" / "performance-optimization.md",
+            REPO_ROOT / "docs" / "report-formats.md",
+            REPO_ROOT / "docs" / "threat-model.md",
+            REPO_ROOT / "docs" / "troubleshooting.md",
+            REPO_ROOT / "docs" / "user-guide.md",
+        )
+    )
+    required_phrases = {
+        "depth 50",
+        "200 paths per phone number",
+        "5,000 paths per run",
+        "exact token is `Escalation`",
+        "res-hardcoded-routing-001",
+        "`List`, `Get`, `Describe`, and `Head`",
+        "existing selected bucket",
+        "legacy Jinja syntax",
+        "UTC",
+    }
+
+    # Act
+    missing_phrases = required_phrases.difference(
+        phrase for phrase in required_phrases if phrase in current_documentation
+    )
+
+    # Assert
+    assert not missing_phrases
+    assert ".gitlab-ci.yml" not in current_documentation
+    assert "enumerates every path a caller can take" not in readme
+    assert "Every default, conditional, and error transition" not in readme
+    assert re.search(r"frontend maintained in this\s+repository", readme)
+    assert "maintained in the main AWS Samples repository" not in readme
+    assert "[HTML report](https://aws-samples.github.io/" in readme
+    assert 'target="_blank"' not in readme

@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT--0-green.svg)](LICENSE)
 [![Well-Architected](https://img.shields.io/badge/AWS-Well--Architected-orange.svg)](https://aws.amazon.com/architecture/well-architected/)
 
-A read-only command-line tool that assesses an Amazon Connect Customer
+A read-oriented-by-default command-line tool that assesses an Amazon Connect Customer
 deployment using checks informed by the
 [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
 and produces a shareable report in minutes. Point it at an AWS account and
@@ -21,8 +21,9 @@ and [API](https://docs.aws.amazon.com/connect/latest/APIReference/Welcome.html)
 service identifier remains `connect`, and this tool's command remains
 `amazon-connect-assessment`.
 
-No agents, no infrastructure to deploy, and nothing is modified in the account
-you assess.
+No agents or assessment infrastructure are deployed. Assessed resources are not
+modified; only the explicitly enabled `--s3-output` path creates or hardens the
+selected report bucket and uploads reports.
 
 ```bash
 pipx install git+https://github.com/aws-samples/sample-amazon-connect-posture-assessment
@@ -53,14 +54,14 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 
 | | |
 |---|---|
-| **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, enumerates every path a caller can take, and renders an interactive map you can zoom, inspect, and export. Most tooling audits resources; this audits the experience. |
+| **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, performs bounded static path enumeration, and renders an interactive map you can zoom, inspect, and export. Enumeration is limited to depth 50, 200 paths per phone number, and 5,000 paths per run. Most tooling audits resources; this audits the experience. |
 | **Contact flow analysis** | Parses published flow content to find dead-end error paths, unreachable blocks, infinite loops, toll-fraud exposure, prompt-injection risk, and Lambda branching with no fallback path — issues that are invisible from the console. |
 | **64 canonical controls** | One catalog across all five Well-Architected pillars: 60 BaseCheck executors and 4 Journey-backed executors. Every record carries status, disposition, evidence, and methodology so measured controls stay distinct from review candidates and inventory. |
 | **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Amazon Q in Connect, and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](#generative-ai-coverage). |
 | **Quota headroom** | Concurrent-call and configuration-object utilization against your real Service Quotas ceilings, with a 90-day growth trend projecting how long the current rate leaves before you hit one. |
 | **Four output formats** | HTML, JSON, CSV, and ASFF for direct ingestion into AWS Security Hub. |
 | **Run-over-run comparison** | `--diff` against a previous JSON report shows what was resolved and what is new, so you can track remediation progress. |
-| **Safe by default** | Every API call is a read or describe. The single optional write, `--s3-output`, publishes the finished report to its own hardened bucket. |
+| **Safe by default** | Assessment access uses read-oriented `List`, `Get`, `Describe`, and `Head` operations. The consequential opt-in write, `--s3-output`, creates or hardens the selected report bucket and uploads the finished report. |
 
 ---
 
@@ -77,9 +78,9 @@ Check out the sample [HTML report](https://aws-samples.github.io/sample-amazon-c
 
 </details>
 
-The HTML report uses the same React/Cloudscape frontend maintained in the main
-AWS Samples repository. The application bundle, fonts, report data, and Journey
-Map are embedded into one file so the report remains portable and works offline.
+The HTML report uses the React/Cloudscape frontend maintained in this
+repository. The application bundle, fonts, report data, and Journey Map are
+embedded into one file so the report remains portable and works offline.
 Python computes the accepted Journey Map layout and portable SVG/draw.io
 exports; the Cloudscape report renders that same model interactively.
 
@@ -309,8 +310,12 @@ Most assessment tooling inspects resources. The Caller Journey Map inspects the
 - **Accurate flow resolution.** Each inbound number is matched to its flow using
   `connect:ListFlowAssociations`, rather than assuming
   `ListPhoneNumbersV2.TargetArn` points at a flow.
-- **Path enumeration.** Every default, conditional, and error transition is
-  walked from each entry point to build the set of paths a caller can take.
+- **Bounded static path enumeration.** Default, conditional, and error
+  transitions are followed from each entry point with limits of depth 50, 200
+  paths per phone number, and 5,000 paths per run. Cycle edges are pruned
+  without losing structural node reachability. A reached cap, dynamic target,
+  or unresolved flow reference marks enumeration incomplete rather than
+  claiming exhaustive runtime coverage.
 - **Canonical Journey outcomes.** Four catalog controls use the Journey executor:
   `sec-flow-auth-001`, `cost-containment-001`, `journey-res-001`, and
   `journey-scope-001`. Each produces one aggregate outcome per selected
@@ -353,7 +358,7 @@ checks: every check below is counted exactly once, in its own pillar.
 | `ai-ops-model-cost-001` | Cost Optimization | Low | Prompt model selection against the work each prompt actually does |
 | `ai-ops-cross-region-001` | Resilience | Low | Cross-region inference profile availability for the models in use |
 | `ops-acxd-handoff-001` | Operational Excellence | Low | Redacted inventory of reachable Connect handoffs, configured workspace/application/alias references, and optional feature presence |
-| `ops-acxd-escalation-001` | Operational Excellence | Medium | Manual review of reachable Agentic CX handoffs without an explicit escalated-to-agent outcome |
+| `ops-acxd-escalation-001` | Operational Excellence | Medium | Manual review of reachable Agentic CX handoffs without an authored condition whose exact token is `Escalation`; this does not prove a successful escalated-to-agent runtime outcome |
 | `res-acxd-error-routing-001` | Resilience | High | Reachable Agentic CX handoffs missing idle-timeout or catch-all error routes |
 
 Run only this set:
@@ -424,9 +429,11 @@ The [editable Draw.io source](docs/architecture.drawio) is included.
   Connect Customer instance, flows, or supporting resources it inspects.
 - **Standard credential resolution.** Credentials are resolved through the
   normal boto3 chain and are never written to reports, logs, or checkpoints.
-- **Opt-in S3 publishing only.** `--s3-output` is the only write path. If the
-  target bucket does not exist it is created with Block Public Access, SSE-S3
-  encryption, and versioning enabled.
+- **Consequential opt-in S3 publishing.** `--s3-output` is the only write path.
+  It creates a missing selected bucket or hardens an existing selected bucket
+  by applying Block Public Access and versioning and ensuring default
+  encryption, then uploads the report. Review the target and permissions before
+  enabling it.
 - **Reports contain configuration detail.** Findings include flow names, queue
   and routing configuration, and masked phone numbers. Treat generated reports
   as sensitive and store them accordingly.

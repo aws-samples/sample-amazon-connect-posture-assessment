@@ -136,15 +136,24 @@ def _program_acgr_apis(
     factory.call_api_with_resilience.side_effect = _side_effect
 
 
-def _cloudtrail_event(*, request_id=None, resource_names=None, malformed=False):
+def _cloudtrail_event(
+    *, request_id=None, resource_names=None, malformed=False, error_code=None, error_message=None
+):
     event = {
         "EventName": "UpdateTrafficDistribution",
         "EventTime": "2026-06-01T10:00:00Z",
     }
     if malformed:
         event["CloudTrailEvent"] = "{not-json"
-    elif request_id is not None:
-        event["CloudTrailEvent"] = json.dumps({"RequestParameters": {"Id": request_id}})
+    else:
+        event_payload = {}
+        if request_id is not None:
+            event_payload["RequestParameters"] = {"Id": request_id}
+        if error_code is not None:
+            event_payload["errorCode"] = error_code
+        if error_message is not None:
+            event_payload["errorMessage"] = error_message
+        event["CloudTrailEvent"] = json.dumps(event_payload)
     if resource_names is not None:
         event["Resources"] = [{"ResourceName": resource_name} for resource_name in resource_names]
     return event
@@ -540,6 +549,126 @@ class TestACGRFailoverTestCheck:
         assert finding.status == CheckStatus.PASS
         assert finding.evidence["matched_event_count"] == 1
         assert finding.evidence["matched_tdgs"] == ["tdg-1"]
+
+    def test_acgr_failover_failed_and_malformed_matches_return_fail(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[
+                _cloudtrail_event(
+                    request_id="tdg-1",
+                    error_code="AccessDeniedException",
+                    error_message="denied",
+                ),
+                _cloudtrail_event(resource_names=["tdg-1"], malformed=True),
+            ],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["matched_event_count"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 0
+        assert finding.evidence["failed_matched_event_count"] == 1
+        assert finding.evidence["malformed_matched_event_count"] == 1
+        assert finding.evidence["failed_matched_events"][0]["error_code"] == (
+            "AccessDeniedException"
+        )
+        assert finding.evidence["malformed_matched_events"][0]["reason"] == (
+            "CloudTrailEvent payload is malformed"
+        )
+
+    def test_acgr_failover_successful_match_with_failed_attempt_returns_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[
+                _cloudtrail_event(request_id="tdg-1", error_code="InternalFailure"),
+                _cloudtrail_event(request_id="tdg-1"),
+            ],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["matched_event_count"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 1
+        assert finding.evidence["failed_matched_event_count"] == 1
+
+    def test_acgr_failover_successful_match_with_incomplete_pagination_returns_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+        )
+        base_side_effect = mock_aws_client_factory.call_api_with_resilience.side_effect
+
+        def _repeated_token_side_effect(client, op_name, service, **kwargs):
+            if op_name != "lookup_events":
+                return base_side_effect(client, op_name, service, **kwargs)
+            return {
+                "Events": [_cloudtrail_event(request_id="tdg-1")],
+                "NextToken": "repeated-token",
+            }
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _repeated_token_side_effect
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["evidence_complete"] is False
+        assert finding.evidence["pagination_complete"] is False
+        assert finding.evidence["pages_scanned"] == 2
+        assert finding.evidence["limitations"]
+        assert "incomplete" in finding.description.lower()
+
+    def test_acgr_failover_no_success_with_incomplete_pagination_returns_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+        )
+        base_side_effect = mock_aws_client_factory.call_api_with_resilience.side_effect
+
+        def _repeated_token_side_effect(client, op_name, service, **kwargs):
+            if op_name != "lookup_events":
+                return base_side_effect(client, op_name, service, **kwargs)
+            return {
+                "Events": [_cloudtrail_event(request_id="tdg-unrelated")],
+                "NextToken": "repeated-token",
+            }
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _repeated_token_side_effect
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["evidence_complete"] is False
+        assert finding.evidence["pagination_complete"] is False
+        assert finding.evidence["pages_scanned"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 0
 
     def test_acgr_failover_mixed_and_malformed_events_record_counts(
         self, make_check_context, mock_aws_client_factory

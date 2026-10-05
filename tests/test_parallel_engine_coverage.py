@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from amazon_connect_assessment.checks.registration import register_all_checks
 from amazon_connect_assessment.checks.registry import CheckRegistry
-from amazon_connect_assessment.models import ConnectInstance
+from amazon_connect_assessment.models import CheckStatus, ConnectInstance
 from amazon_connect_assessment.parallel_engine import (
     ParallelAssessmentEngine,
     create_optimized_engine,
@@ -183,3 +183,29 @@ class TestParallelEngineRunAssessment:
         engine.optimize_for_instance_count(50)
         assert engine.max_workers > 1
         assert engine.batch_size > 1
+
+
+def test_parallel_engine_outer_executor_exception_backfills_error_expected_result():
+    # Arrange
+    engine = ParallelAssessmentEngine(_factory(), max_workers=1, batch_size=1)
+    engine.enable_checkpoints(False)
+    registry = CheckRegistry()
+    register_all_checks(
+        registry,
+        check_ids={"security-iam-001"},
+        skip_flow_analysis=True,
+    )
+    engine.check_registry = registry
+    instance = _make_instances(1)[0]
+
+    # Act
+    with patch.object(engine, "_execute_check_safe", side_effect=RuntimeError("outer failure")):
+        emitted = engine._execute_checks_parallel([instance])
+    findings = engine._finalize_findings(emitted, [instance])
+
+    # Assert
+    assert len(findings) == 1
+    assert findings[0].check_id == "security-iam-001"
+    assert findings[0].status == CheckStatus.ERROR
+    assert "outer failure" in engine._execution_errors[0]
+    assert "synthesized ERROR outcome" in engine._execution_errors[1]
