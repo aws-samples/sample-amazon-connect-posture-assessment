@@ -233,12 +233,10 @@ xdg-open reports/connect_assessment_*.html    # Linux
 start reports\connect_assessment_*.html       # Windows
 ```
 
-The HTML report is a single file — safe to email or attach to a ticket. All of
-its findings, styling, and journey-map diagrams are embedded, so it reads fine
-offline. Two cosmetic assets are still loaded from a CDN when the reader has
-network access: Chart.js for the summary charts and Font Awesome for icons.
-Without network access the report is fully readable; the charts and icons are
-simply absent.
+The HTML report is a single self-contained file that is safe to email or attach
+to a ticket. The committed React/Cloudscape bundle, fonts, icons, charts,
+report data, findings, and journey diagrams are embedded, so the complete
+report remains available offline without a CDN or backend service.
 
 ---
 

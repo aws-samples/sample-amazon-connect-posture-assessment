@@ -226,3 +226,18 @@ def test_documentation_iam_guidance_uses_canonical_artifacts():
     assert expected_cloudformation in documentation
     assert stale_cloudformation not in documentation
     assert "qconnect:" not in documentation
+
+
+def test_readme_offline_report_does_not_claim_cdn_dependencies():
+    # Arrange
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # Act
+    report_section = readme.split("### 5. Open the report", 1)[1].split("---", 1)[0]
+
+    # Assert
+    assert "self-contained" in report_section
+    assert "React/Cloudscape" in report_section
+    assert "without a CDN" in report_section
+    assert "Chart.js" not in report_section
+    assert "Font Awesome" not in report_section
