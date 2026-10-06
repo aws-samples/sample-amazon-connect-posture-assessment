@@ -840,8 +840,10 @@ class AssessmentEngine:
                     f"Finding '{canonical_id}' has unexpected instance_id '{finding.instance_id}'"
                 )
 
+            # Without an attached catalog, standalone checks are not bound to
+            # global catalog metadata.
             try:
-                control = catalog.get(canonical_id)
+                control = catalog.get(canonical_id) if attached_catalog is not None else None
             except KeyError:
                 control = None
             if control is not None:

@@ -722,3 +722,31 @@ def test_engine_missing_instance_id_rejects_outcome_expected_result():
     # Act / Assert
     with pytest.raises(ValueError, match="missing instance_id"):
         engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_standalone_check_ignores_global_catalog_metadata_expected_result():
+    # A check registered without an attached catalog must not be validated
+    # against global catalog metadata that happens to share its ID.
+    # Arrange
+    from amazon_connect_assessment.checks.base import BaseCheck
+
+    class _StandaloneCheck(BaseCheck):
+        def execute(self, context):  # pragma: no cover - never executed
+            raise AssertionError
+
+    control = get_atomic_control_registry().controls[0]
+    other_pillar = next(p for p in Pillar if p != control.pillar)
+    check = _StandaloneCheck(control.control_id, "Standalone name", other_pillar, Severity.LOW)
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    engine.check_registry.register_check(check)
+    finding = check.create_finding(
+        status=CheckStatus.PASS,
+        resource_id="instance-1",
+        resource_type="ConnectInstance",
+        description="ok",
+    )
+    finding.instance_id = "instance-1"
+
+    # Act / Assert — must not raise
+    engine._validate_emitted_findings([finding], {"instance-1"})
