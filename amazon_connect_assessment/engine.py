@@ -737,7 +737,24 @@ class AssessmentEngine:
         from .checks.control_registry import get_atomic_control_registry
 
         catalog = self.check_registry.get_atomic_control_registry() or get_atomic_control_registry()
-        control = catalog.get(control_id)
+        try:
+            control = catalog.get(control_id)
+        except KeyError:
+            # Custom checks are registered on the registry but absent from the built-in catalog.
+            check = self.check_registry.get_check(control_id)
+            return Finding(
+                check_id=check.check_id,
+                check_name=check.name,
+                pillar=check.pillar,
+                severity=check.severity,
+                status=CheckStatus.ERROR,
+                resource_id=instance_id,
+                resource_type="ConnectInstance",
+                description="The selected control executor did not emit an outcome for this instance.",
+                remediation="Review execution errors, restore required data access, and rerun.",
+                evidence={"execution_limitation": "missing_selected_control_outcome"},
+                instance_id=instance_id,
+            )
         return Finding(
             check_id=control.control_id,
             check_name=control.name,

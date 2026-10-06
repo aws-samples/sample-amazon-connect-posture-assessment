@@ -514,6 +514,39 @@ def test_engine_missing_selected_outcome_backfills_error_expected_result():
     assert "synthesized ERROR outcome" in engine._execution_errors[0]
 
 
+def test_engine_missing_custom_check_outcome_backfills_error_expected_result():
+    # Arrange
+    from amazon_connect_assessment.checks.base import BaseCheck
+
+    class _CustomCheck(BaseCheck):
+        def execute(self, context):  # pragma: no cover - never executed
+            raise AssertionError
+
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    engine.check_registry.register_check(
+        _CustomCheck("custom-001", "Custom check", Pillar.SECURITY, Severity.LOW)
+    )
+    engine.logger = MagicMock()
+    engine._execution_errors = []
+    instance = ConnectInstance(
+        instance_id="instance-1",
+        instance_arn="arn:aws:connect:us-east-1:111111111111:instance/instance-1",
+        identity_management_type="CONNECT_MANAGED",
+        inbound_calls_enabled=True,
+        outbound_calls_enabled=True,
+    )
+
+    # Act
+    findings = engine._finalize_findings([], [instance])
+
+    # Assert
+    assert len(findings) == 1
+    assert findings[0].check_id == "custom-001"
+    assert findings[0].check_name == "Custom check"
+    assert findings[0].status == CheckStatus.ERROR
+
+
 def test_engine_unknown_emitted_control_rejects_outcome_expected_result():
     # Arrange
     engine = AssessmentEngine.__new__(AssessmentEngine)
