@@ -312,3 +312,24 @@ def test_registration_skip_flow_analysis_removes_hardcoded_routing_expected_resu
     # Assert
     assert "res-hardcoded-routing-001" not in registry.list_control_ids()
     assert "res-hardcoded-routing-001" not in registry.list_check_ids()
+
+
+def test_direct_register_check_applies_catalog_metadata_expected_result():
+    from amazon_connect_assessment.checks.control_registry import (
+        ExecutionSource,
+        get_atomic_control_registry,
+    )
+
+    catalog = get_atomic_control_registry()
+    control = next(c for c in catalog.controls if c.execution_source == ExecutionSource.BASE_CHECK)
+    full = CheckRegistry()
+    register_all_checks(full)
+    check = full.get_check(control.control_id)
+    full.unregister_check(control.control_id)
+    check.disposition = None
+    check.methodology = None
+
+    full.register_check(check)
+
+    assert check.disposition == control.disposition
+    assert check.methodology == control.methodology

@@ -76,6 +76,7 @@ class CheckRegistry:
         Raises:
             ValueError: If a check with the same ID is already registered
         """
+        control = None
         if self._atomic_control_registry is not None:
             from .control_registry import ExecutionSource
 
@@ -91,6 +92,12 @@ class CheckRegistry:
 
         if check.check_id in self._checks:
             raise ValueError(f"Check with ID '{check.check_id}' is already registered")
+
+        if self._atomic_control_registry is not None and control is not None:
+            # Final validation compares emitted findings with catalog metadata,
+            # so directly registered checks must carry it too.
+            check.disposition = control.disposition
+            check.methodology = control.methodology
 
         self._checks[check.check_id] = check
         self._checks_by_pillar[check.pillar].append(check)
