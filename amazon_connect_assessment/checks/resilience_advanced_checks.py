@@ -44,8 +44,7 @@ from ..models import (
     Severity,
 )
 from ..parsers import ContactFlowParser, is_default_sample_flow, reachable_from_entry
-from .base import BaseCheck, CheckContext
-from .security_deep_checks import _error_code
+from .base import BaseCheck, CheckContext, _error_code
 
 _PARSER = ContactFlowParser()
 

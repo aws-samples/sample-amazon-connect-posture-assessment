@@ -27,7 +27,7 @@ from ..models import (
     RemediationStep,
     Severity,
 )
-from .base import BaseCheck, CheckContext
+from .base import BaseCheck, CheckContext, _error_code
 
 # Actions that are clearly outside the scope of a Connect service role and
 # indicate excessive privilege if present.
@@ -93,16 +93,6 @@ def _is_broad_write_action(action: str) -> bool:
         return True
     # Leading-wildcard patterns such as ``*Object`` or ``*Policy`` may match writes.
     return name.startswith("*")
-
-
-def _error_code(error: BaseException) -> Optional[str]:
-    """AWS error code for a botocore ClientError, else None (never the message)."""
-    response = getattr(error, "response", None)
-    if isinstance(response, dict):
-        code = (response.get("Error") or {}).get("Code")
-        if isinstance(code, str):
-            return code
-    return None
 
 
 _MAX_IAM_POLICY_EVIDENCE_ITEMS = 100
@@ -598,6 +588,7 @@ class InstanceStorageEncryptionCheck(BaseCheck):
         unencrypted = []
         aws_managed = []
         stream_managed: List[str] = []
+        evaluated: List[str] = []
         failed_reads = []
         evidence: dict = {"storage": {}}
 
@@ -624,15 +615,18 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                             "customer_managed_key_configured": kms == "customer_managed",
                         }
                     )
+                    if kms == "stream_managed":
+                        if resource_type not in stream_managed:
+                            stream_managed.append(resource_type)
+                        continue
+                    if resource_type not in evaluated:
+                        evaluated.append(resource_type)
                     if kms == "none":
                         if resource_type not in unencrypted:
                             unencrypted.append(resource_type)
                     elif kms == "aws_managed":
                         if resource_type not in aws_managed:
                             aws_managed.append(resource_type)
-                    elif kms == "stream_managed":
-                        if resource_type not in stream_managed:
-                            stream_managed.append(resource_type)
             except Exception as e:  # noqa: BLE001
                 failed_reads.append(
                     {
@@ -648,36 +642,41 @@ class InstanceStorageEncryptionCheck(BaseCheck):
             limitations.append(
                 f"{len(failed_reads)} storage resource type read(s) did not complete"
             )
+        # Kinesis Data Stream / Firehose delivery has no per-config
+        # EncryptionConfig; encryption is governed on the stream resource.
+        # Agent events can only stream to Kinesis, so stream delivery must
+        # not block a PASS — it is surfaced as scope information instead.
+        informational_notes = []
         if stream_managed:
-            limitations.append(
-                f"{len(stream_managed)} storage resource type(s) use external streams whose "
-                "encryption was not evaluated"
+            informational_notes.append(
+                f"{len(stream_managed)} storage resource type(s) deliver to Kinesis streams "
+                "whose encryption is governed on the stream resource and is out of scope "
+                "for this control"
             )
         evidence.update(
             {
                 "resource_types_failed": failed_reads,
                 "analysis_complete": not limitations,
                 "limitations": limitations,
+                "informational_notes": informational_notes,
+                "evaluated_resource_types": evaluated,
                 "unencrypted_resource_types": unencrypted,
                 "aws_managed_encryption_resource_types": aws_managed,
                 "stream_managed_encryption_resource_types": stream_managed,
                 "customer_managed_key_not_configured": aws_managed,
             }
         )
+        scope_notes = limitations + informational_notes
+        scope_suffix = " Not covered: " + "; ".join(scope_notes) + "." if scope_notes else ""
 
         if unencrypted:
-            limitation_note = (
-                " Analysis was also incomplete because " + "; ".join(limitations) + "."
-                if limitations
-                else ""
-            )
             return self.create_finding(
                 status=CheckStatus.FAIL,
                 resource_id=instance.instance_id,
                 resource_type="InstanceStorageConfig",
                 description=(
                     f"Connect instance {instance.display_name} has unencrypted storage "
-                    f"for: {', '.join(unencrypted)}.{limitation_note}"
+                    f"for: {', '.join(unencrypted)}.{scope_suffix}"
                 ),
                 evidence=evidence,
                 structured_remediation=self._encryption_remediation(
@@ -685,15 +684,14 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 ),
             )
 
-        if limitations:
+        if failed_reads and not evaluated:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="InstanceStorageConfig",
                 description=(
-                    "Storage encryption analysis was incomplete and cannot report PASS: "
-                    + "; ".join(limitations)
-                    + "."
+                    "Storage encryption analysis evaluated no storage configuration and "
+                    "cannot report PASS: " + "; ".join(scope_notes) + "."
                 ),
                 evidence=evidence,
             )
@@ -713,7 +711,19 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                     f"used for: {', '.join(aws_managed)}; a customer-managed key is not "
                     "configured for those storage types. If organizational policy "
                     "requires customer-managed keys, review the key ownership and policy "
-                    "requirements separately."
+                    f"requirements separately.{scope_suffix}"
+                ),
+                evidence=evidence,
+            )
+
+        if not evaluated:
+            return self.create_finding(
+                status=CheckStatus.PASS,
+                resource_id=instance.instance_id,
+                resource_type="InstanceStorageConfig",
+                description=(
+                    f"Instance {instance.display_name} has no storage configuration "
+                    f"requiring encryption evaluation.{scope_suffix}"
                 ),
                 evidence=evidence,
             )
@@ -725,6 +735,7 @@ class InstanceStorageEncryptionCheck(BaseCheck):
             description=(
                 f"All evaluated storage configurations for instance "
                 f"{instance.display_name} use customer-managed KMS encryption."
+                f"{scope_suffix}"
             ),
             evidence=evidence,
         )

@@ -326,3 +326,36 @@ def test_acxd_dedicated_controls_exclude_generic_error_input_and_terminal_sets()
 
     # Assert
     assert memberships == (False, False, False)
+
+
+def test_acxd_inventory_is_built_once_per_instance_across_checks(
+    make_check_context, sample_connect_instance, monkeypatch
+):
+    # All three ACXD checks share one memoized inventory per instance object
+    # instead of re-parsing every flow three times.
+    # Arrange
+    from amazon_connect_assessment.checks import acxd_checks
+
+    instance = deepcopy(sample_connect_instance)
+    instance.contact_flows = [_complete_flow()]
+    other = deepcopy(sample_connect_instance)
+    other.contact_flows = [_complete_flow()]
+    calls = []
+    real_collect = acxd_checks._collect_inventory
+    monkeypatch.setattr(
+        acxd_checks,
+        "_collect_inventory",
+        lambda context: calls.append(context.instance) or real_collect(context),
+    )
+
+    # Act
+    for check in (
+        ACXDHandoffInventoryCheck(),
+        ACXDErrorRoutingCheck(),
+        ACXDEscalationReviewCheck(),
+    ):
+        check.execute(make_check_context(instance=instance))
+    ACXDHandoffInventoryCheck().execute(make_check_context(instance=other))
+
+    # Assert — one build per distinct instance object, no rebuild per check
+    assert calls == [instance, other]

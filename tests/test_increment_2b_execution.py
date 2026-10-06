@@ -35,6 +35,7 @@ from amazon_connect_assessment.models import (
     CheckStatus,
     ConnectInstance,
     ContactFlow,
+    Finding,
     FindingDisposition,
     Pillar,
     Severity,
@@ -593,6 +594,66 @@ def test_engine_disposition_drift_rejects_outcome_expected_result():
 
     # Act / Assert
     with pytest.raises(ValueError, match="non-canonical disposition"):
+        engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def _quota_finding(control_id: str, severity: Severity) -> Finding:
+    control = get_atomic_control_registry().get(control_id)
+    return Finding(
+        check_id=control.control_id,
+        check_name=control.name,
+        pillar=control.pillar,
+        severity=severity,
+        status=CheckStatus.FAIL,
+        resource_id="instance-1",
+        resource_type="ConnectInstance",
+        description="quota nearly exhausted",
+        remediation="request a quota increase",
+        evidence={},
+        disposition=control.disposition,
+        methodology=control.methodology,
+        instance_id="instance-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("control_id", "escalated"),
+    [
+        ("res-quota-config-001", Severity.HIGH),
+        ("res-quota-headroom-001", Severity.CRITICAL),
+        ("res-quota-growth-001", Severity.HIGH),
+    ],
+)
+def test_engine_dynamic_severity_escalation_passes_validation_expected_result(
+    control_id, escalated
+):
+    # The quota checks raise severity as usage approaches the limit; the
+    # escalated outcome must survive validation instead of aborting the run.
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={control_id})
+    finding = _quota_finding(control_id, escalated)
+    assert escalated != engine.check_registry.get_control_severity(control_id)
+
+    # Act / Assert — must not raise
+    engine._validate_emitted_findings([finding], {"instance-1"})
+
+
+def test_engine_severity_drift_on_static_control_rejects_outcome_expected_result():
+    # Arrange
+    engine = AssessmentEngine.__new__(AssessmentEngine)
+    engine.check_registry = CheckRegistry()
+    register_all_checks(engine.check_registry, check_ids={"journey-res-001"})
+    finding = generate_journey_findings(
+        _result([_path("+18005550101", ["TransferToQueue"])]),
+        instance_id="instance-1",
+        selected_control_ids=["journey-res-001"],
+    )[0]
+    finding.severity = Severity.CRITICAL
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="non-canonical severity"):
         engine._validate_emitted_findings([finding], {"instance-1"})
 
 

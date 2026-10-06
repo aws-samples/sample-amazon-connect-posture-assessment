@@ -36,6 +36,9 @@ class AtomicControl:
     requires_flow_analysis: bool
     legacy_aliases: tuple[str, ...] = ()
     secondary_lens_references: tuple[str, ...] = ()
+    # Controls that escalate severity with measured risk (e.g. quota
+    # utilization) emit a severity above default_severity by design.
+    dynamic_severity: bool = False
 
 
 class AtomicControlRegistry:
@@ -252,6 +255,7 @@ def _control(
     *,
     execution_source: ExecutionSource = ExecutionSource.BASE_CHECK,
     legacy_aliases: tuple[str, ...] = (),
+    dynamic_severity: bool = False,
 ) -> AtomicControl:
     return AtomicControl(
         control_id=control_id,
@@ -266,6 +270,7 @@ def _control(
         requires_flow_analysis=requires_flow_analysis,
         legacy_aliases=legacy_aliases,
         secondary_lens_references=(),
+        dynamic_severity=dynamic_severity,
     )
 
 
@@ -721,6 +726,7 @@ _CONTROLS = (
         ),
         _base_executor("capacity_checks", "ConfigurationQuotaUtilizationCheck"),
         False,
+        dynamic_severity=True,
     ),
     _control(
         "res-quota-headroom-001",
@@ -738,6 +744,7 @@ _CONTROLS = (
         ),
         _base_executor("capacity_checks", "ConcurrentCallsHeadroomCheck"),
         False,
+        dynamic_severity=True,
     ),
     _control(
         "res-quota-growth-001",
@@ -755,6 +762,7 @@ _CONTROLS = (
         ),
         _base_executor("capacity_checks", "CallVolumeGrowthTrendCheck"),
         False,
+        dynamic_severity=True,
     ),
     _control(
         "res-acgr-config-001",

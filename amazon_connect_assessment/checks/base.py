@@ -26,6 +26,16 @@ if TYPE_CHECKING:
     from ..aws_client_factory import AWSClientFactory
 
 
+def _error_code(error: BaseException) -> Optional[str]:
+    """AWS error code for a botocore ClientError, else None (never the message)."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        if isinstance(code, str):
+            return code
+    return None
+
+
 @dataclass
 class CheckContext:
     """

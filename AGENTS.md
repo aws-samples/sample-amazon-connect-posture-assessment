@@ -55,7 +55,7 @@ Key modules:
 - `checks/` — checks grouped by domain, with larger domains split across multiple modules (security, cost, resilience, performance, operational excellence, capacity, contact-flow behavior/security, AI agent security, and MVP). `base.py` defines `BaseCheck`/`CheckContext`; `registry.py` holds the registry; `registration.py` is the single `register_all_checks(registry, pillars, skip_flow_analysis)` entry point.
 - `parsers/` — contact flow JSON → directed graph (`flow_graph.py`), plus complexity scoring and pattern detection.
 - `journey/` — deeper caller journey scoring pipeline: `topology` → `super_graph` → `path_enumerator` → `journey_scorer`. Entry: `from amazon_connect_assessment.journey import run_journey_mapping`. `AssessmentEngine._compute_journey_findings()` invokes it for journey findings, while `AssessmentEngine._compute_journey_map()` builds the active HTML journey-map section.
-- `report_generator.py` — produces JSON/CSV directly and the HTML report as a thin Jinja shell (`templates/html/assessment_report.html`) that inlines the pre-built Cloudscape UI bundle plus one escaped JSON data island built by `_build_report_data()`.
+- `report_generator.py` — produces JSON/CSV directly and the HTML report from a static shell template (`templates/html/assessment_report.html`) via single-pass `@@NAME@@` placeholder substitution (no Jinja; custom templates with Jinja syntax are rejected). The shell inlines the pre-built Cloudscape UI bundle plus one escaped JSON data island built by `_build_report_data()`.
 - `report/` — additional exporters and report utilities: `asff_export.py` (AWS Security Finding Format), `findings_diff.py` (compare runs), `posture_roadmap.py`, and `s3_publisher.py`.
 - `frontend/` — React and Cloudscape source for the offline HTML report. `build.mjs` bundles `src/` into the committed `templates/app/report-app.{js,css}` assets; `test/report.test.mjs` covers the browser-side data, filtering, and export helpers.
 - `cost/` — `cost_estimator.py` for cost-optimization findings.
@@ -72,7 +72,7 @@ Key modules:
 - Python 3.12+. Ruff (lint + format, replaces black/isort/flake8), 100-char lines. mypy is configured with `disallow_untyped_defs`, but `ignore_errors = true` is currently set as a baseline.
 - Comments only when the WHY is non-obvious.
 - **Iterative algorithms only — no recursion** for graph traversal (Python stack limits). Traversal is bounded: `max_depth=50`, `max_paths_per_entry=200`, `MAX_TOTAL_PATHS=5000`.
-- Security-conscious: validate user-controlled identifiers against regex before use; subprocess calls use list form, never `shell=True`; Jinja2 autoescaping stays on for the HTML report shell, report data reaches the page only as the escaped JSON data island rendered as text by the Cloudscape UI (the only injected HTML is XSS-safe server-rendered markdown); any future file-serving path should resolve paths and check `is_relative_to()` before serving.
+- Security-conscious: validate user-controlled identifiers against regex before use; subprocess calls use list form, never `shell=True`; `@@NAME@@` placeholder values are HTML-escaped during report shell substitution (except the explicitly raw asset placeholders), and report data reaches the page only as the escaped JSON data island rendered as text by the Cloudscape UI (the only injected HTML is XSS-safe server-rendered markdown); any future file-serving path should resolve paths and check `is_relative_to()` before serving.
 
 ## Working style preferences
 

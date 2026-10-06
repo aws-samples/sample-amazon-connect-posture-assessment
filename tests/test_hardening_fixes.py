@@ -143,9 +143,11 @@ def test_storage_encryption_paginated_configs_are_deduplicated_with_complete_evi
     assert len(finding.evidence["storage"]["CALL_RECORDINGS"]) == 4
 
 
-def test_storage_encryption_stream_only_config_returns_skipped(
+def test_storage_encryption_stream_only_config_passes_with_scope_note(
     make_check_context, mock_aws_client_factory
 ):
+    # Agent events can only deliver to Kinesis, so stream-managed delivery
+    # must not block a PASS (it is surfaced as scope information instead).
     # Arrange
     factory = mock_aws_client_factory
     _wire(factory)
@@ -161,13 +163,88 @@ def test_storage_encryption_stream_only_config_returns_skipped(
     finding = InstanceStorageEncryptionCheck().execute(make_check_context())
 
     # Assert
-    assert finding.status == CheckStatus.SKIPPED
-    assert finding.evidence["analysis_complete"] is False
+    assert finding.status == CheckStatus.PASS
+    assert finding.evidence["analysis_complete"] is True
     assert finding.evidence["unencrypted_resource_types"] == []
+    assert finding.evidence["stream_managed_encryption_resource_types"] == ["AGENT_EVENTS"]
+    assert "Kinesis" in finding.description
     stream_evidence = finding.evidence["storage"]["AGENT_EVENTS"][0]
     assert stream_evidence["stream_resource_arn"] == "a"
     assert stream_evidence["encryption_evaluated"] is False
     assert stream_evidence["encrypted"] is None
+
+
+def test_storage_encryption_kinesis_delivery_does_not_block_pass(
+    make_check_context, mock_aws_client_factory
+):
+    # Reviewer-reproduced regression: KMS-encrypted recordings on S3 plus
+    # CTRs and agent events streaming to Kinesis must PASS, not SKIP.
+    # Arrange
+    factory = mock_aws_client_factory
+    _wire(factory)
+    encrypted_s3 = {
+        "StorageType": "S3",
+        "S3Config": {
+            "BucketName": "b",
+            "EncryptionConfig": {"KeyId": "arn:aws:kms:us-east-1:111122223333:key/k"},
+        },
+    }
+    stream = {"StorageType": "KINESIS_STREAM", "KinesisStreamConfig": {"StreamArn": "a"}}
+
+    def _configs(instance_id, resource_type, **kwargs):
+        if resource_type == "CALL_RECORDINGS":
+            return {"StorageConfigs": [encrypted_s3]}
+        if resource_type in ("CONTACT_TRACE_RECORDS", "AGENT_EVENTS"):
+            return {"StorageConfigs": [stream]}
+        return {"StorageConfigs": []}
+
+    factory.list_instance_storage_configs_resilient.side_effect = _configs
+
+    # Act
+    finding = InstanceStorageEncryptionCheck().execute(make_check_context())
+
+    # Assert
+    assert finding.status == CheckStatus.PASS
+    assert finding.evidence["evaluated_resource_types"] == ["CALL_RECORDINGS"]
+    assert sorted(finding.evidence["stream_managed_encryption_resource_types"]) == [
+        "AGENT_EVENTS",
+        "CONTACT_TRACE_RECORDS",
+    ]
+
+
+def test_storage_encryption_partial_read_passes_on_evaluated_types(
+    make_check_context, mock_aws_client_factory
+):
+    # One failed resource-type read must not discard successfully evaluated
+    # types; PASS is scoped with the failed read called out as a limitation.
+    # Arrange
+    factory = mock_aws_client_factory
+    _wire(factory)
+    encrypted_s3 = {
+        "StorageType": "S3",
+        "S3Config": {
+            "BucketName": "b",
+            "EncryptionConfig": {"KeyId": "arn:aws:kms:us-east-1:111122223333:key/k"},
+        },
+    }
+
+    def _configs(instance_id, resource_type, **kwargs):
+        if resource_type == "CHAT_TRANSCRIPTS":
+            raise RuntimeError("transient read failure")
+        if resource_type == "CALL_RECORDINGS":
+            return {"StorageConfigs": [encrypted_s3]}
+        return {"StorageConfigs": []}
+
+    factory.list_instance_storage_configs_resilient.side_effect = _configs
+
+    # Act
+    finding = InstanceStorageEncryptionCheck().execute(make_check_context())
+
+    # Assert
+    assert finding.status == CheckStatus.PASS
+    assert finding.evidence["analysis_complete"] is False
+    assert finding.evidence["resource_types_failed"][0]["resource_type"] == "CHAT_TRANSCRIPTS"
+    assert "did not complete" in finding.description
 
 
 # --- ACGR -------------------------------------------------------------------

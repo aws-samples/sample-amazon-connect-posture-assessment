@@ -9,6 +9,8 @@ alias resolution, runtime containment, or guardrails.
 from __future__ import annotations
 
 import ast
+import threading
+import weakref
 from dataclasses import dataclass
 from typing import Optional
 
@@ -206,6 +208,39 @@ def _collect_inventory(context: CheckContext) -> _FlowInventory:
     return _FlowInventory(tuple(observations), common_evidence, limitations)
 
 
+# All three ACXD checks need the same parsed-flow inventory, so it is built
+# once per ConnectInstance object instead of re-parsing every flow per check.
+# Keyed on object identity (validated through the weakref) rather than
+# instance_id so a rebuilt instance with changed flows never reads stale data.
+# Entries evict themselves when the instance is garbage collected. A race
+# between two workers computing the same inventory is benign: the build is
+# pure CPU over already-fetched flow content and deterministic.
+_inventory_cache: dict[int, tuple[weakref.ref, _FlowInventory]] = {}
+_inventory_cache_lock = threading.Lock()
+
+
+def _get_inventory(context: CheckContext) -> _FlowInventory:
+    """Return the memoized flow inventory for this context's instance."""
+    instance = context.instance
+    key = id(instance)
+    with _inventory_cache_lock:
+        cached = _inventory_cache.get(key)
+        if cached is not None and cached[0]() is instance:
+            return cached[1]
+
+    inventory = _collect_inventory(context)
+
+    def _evict(reference: weakref.ref, cache_key: int = key) -> None:
+        with _inventory_cache_lock:
+            entry = _inventory_cache.get(cache_key)
+            if entry is not None and entry[0] is reference:
+                del _inventory_cache[cache_key]
+
+    with _inventory_cache_lock:
+        _inventory_cache[key] = (weakref.ref(instance, _evict), inventory)
+    return inventory
+
+
 def _not_applicable(check: BaseCheck, context: CheckContext, evidence: dict[str, object]):
     return check.not_applicable(
         context,
@@ -237,7 +272,7 @@ class ACXDHandoffInventoryCheck(BaseCheck):
         )
 
     def execute(self, context: CheckContext):
-        inventory = _collect_inventory(context)
+        inventory = _get_inventory(context)
         evidence = {
             **inventory.common_evidence,
             "acxd_handoffs": [observation.evidence for observation in inventory.observations],
@@ -288,7 +323,7 @@ class ACXDErrorRoutingCheck(BaseCheck):
         )
 
     def execute(self, context: CheckContext):
-        inventory = _collect_inventory(context)
+        inventory = _get_inventory(context)
         defects: list[dict[str, object]] = []
         for observation in inventory.observations:
             error_tokens = set(observation.evidence["error_outcomes"])
@@ -389,7 +424,7 @@ class ACXDEscalationReviewCheck(BaseCheck):
         )
 
     def execute(self, context: CheckContext):
-        inventory = _collect_inventory(context)
+        inventory = _get_inventory(context)
         candidates = [
             observation.evidence
             for observation in inventory.observations

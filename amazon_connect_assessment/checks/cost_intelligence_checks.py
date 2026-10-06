@@ -21,7 +21,7 @@ from ..models import (
     RemediationStep,
     Severity,
 )
-from .base import BaseCheck, CheckContext
+from .base import BaseCheck, CheckContext, _error_code
 
 # Amazon Connect publishes ConcurrentCalls keyed on InstanceId *and* MetricGroup,
 # and CloudWatch matches a metric only on its complete dimension set. Querying
@@ -29,16 +29,6 @@ from .base import BaseCheck, CheckContext
 # this check would misread as "the instance carried no traffic" on a busy
 # instance — reporting every active instance as possibly unused.
 _CONCURRENT_CALLS_METRIC_GROUP = "VoiceCalls"
-
-
-def _error_code(error: BaseException) -> str | None:
-    """Return a structured AWS error code without retaining the error message."""
-    response = getattr(error, "response", None)
-    if isinstance(response, dict):
-        code = (response.get("Error") or {}).get("Code")
-        if isinstance(code, str):
-            return code
-    return None
 
 
 def _skipped_for_api_error(

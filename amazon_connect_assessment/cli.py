@@ -871,7 +871,13 @@ def check_registration_filters(config: Dict[str, Any]) -> Dict[str, Any]:
         "exclude_check_ids": (
             set(cli_opts["exclude_checks"]) if cli_opts.get("exclude_checks") else None
         ),
-        "skip_flow_analysis": cli_opts.get("skip_flow_analysis", False),
+        # The engine honours both the top-level config key and the CLI flag
+        # (see AssessmentEngine._compute_journey_findings); registration must
+        # agree, or skipped journey controls stay selected and get backfilled
+        # as synthetic ERROR outcomes.
+        "skip_flow_analysis": bool(
+            cli_opts.get("skip_flow_analysis") or config.get("skip_flow_analysis")
+        ),
         "checks_config": config.get("checks") or None,
     }
 

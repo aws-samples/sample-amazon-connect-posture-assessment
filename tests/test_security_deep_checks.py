@@ -584,7 +584,7 @@ class TestInstanceStorageEncryptionCheck:
         assert finding.status == CheckStatus.FAIL
         assert finding.evidence["analysis_complete"] is False
         assert finding.evidence["limitations"]
-        assert "incomplete" in finding.description.lower()
+        assert "did not complete" in finding.description
 
 
 # --- Approved origins (sec-origins-001) -----------------------------------

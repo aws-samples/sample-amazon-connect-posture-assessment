@@ -832,7 +832,10 @@ class AssessmentEngine:
                     raise ValueError(f"Finding '{canonical_id}' has non-canonical name")
                 if finding.pillar != control.pillar:
                     raise ValueError(f"Finding '{canonical_id}' has non-canonical pillar")
-                if finding.severity != self.check_registry.get_control_severity(canonical_id):
+                if (
+                    not control.dynamic_severity
+                    and finding.severity != self.check_registry.get_control_severity(canonical_id)
+                ):
                     raise ValueError(f"Finding '{canonical_id}' has non-canonical severity")
                 if finding.disposition != control.disposition:
                     raise ValueError(f"Finding '{canonical_id}' has non-canonical disposition")
