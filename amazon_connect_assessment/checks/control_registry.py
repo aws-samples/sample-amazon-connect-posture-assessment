@@ -397,7 +397,7 @@ _CONTROLS = (
         _methodology(
             "Every configured Amazon Connect storage destination must use encryption at rest.",
             "Connect ListInstanceStorageConfigs is read for each supported storage resource type and each returned encryption key identifier is classified as absent, AWS-managed, or customer-managed.",
-            "The key identifier does not prove key health, policy correctness, destination encryption, or historical-object coverage; any incomplete resource-type read prevents a clean pass.",
+            "The key identifier does not prove key health, policy correctness, destination encryption, or historical-object coverage. Kinesis stream encryption is not inspected by this control, and any stream destination or incomplete resource-type read prevents a clean pass.",
             "A failure proves a returned storage configuration lacks encryption; AWS-managed and customer-managed encryption both satisfy this control.",
             "Enable encryption for every unencrypted destination; if policy requires customer-managed keys, separately validate key ownership, state, policy, grants, and destination coverage.",
         ),

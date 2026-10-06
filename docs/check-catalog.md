@@ -97,6 +97,11 @@ validation. A `Pass` on an informational record means inventory completed.
 | `sec-flow-auth-001` | Contact Flow Authentication Pattern | Low | Manual Review | Journey |
 | `cx-personalization-001` | Personalization & Transfer Analysis | Low | Informational | BaseCheck |
 
+`sec-storage-001` returns PASS only when every returned destination has verified encryption
+and every storage-type read completes. A failed read or a Kinesis stream destination whose
+encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
+FAIL. If no storage configuration is returned, the control is not applicable.
+
 ### Resilience — 18 controls
 
 | Control ID | Name | Severity | Disposition | Executor |

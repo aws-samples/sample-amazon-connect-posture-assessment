@@ -143,11 +143,10 @@ def test_storage_encryption_paginated_configs_are_deduplicated_with_complete_evi
     assert len(finding.evidence["storage"]["CALL_RECORDINGS"]) == 4
 
 
-def test_storage_encryption_stream_only_config_passes_with_scope_note(
+def test_storage_encryption_stream_only_config_is_unevaluated(
     make_check_context, mock_aws_client_factory
 ):
-    # Agent events can only deliver to Kinesis, so stream-managed delivery
-    # must not block a PASS (it is surfaced as scope information instead).
+    # A stream ARN does not establish encryption of the stream destination.
     # Arrange
     factory = mock_aws_client_factory
     _wire(factory)
@@ -163,8 +162,8 @@ def test_storage_encryption_stream_only_config_passes_with_scope_note(
     finding = InstanceStorageEncryptionCheck().execute(make_check_context())
 
     # Assert
-    assert finding.status == CheckStatus.PASS
-    assert finding.evidence["analysis_complete"] is True
+    assert finding.status == CheckStatus.SKIPPED
+    assert finding.evidence["analysis_complete"] is False
     assert finding.evidence["unencrypted_resource_types"] == []
     assert finding.evidence["stream_managed_encryption_resource_types"] == ["AGENT_EVENTS"]
     assert "Kinesis" in finding.description
@@ -174,11 +173,10 @@ def test_storage_encryption_stream_only_config_passes_with_scope_note(
     assert stream_evidence["encrypted"] is None
 
 
-def test_storage_encryption_kinesis_delivery_does_not_block_pass(
+def test_storage_encryption_kinesis_delivery_prevents_clean_pass(
     make_check_context, mock_aws_client_factory
 ):
-    # Reviewer-reproduced regression: KMS-encrypted recordings on S3 plus
-    # CTRs and agent events streaming to Kinesis must PASS, not SKIP.
+    # Encrypted recordings do not prove that other stream destinations are encrypted.
     # Arrange
     factory = mock_aws_client_factory
     _wire(factory)
@@ -204,7 +202,8 @@ def test_storage_encryption_kinesis_delivery_does_not_block_pass(
     finding = InstanceStorageEncryptionCheck().execute(make_check_context())
 
     # Assert
-    assert finding.status == CheckStatus.PASS
+    assert finding.status == CheckStatus.SKIPPED
+    assert finding.evidence["analysis_complete"] is False
     assert finding.evidence["evaluated_resource_types"] == ["CALL_RECORDINGS"]
     assert sorted(finding.evidence["stream_managed_encryption_resource_types"]) == [
         "AGENT_EVENTS",
@@ -212,11 +211,10 @@ def test_storage_encryption_kinesis_delivery_does_not_block_pass(
     ]
 
 
-def test_storage_encryption_partial_read_passes_on_evaluated_types(
+def test_storage_encryption_partial_read_prevents_clean_pass(
     make_check_context, mock_aws_client_factory
 ):
-    # One failed resource-type read must not discard successfully evaluated
-    # types; PASS is scoped with the failed read called out as a limitation.
+    # Successfully evaluated types do not establish the missing type's encryption.
     # Arrange
     factory = mock_aws_client_factory
     _wire(factory)
@@ -241,10 +239,24 @@ def test_storage_encryption_partial_read_passes_on_evaluated_types(
     finding = InstanceStorageEncryptionCheck().execute(make_check_context())
 
     # Assert
-    assert finding.status == CheckStatus.PASS
+    assert finding.status == CheckStatus.SKIPPED
     assert finding.evidence["analysis_complete"] is False
     assert finding.evidence["resource_types_failed"][0]["resource_type"] == "CHAT_TRANSCRIPTS"
     assert "did not complete" in finding.description
+
+
+def test_storage_encryption_no_configurations_is_not_applicable(
+    make_check_context, mock_aws_client_factory
+):
+    factory = mock_aws_client_factory
+    _wire(factory)
+    factory.list_instance_storage_configs_resilient.return_value = {"StorageConfigs": []}
+
+    finding = InstanceStorageEncryptionCheck().execute(make_check_context())
+
+    assert finding.status == CheckStatus.NOT_APPLICABLE
+    assert finding.evidence["analysis_complete"] is True
+    assert finding.evidence["evaluated_resource_types"] == []
 
 
 # --- ACGR -------------------------------------------------------------------

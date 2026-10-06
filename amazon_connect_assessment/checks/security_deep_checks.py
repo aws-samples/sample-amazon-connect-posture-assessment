@@ -643,22 +643,17 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 f"{len(failed_reads)} storage resource type read(s) did not complete"
             )
         # Kinesis Data Stream / Firehose delivery has no per-config
-        # EncryptionConfig; encryption is governed on the stream resource.
-        # Agent events can only stream to Kinesis, so stream delivery must
-        # not block a PASS — it is surfaced as scope information instead.
-        informational_notes = []
+        # EncryptionConfig; encryption must be verified on the stream resource.
         if stream_managed:
-            informational_notes.append(
+            limitations.append(
                 f"{len(stream_managed)} storage resource type(s) deliver to Kinesis streams "
-                "whose encryption is governed on the stream resource and is out of scope "
-                "for this control"
+                "whose encryption was not evaluated"
             )
         evidence.update(
             {
                 "resource_types_failed": failed_reads,
                 "analysis_complete": not limitations,
                 "limitations": limitations,
-                "informational_notes": informational_notes,
                 "evaluated_resource_types": evaluated,
                 "unencrypted_resource_types": unencrypted,
                 "aws_managed_encryption_resource_types": aws_managed,
@@ -666,8 +661,7 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 "customer_managed_key_not_configured": aws_managed,
             }
         )
-        scope_notes = limitations + informational_notes
-        scope_suffix = " Not covered: " + "; ".join(scope_notes) + "." if scope_notes else ""
+        scope_suffix = " Not covered: " + "; ".join(limitations) + "." if limitations else ""
 
         if unencrypted:
             return self.create_finding(
@@ -684,14 +678,14 @@ class InstanceStorageEncryptionCheck(BaseCheck):
                 ),
             )
 
-        if failed_reads and not evaluated:
+        if limitations:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="InstanceStorageConfig",
                 description=(
-                    "Storage encryption analysis evaluated no storage configuration and "
-                    "cannot report PASS: " + "; ".join(scope_notes) + "."
+                    "Storage encryption analysis could not establish coverage for every "
+                    "configured destination: " + "; ".join(limitations) + "."
                 ),
                 evidence=evidence,
             )
@@ -718,12 +712,12 @@ class InstanceStorageEncryptionCheck(BaseCheck):
 
         if not evaluated:
             return self.create_finding(
-                status=CheckStatus.PASS,
+                status=CheckStatus.NOT_APPLICABLE,
                 resource_id=instance.instance_id,
                 resource_type="InstanceStorageConfig",
                 description=(
-                    f"Instance {instance.display_name} has no storage configuration "
-                    f"requiring encryption evaluation.{scope_suffix}"
+                    f"Instance {instance.display_name} has no returned storage configuration "
+                    "to evaluate."
                 ),
                 evidence=evidence,
             )
