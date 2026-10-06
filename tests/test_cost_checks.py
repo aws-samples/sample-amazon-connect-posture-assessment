@@ -54,7 +54,6 @@ def _instance_with_flow(instance, flow_json, name="TestFlow"):
 def test_cost_inventory_direct_constructors_use_informational_disposition():
     # Arrange
     check_types = [
-        UsageMetricsCheck,
         UnusedPhoneNumbersCheck,
         PremiumFeaturesCostCheck,
         HoursOfOperationMismatchCheck,
@@ -65,6 +64,10 @@ def test_cost_inventory_direct_constructors_use_informational_disposition():
 
     # Assert
     assert dispositions == [FindingDisposition.INFORMATIONAL] * len(check_types)
+
+
+def test_usage_metrics_check_uses_manual_review_disposition():
+    assert UsageMetricsCheck().disposition == FindingDisposition.MANUAL_REVIEW
 
 
 @pytest.mark.parametrize(

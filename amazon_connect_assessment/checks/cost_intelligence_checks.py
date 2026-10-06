@@ -62,7 +62,7 @@ class UsageMetricsCheck(BaseCheck):
             name="CloudWatch Usage Metrics Analysis",
             pillar=Pillar.COST_OPTIMIZATION,
             severity=Severity.MEDIUM,
-            disposition=FindingDisposition.INFORMATIONAL,
+            disposition=FindingDisposition.MANUAL_REVIEW,
             description=(
                 "Queries CloudWatch for call volume metrics over 30 days "
                 "to identify unused or under-utilized instances."
