@@ -736,38 +736,36 @@ class AssessmentEngine:
         """Create a canonical ERROR outcome when an executor emitted no record."""
         from .checks.control_registry import get_atomic_control_registry
 
-        catalog = self.check_registry.get_atomic_control_registry() or get_atomic_control_registry()
-        try:
-            control = catalog.get(control_id)
-        except KeyError:
-            # Custom checks are registered on the registry but absent from the built-in catalog.
+        attached_catalog = self.check_registry.get_atomic_control_registry()
+        if attached_catalog is None and control_id in self.check_registry.list_check_ids():
             check = self.check_registry.get_check(control_id)
-            return Finding(
-                check_id=check.check_id,
-                check_name=check.name,
-                pillar=check.pillar,
-                severity=check.severity,
-                status=CheckStatus.ERROR,
-                resource_id=instance_id,
-                resource_type="ConnectInstance",
-                description="The selected control executor did not emit an outcome for this instance.",
-                remediation="Review execution errors, restore required data access, and rerun.",
-                evidence={"execution_limitation": "missing_selected_control_outcome"},
-                instance_id=instance_id,
-            )
+            check_id = check.check_id
+            check_name = check.name
+            pillar = check.pillar
+            severity = check.severity
+            disposition = check.disposition
+            methodology = check.methodology
+        else:
+            control = (attached_catalog or get_atomic_control_registry()).get(control_id)
+            check_id = control.control_id
+            check_name = control.name
+            pillar = control.pillar
+            severity = self.check_registry.get_control_severity(control_id)
+            disposition = control.disposition
+            methodology = control.methodology
         return Finding(
-            check_id=control.control_id,
-            check_name=control.name,
-            pillar=control.pillar,
-            severity=self.check_registry.get_control_severity(control_id),
+            check_id=check_id,
+            check_name=check_name,
+            pillar=pillar,
+            severity=severity,
             status=CheckStatus.ERROR,
             resource_id=instance_id,
             resource_type="ConnectInstance",
             description="The selected control executor did not emit an outcome for this instance.",
             remediation="Review execution errors, restore required data access, and rerun.",
             evidence={"execution_limitation": "missing_selected_control_outcome"},
-            disposition=control.disposition,
-            methodology=control.methodology,
+            disposition=disposition,
+            methodology=methodology,
             instance_id=instance_id,
         )
 

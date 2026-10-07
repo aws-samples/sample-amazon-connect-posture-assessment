@@ -514,7 +514,8 @@ def test_engine_missing_selected_outcome_backfills_error_expected_result():
     assert "synthesized ERROR outcome" in engine._execution_errors[0]
 
 
-def test_engine_missing_custom_check_outcome_backfills_error_expected_result():
+@pytest.mark.parametrize("check_id", ["custom-001", "cost-unused-numbers-001"])
+def test_engine_missing_standalone_check_outcome_preserves_metadata_expected_result(check_id):
     # Arrange
     from amazon_connect_assessment.checks.base import BaseCheck
 
@@ -524,9 +525,16 @@ def test_engine_missing_custom_check_outcome_backfills_error_expected_result():
 
     engine = AssessmentEngine.__new__(AssessmentEngine)
     engine.check_registry = CheckRegistry()
-    engine.check_registry.register_check(
-        _CustomCheck("custom-001", "Custom check", Pillar.SECURITY, Severity.LOW)
+    methodology = get_atomic_control_registry().get("cost-unused-numbers-001").methodology
+    check = _CustomCheck(
+        check_id,
+        "Standalone check",
+        Pillar.SECURITY,
+        Severity.LOW,
+        disposition=FindingDisposition.MANUAL_REVIEW,
+        methodology=methodology,
     )
+    engine.check_registry.register_check(check)
     engine.logger = MagicMock()
     engine._execution_errors = []
     instance = ConnectInstance(
@@ -542,8 +550,12 @@ def test_engine_missing_custom_check_outcome_backfills_error_expected_result():
 
     # Assert
     assert len(findings) == 1
-    assert findings[0].check_id == "custom-001"
-    assert findings[0].check_name == "Custom check"
+    assert findings[0].check_id == check_id
+    assert findings[0].check_name == check.name
+    assert findings[0].pillar == check.pillar
+    assert findings[0].severity == check.severity
+    assert findings[0].disposition == check.disposition
+    assert findings[0].methodology == check.methodology
     assert findings[0].status == CheckStatus.ERROR
 
 
