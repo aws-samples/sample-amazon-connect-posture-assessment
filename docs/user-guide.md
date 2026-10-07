@@ -23,14 +23,15 @@ operations, and CI/CD usage. For configuration keys, see
 
 Use a virtual environment in the repository workspace. A global `pipx` or
 system installation can remain on `PATH` after the repository changes and run
-older controls or report code.
+older controls or report code. Use Python 3.12 or later for the environment;
+replace `python3.12` below with a newer installed interpreter if needed.
 
 ### Repository workspace
 
 ```bash
-git clone <repository-url>
-cd amazon-connect-assessment
-python3 -m venv .venv
+git clone https://github.com/aws-samples/sample-amazon-connect-posture-assessment
+cd sample-amazon-connect-posture-assessment
+python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -e .
 python -m amazon_connect_assessment.cli --version
@@ -54,9 +55,9 @@ CloudShell has Python and the AWS CLI available and uses the credentials of the
 signed-in AWS Console session.
 
 ```bash
-git clone <repository-url>
-cd amazon-connect-assessment
-python3 -m venv .venv
+git clone https://github.com/aws-samples/sample-amazon-connect-posture-assessment
+cd sample-amazon-connect-posture-assessment
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 python -m amazon_connect_assessment.cli \
@@ -73,7 +74,7 @@ Contributors use the same workspace and invocation, with development and test
 extras:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev,test]"
 python -m amazon_connect_assessment.cli --help
@@ -186,7 +187,8 @@ python -m amazon_connect_assessment.cli --region us-east-1 --output-dir ./report
 Common options:
 
 ```bash
-# List the unified 64-control catalog without calling AWS
+# List controls selected by the effective configuration without calling AWS
+# From the repository root, the bundled config selects 63 of 64 controls
 python -m amazon_connect_assessment.cli --list-checks
 
 # Select canonical controls (BaseCheck and Journey-backed IDs behave the same)
@@ -238,7 +240,7 @@ For backward compatibility, `journey-sec-001` selects `sec-flow-auth-001` and
 and reports emit only canonical IDs.
 
 Journey analysis statically enumerates paths with maximum depth 50, 200 paths
-per phone number, and 5,000 paths per run. Cycle edges are pruned per path
+per phone number, and 5,000 paths per instance. Cycle edges are pruned per path
 without reducing structural node reachability. A reached cap, dynamic target,
 or unresolved flow reference makes the result incomplete; the tool retains
 partial evidence and does not claim that every runtime route was evaluated.

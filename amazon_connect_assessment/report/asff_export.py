@@ -190,16 +190,16 @@ def export_asff(
         findings_asff.append(asff)
 
     timestamp = to_utc(result.timestamp).strftime("%Y%m%d_%H%M%S")
-    template = filename_template or "connect_assessment_asff_{timestamp}_{account_id}"
-    filename = template.format(
+    template = filename_template or "connect_assessment_{timestamp}_{account_id}"
+    base_filename = template.format(
         timestamp=timestamp,
         account_id=result.account_id,
         region=result.region,
         assessment_id=result.assessment_id,
     )
-    if not filename.endswith(".json"):
-        filename = f"{filename}.json"
-    filename = validate_report_filename(filename)
+    # JSON and ASFF share a JSON extension and receive the same CLI template.
+    # Keep separate files when both formats are requested in one run.
+    filename = validate_report_filename(f"{base_filename.removesuffix('.json')}_asff.json")
     filepath = os.path.join(output_dir, filename)
 
     with open(filepath, "w") as f:

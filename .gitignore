@@ -87,6 +87,7 @@ connect-lens/
 .idea/
 .fleet/
 *.code-workspace
+.review-*
 
 # AI coding assistants (shared .claude/settings.json and .claude/CLAUDE.md are committed)
 CLAUDE.local.md

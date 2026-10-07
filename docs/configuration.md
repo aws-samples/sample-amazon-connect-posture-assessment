@@ -52,7 +52,6 @@ Global settings affect the overall assessment execution:
 ```yaml
 global_settings:
   timeout: 300                    # Timeout in seconds for AWS API calls
-  retry_count: 3                  # Number of retries for failed API calls
   max_retry_attempts: 5           # Maximum retry attempts for network operations
   retry_base_delay: 1.0          # Base delay between retries in seconds
   retry_max_delay: 60.0          # Maximum delay between retries in seconds
@@ -209,13 +208,10 @@ enabled_pillars:
   - "security"
 enabled_severities:
   - "critical"
-
-checks:
-  security-iam-001:
-    enabled: true
-  sec-storage-001:
-    enabled: true
 ```
+
+This selects the two Critical security controls. `sec-storage-001` has a High
+default severity, so it is excluded by this filter.
 
 ### Development Configuration
 
@@ -227,11 +223,13 @@ global_settings:
   parallel_execution: false  # Disable for easier debugging
   max_workers: 1
 
-# Enable all checks for comprehensive testing
+# Include all pillars and severity levels for comprehensive testing
 enabled_pillars:
   - "resilience"
   - "security"
   - "cost_optimization"
+  - "operational_excellence"
+  - "performance_efficiency"
 enabled_severities:
   - "critical"
   - "high"
@@ -245,7 +243,6 @@ enabled_severities:
 # Production settings optimized for performance
 global_settings:
   timeout: 300
-  retry_count: 5
   max_retry_attempts: 3
   parallel_execution: true
   max_workers: 16
@@ -266,7 +263,6 @@ output:
 journey_map:
   max_paths_per_did: 200   # Max paths per phone number (reduce for speed)
   max_depth: 50            # Max DFS depth per path
-  max_traffic_flows: 10    # Reserved for future traffic-based tier classification
 ```
 
 The HTML Caller Journey Map is phone-number driven: it renders every available
@@ -274,9 +270,9 @@ contact flow targeted by an inbound number. It has no `top_n` setting. The
 `journey_map` values above control the separate journey-scoring pipeline and its
 findings. That pipeline performs bounded static enumeration, not exhaustive
 runtime exploration: it uses depth 50 and 200 paths per phone number by default,
-with a fixed 5,000-path run cap. Cycle edges are pruned without reducing static
-structural reachability; reached caps, dynamic targets, and unresolved flow
-references mark enumeration incomplete.
+with a fixed 5,000-path cap per instance. Cycle edges are pruned without reducing
+static structural reachability; reached caps, dynamic targets, and unresolved
+flow references mark enumeration incomplete.
 
 ## Check Configuration Options
 
@@ -298,9 +294,12 @@ The following fields are reserved for future support and are not live settings:
 
 ## Configuration Validation
 
-Every run validates the effective configuration (defaults, config file, environment
-variables, then CLI flags) before contacting AWS, and exits with code 1 listing every
-problem. `--validate-config` runs the same checks and exits. The following are validated:
+The CLI validates local inputs in the effective configuration (defaults, config
+file, environment variables, then CLI flags) before contacting AWS.
+`--validate-config` performs these local checks and exits; it does not verify
+AWS credentials, permissions, or whether a target instance exists. An assessment
+run checks those AWS-dependent conditions by calling AWS before executing checks.
+Local validation covers:
 
 - Numeric settings: `timeout`, `max_retry_attempts`, `max_workers`, and `batch_size` must be
   positive integers; retry delays must be non-negative, with `retry_max_delay >= retry_base_delay`.
@@ -318,8 +317,12 @@ problem. `--validate-config` runs the same checks and exits. The following are v
   as literal text or silently ignored.
 - `--s3-bucket` must be a valid S3 bucket name; `--diff` must be an existing JSON report;
   `--log-file` must be in an existing, writable directory.
-- `--resume-assessment` must have a checkpoint (and cannot be combined with `--no-checkpoints`).
-- `--instance-id` must be an instance ID (UUID) that exists in the target region.
+- `--instance-id` must have the syntax of an instance ID (UUID). An assessment
+  run checks whether it exists in the target region after contacting AWS.
+
+An assessment run using `--resume-assessment` also requires an existing
+checkpoint and cannot combine it with `--no-checkpoints`. `--validate-config`
+does not check checkpoint availability.
 
 `--parallel`/`--sequential` and `--verbose`/`--quiet` are mutually exclusive.
 

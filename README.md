@@ -14,13 +14,6 @@ region, and it inventories the instance, parses your contact flows, maps what
 callers actually experience, and returns prioritized findings with remediation
 guidance.
 
-AWS now calls the contact center product
-[Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html).
-The [AWS CLI](https://docs.aws.amazon.com/cli/latest/reference/connect/index.html)
-and [API](https://docs.aws.amazon.com/connect/latest/APIReference/Welcome.html)
-service identifier remains `connect`, and this tool's command remains
-`amazon-connect-assessment`.
-
 No agents or assessment infrastructure are deployed. Assessed resources are not
 modified; only the explicitly enabled `--s3-output` path creates or hardens the
 selected report bucket and uploads reports.
@@ -193,17 +186,29 @@ supporting AWS services. Check whether your current identity already has it:
 amazon-connect-assessment --check-permissions --region us-east-1
 ```
 
-If permissions are missing, deploy the bundled least-privilege policy and attach
-it to your IAM user or role:
+If permissions are missing, download the least-privilege policy template. A
+`pipx` installation does not place repository files in your current directory:
+
+```bash
+curl --fail --location --silent --show-error \
+  --output AmazonConnectSelfAssessmentPolicy.yaml \
+  https://raw.githubusercontent.com/aws-samples/sample-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
+```
+
+After the download succeeds, deploy the policy and attach it to your IAM role:
 
 ```bash
 aws cloudformation deploy \
   --stack-name amazon-connect-assessment-permissions \
-  --template-file cloudformation/AmazonConnectSelfAssessmentPolicy.yaml \
+  --template-file AmazonConnectSelfAssessmentPolicy.yaml \
   --parameter-overrides AttachToRoleName=YOUR_ROLE_NAME \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
+
+If you cloned the repository, you can use the checked-in
+[`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](cloudformation/AmazonConnectSelfAssessmentPolicy.yaml)
+as `--template-file` instead of downloading it.
 
 Use `AttachToUserName=YOUR_USERNAME` to attach to an IAM user instead, or omit
 both parameters to create the policy without attaching it. The exact action list
@@ -246,7 +251,7 @@ report remains available offline without a CDN or backend service.
 | Goal | Command |
 |---|---|
 | Validate access before a long run | `amazon-connect-assessment --check-permissions --region us-east-1` |
-| See exactly what would run, without calling AWS | `amazon-connect-assessment --dry-run --region us-east-1` |
+| Validate configuration and probe AWS access without running assessment checks | `amazon-connect-assessment --dry-run --region us-east-1` |
 | List the unified controls, executors, severities, and dispositions | `amazon-connect-assessment --list-checks` |
 | Assess a single instance | `amazon-connect-assessment --region us-east-1 --instance-id <id>` |
 | Focus on one or more pillars | `amazon-connect-assessment --region us-east-1 --pillars security resilience` |
@@ -258,6 +263,9 @@ report remains available offline without a CDN or backend service.
 | Use a named or SSO profile | `amazon-connect-assessment --profile my-profile --region us-east-1` |
 | Speed up a large instance | `amazon-connect-assessment --region us-east-1 --skip-flow-analysis` |
 | Troubleshoot with full logging | `amazon-connect-assessment --region us-east-1 -vv --log-file run.log` |
+
+`--dry-run` calls AWS to validate credentials and test a subset of permissions.
+It does not execute assessment checks or generate a report.
 
 Checks run in parallel by default. Use `--sequential`, `--max-workers`, and
 `--batch-size` to tune throughput, and `--resume-assessment` to continue an

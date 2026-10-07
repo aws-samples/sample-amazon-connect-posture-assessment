@@ -16,6 +16,9 @@ amazon-connect-assessment \
   --output-format html json csv asff
 ```
 
+With the default filename template, the ASFF file ends in `_asff.json` so it
+does not overwrite the full-assessment JSON report from the same run.
+
 ## Shared result model
 
 `status` reports execution as `pass`, `fail`, `skipped`, `error`, or
@@ -122,13 +125,19 @@ ASFF is a Security Hub import document. It exports **failed `CONTROL` records on
 manual-review candidates, and informational inventory are omitted. This avoids
 presenting non-scoring review candidates as Security Hub compliance failures.
 
-Import an ASFF report with:
+The ASFF file contains a top-level `Findings` array. If it contains findings,
+pass the actual generated filename as CLI input:
 
 ```bash
 aws securityhub batch-import-findings \
-  --findings file://reports/connect_assessment_asff_*.json \
+  --cli-input-json file://reports/connect_assessment_20260101_120000_123456789012_asff.json \
   --region us-east-1
 ```
+
+Replace the example timestamp and account ID with the generated filename.
+`BatchImportFindings` accepts 1–100 findings per request; split a larger ASFF
+file into batches before importing it. An ASFF file with no failed controls has
+an empty `Findings` array and needs no import.
 
 ASFF uses resource type `Other`, preserves the Connect-specific resource type in
 tags, and includes disposition and bounded methodology fields in

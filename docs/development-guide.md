@@ -21,12 +21,13 @@
 ## Setup
 
 Use the repository workspace and its `.venv` so the Python module and generated
-reports always come from the current checkout:
+reports always come from the current checkout. Use Python 3.12 or later;
+replace `python3.12` with a newer installed interpreter if needed:
 
 ```bash
-git clone <repository-url>
-cd amazon-connect-assessment
-python3 -m venv .venv
+git clone https://github.com/aws-samples/sample-amazon-connect-posture-assessment
+cd sample-amazon-connect-posture-assessment
+python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev,test]"
 python -m amazon_connect_assessment.cli --help
@@ -377,7 +378,7 @@ amazon_connect_assessment/
 │   ├── models.py             # PhoneNumberEntry, SuperGraph, JourneyPath, JourneyScore
 │   ├── topology.py           # Phone number → flow resolution, tier classification
 │   ├── super_graph.py        # Stitches flows at transfer edges into instance-wide graph
-│   ├── path_enumerator.py    # Bounded iterative DFS, global cap at 5000 paths
+│   ├── path_enumerator.py    # Bounded iterative DFS, 5000 paths per instance
 │   └── journey_scorer.py     # Security/CX/cost scoring per path + finding generation
 │
 ├── report/

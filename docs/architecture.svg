@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200" role="img" aria-labelledby="diagram-title diagram-desc">
   <title id="diagram-title">Amazon Connect Customer Posture Assessment Tool deployment architecture</title>
-  <desc id="diagram-desc">One-account, one-Region read-oriented assessment runner, immutable control catalog, self-contained browser report, preserved AWS inspection targets, and optional S3 report publication.</desc>
+  <desc id="diagram-desc">One-account assessment runner for a selected Connect Region, with linked service reads that may cross Regions, a 64-control catalog, self-contained browser report, and optional S3 publication.</desc>
   <defs>
     <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#247BA0"/></marker>
     <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#879596"/></marker>
@@ -34,13 +34,13 @@
 
   <rect width="1800" height="1200" fill="#FFFFFF"/>
   <text x="900" y="48" class="title center">Amazon Connect Customer Posture Assessment Tool — Deployment Architecture</text>
-  <text x="900" y="78" class="subtitle center">One assessment targets one AWS account and one selected Region; the report may contain multiple Amazon Connect instances in that scope.</text>
+  <text x="900" y="78" class="subtitle center">One run selects one account and Connect Region; linked integrations may be read in another Region, and the report may include multiple Connect instances.</text>
 
   <rect x="40" y="105" width="850" height="1015" class="boundary"/>
   <rect x="930" y="105" width="830" height="1015" class="boundary"/>
   <text x="465" y="135" class="boundary-title center">Assessment runner and self-contained report</text>
   <text x="465" y="155" class="body center">local workstation, AWS CloudShell, or CI runner / browser</text>
-  <text x="1345" y="135" class="boundary-title center">Target AWS account / one selected Region</text>
+  <text x="1345" y="135" class="boundary-title center">Target AWS account / selected Connect Region and linked service Regions</text>
 
   <rect x="75" y="170" width="190" height="68" class="box"/>
   <text x="170" y="198" class="box-title center">CLI</text><text x="170" y="218" class="body center">amazon-connect-assessment</text>
@@ -80,19 +80,19 @@
   <text x="260" y="781" class="box-title center" fill="#5A2B6E">Python ReportGenerator</text><text x="260" y="801" class="body center">builds report-data JSON; embeds committed</text><text x="260" y="818" class="body center">report-app.js / report-app.css into a self-contained HTML shell</text>
   <rect x="485" y="755" width="370" height="82" class="purple"/>
   <text x="670" y="781" class="box-title center" fill="#5A2B6E">frontend/ maintained source</text><text x="670" y="801" class="body center">React + Cloudscape</text><text x="670" y="818" class="body center">builds committed app assets</text>
-  <path d="M465 600 V680 H260 V755" class="edge-purple"/><text x="278" y="677" class="small">findings + Journey</text>
+  <path d="M75 600 H60 V740 H260 V755" class="edge-purple"/>
   <path d="M485 796 H445" class="edge-purple optional"/><text x="465" y="747" class="small center">committed build assets</text>
 
   <rect x="75" y="865" width="780" height="88" class="blue"/>
   <text x="95" y="891" class="box-title" fill="#164A63">Browser report-wide instance scope derives one scoped assessment view</text>
   <text x="95" y="912" class="body">Summary / insights · charts · recommendations · findings · Journey map · assessment details · print / PDF</text>
   <text x="95" y="933" class="body">Clickable metrics and chart segments set exact finding-filter queries.</text>
-  <path d="M260 837 V850 H465 V865" class="edge-purple"/><text x="300" y="850" class="small">self-contained HTML</text>
+  <path d="M260 837 V865" class="edge-purple"/>
 
   <rect x="75" y="975" width="370" height="72" class="box" style="stroke:#247BA0"/>
   <text x="260" y="997" class="box-title center" fill="#164A63">Adaptive evidence</text><text x="260" y="1016" class="body center">wide viewport: tables · narrow viewport: cards</text><text x="260" y="1034" class="body center">full values retained for copy, detail, and print</text>
   <rect x="485" y="975" width="370" height="72" class="box"/>
-  <text x="670" y="995" class="box-title center">Local / browser outputs</text><text x="670" y="1014" class="body center">HTML · ASFF · top-level JSON + CSV = full assessment / all instances</text><text x="670" y="1033" class="body center">print / PDF = selected report scope</text>
+  <text x="670" y="995" class="box-title center">Local / browser outputs</text><text x="670" y="1014" class="body center">HTML · JSON · CSV: full assessment</text><text x="670" y="1033" class="body center">ASFF: failed controls · print / PDF: selected scope</text>
   <path d="M300 953 V975" class="edge-blue"/><path d="M630 953 V975" class="edge-gray"/>
   <text x="75" y="1082" class="small">No application backend or persistent service is deployed. The runner performs the assessment and exits;</text>
   <text x="75" y="1099" class="small">the generated HTML runs locally in the reader's browser.</text>
@@ -108,29 +108,32 @@
 
   <rect x="970" y="315" width="745" height="46" class="blue"/>
   <text x="1342" y="344" class="box-title center" fill="#164A63">Signed read-only AWS service API requests</text>
-  <path d="M855 316 H910 V338 H970" class="edge-blue"/><text x="867" y="308" class="small">read-only inspection</text>
+  <path d="M855 316 H910 V338 H970" class="edge-blue"/>
 
   <rect x="970" y="390" width="745" height="435" class="box" style="stroke:#C5D0D5"/>
   <text x="990" y="420" class="section-title" fill="#5F6B7A">Preserved inspection targets</text>
   <path d="M1342 361 V390" class="edge-blue"/>
   <rect x="995" y="440" width="330" height="78" class="pink"/><text x="1160" y="471" class="box-title center" fill="#7A173F">Amazon Connect</text><text x="1160" y="493" class="body center">instances, flows, queues, routing, phone numbers</text>
   <rect x="1360" y="440" width="330" height="78" class="pink"/><text x="1525" y="471" class="box-title center" fill="#7A173F">Amazon CloudWatch</text><text x="1525" y="493" class="body center">metrics, alarms, logs</text>
-  <rect x="995" y="535" width="330" height="78" class="pink"/><text x="1160" y="567" class="box-title center" fill="#7A173F">AWS CloudTrail</text><text x="1160" y="589" class="body center">audit configuration</text>
+  <rect x="995" y="535" width="330" height="78" class="pink"/><text x="1160" y="567" class="box-title center" fill="#7A173F">AWS CloudTrail</text><text x="1160" y="589" class="body center">trail config and failover events</text>
   <rect x="1360" y="535" width="330" height="78" class="green"/><text x="1525" y="567" class="box-title center" fill="#40560B">Amazon S3</text><text x="1525" y="589" class="body center">Connect storage configuration</text>
   <rect x="995" y="630" width="220" height="78" fill="#FFF6EA" stroke="#ED7100" stroke-width="1.5" rx="10"/><text x="1105" y="661" class="box-title center" fill="#7A3D0B">AWS Lambda</text><text x="1105" y="683" class="body center">integration and usage</text>
   <rect x="1232" y="630" width="220" height="78" class="pink" style="stroke:#CD2264"/><text x="1342" y="661" class="box-title center" fill="#7A173F">Amazon Lex</text><text x="1342" y="683" class="body center">bot integrations</text>
   <rect x="1470" y="630" width="220" height="78" fill="#FFF1F2" stroke="#DD344C" stroke-width="1.5" rx="10"/><text x="1580" y="661" class="box-title center" fill="#7A173F">AWS KMS</text><text x="1580" y="683" class="body center">encryption posture</text>
-  <text x="995" y="756" class="small">Connect flow JSON supplies the ACXD handoff evidence. Agentic CX application internals remain outside the</text>
-  <text x="995" y="773" class="small">assessment trust and evidence boundary.</text>
+  <rect x="995" y="720" width="165" height="66" class="pink"/><text x="1077" y="746" class="box-title center" fill="#7A173F">Service Quotas</text><text x="1077" y="768" class="body center">Connect limits</text>
+  <rect x="1172" y="720" width="165" height="66" class="pink"/><text x="1254" y="746" class="box-title center" fill="#7A173F">AWS IAM</text><text x="1254" y="768" class="body center">roles and policies</text>
+  <rect x="1349" y="720" width="165" height="66" class="pink"/><text x="1431" y="746" class="box-title center" fill="#7A173F">Amazon Q in Connect</text><text x="1431" y="768" class="body center">AI configuration</text>
+  <rect x="1526" y="720" width="164" height="66" class="pink"/><text x="1608" y="746" class="box-title center" fill="#7A173F">Amazon Bedrock</text><text x="1608" y="768" class="body center">logging and profiles</text>
+  <text x="995" y="810" class="small">Connect flow JSON supplies ACXD handoff evidence; Agentic CX application internals are not inspected.</text>
 
   <rect x="970" y="855" width="745" height="200" class="purple optional"/>
   <text x="990" y="885" class="section-title" fill="#5A2B6E">Report publication — opt-in --s3-output only</text>
   <rect x="995" y="910" width="310" height="72" class="green"/>
-  <text x="1150" y="938" class="box-title center" fill="#40560B">Amazon S3 report bucket</text><text x="1150" y="960" class="body center">Block Public Access · SSE-S3 · versioning</text>
+  <text x="1150" y="932" class="box-title center" fill="#40560B">Amazon S3 report bucket</text><text x="1150" y="950" class="body center">Block Public Access · versioning</text><text x="1150" y="968" class="body center">SSE-S3 report uploads</text>
   <text x="1330" y="925" class="body">Assessment execution otherwise reads configuration and telemetry.</text><text x="1330" y="945" class="body">--s3-output is the only assessment write path.</text><text x="1330" y="965" class="body">Optional IAM setup is a separate operator-run provisioning action.</text>
-  <path d="M445 796 H900 V946 H995" class="edge-purple optional"/><text x="822" y="935" class="small">opt-in --s3-output</text>
-  <text x="970" y="1084" class="small">The account / Region boundary remains fixed for the run; choosing a browser report scope only filters instances</text>
-  <text x="970" y="1101" class="small">already present in that assessment.</text>
+  <path d="M430 837 V850 H900 V946 H995" class="edge-purple optional"/>
+  <text x="970" y="1084" class="small">Browser report scope filters Connect instances in this run; it does not expand the account or</text>
+  <text x="970" y="1101" class="small">Connect Region assessed.</text>
 
   <text x="40" y="1168" class="box-title">Legend</text>
   <rect x="115" y="1149" width="200" height="26" class="blue"/><text x="215" y="1167" class="small center" fill="#164A63">Read-only inspection path</text>

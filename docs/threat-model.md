@@ -42,7 +42,7 @@ bucket before upload.
 | Zone | Description | Trust level |
 |---|---|---|
 | **Z1 — Execution host** | The workstation, CloudShell, or CI runner running the CLI. Has access to AWS credentials, the local filesystem, and report output. | Fully trusted |
-| **Z2 — AWS APIs** | Amazon Connect Customer, IAM/STS, CloudTrail, CloudWatch, KMS, Lambda, S3. Data source and (for `--s3-output`) report sink. | Trusted (authenticated, TLS) |
+| **Z2 — AWS APIs** | Amazon Connect Customer, IAM/STS, CloudTrail, CloudWatch, KMS, Lambda, S3, Lex, Amazon Q in Connect, Bedrock, and Service Quotas. Data source and (for `--s3-output`) report sink. | Trusted (authenticated, TLS) |
 | **Z3 — Generated reports** | HTML files with embedded JavaScript, plus JSON/CSV/ASFF. Opened directly in a browser or shared. | Untrusted content (flow names/parameters from AWS could contain payloads) |
 | **Z4 — Contact flow content** | JSON retrieved from the assessed AWS account. Parsed and traversed by the tool. | Untrusted (customer-controlled, potentially adversarial) |
 
@@ -64,8 +64,8 @@ bucket before upload.
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Static path enumeration is bounded at depth 50, 200 paths per phone number, and 5,000 paths globally. Path-local cycle edges are pruned without preventing the separate structural closure from reaching every statically resolvable node. |
-| Combinatorial explosion from highly branching flows | Denial of Service | Medium | Depth, per-number path, global path, and step caps prevent unbounded growth. A reached cap, dynamic target, or unresolved cross-flow reference marks enumeration incomplete; clean partial evidence is not treated as exhaustive proof. |
+| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Static path enumeration is bounded at depth 50, 200 paths per phone number, and 5,000 paths per instance. Path-local cycle edges are pruned without preventing the separate structural closure from reaching every statically resolvable node. |
+| Combinatorial explosion from highly branching flows | Denial of Service | Medium | Depth, per-number path, per-instance path, and step caps bound path enumeration. A reached cap, dynamic target, or unresolved cross-flow reference marks enumeration incomplete; clean partial evidence is not treated as exhaustive proof. |
 | Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | The static report shell HTML-escapes its title and pins the inline bundle with a CSP hash, assessment data is serialized into a script-safe JSON island, React renders ordinary strings as text, and markdown disables raw HTML. |
 | Malformed flow JSON crashes the parser | Denial of Service | Low | Parser validates input type, skips non-dict actions gracefully, and uses `.get()` with defaults throughout. |
 | Dynamic attribute references used to confuse graph analysis | Spoofing | Low | Dynamic references are detected and recorded in `dynamic_references` — never followed as if they were static edges. |
@@ -76,7 +76,7 @@ bucket before upload.
 |---|---|---|---|
 | Credentials leaked into logs | Information Disclosure | High | Credentials are never logged. Logging references operation names, not parameters containing secrets. |
 | Credentials leaked into report output | Information Disclosure | High | Reports contain only findings, metadata (account ID, region), and evidence data. No credential material is serialized. |
-| Overly broad permissions on the assessment principal | Elevation of Privilege | Medium | The assessment requires only read-only permissions. The CloudFormation template (`AmazonConnectSelfAssessmentPolicy.yaml`) grants a single **inline** least-privilege policy scoped to exactly the actions in `iam_permissions.py` — no AWS managed policies (`SecurityAudit`/`ViewOnlyAccess`) are attached, so every allowed action is explicit and auditable. It is a same-account policy: the tool runs against the caller's own account with its existing credentials; there is no cross-account role assumption or External ID in the code (cross-account support was deliberately removed; see the "Purge cross-account role code paths" refactor). |
+| Overly broad permissions on the assessment principal | Elevation of Privilege | Medium | The CloudFormation template (`AmazonConnectSelfAssessmentPolicy.yaml`) creates a customer-managed read-only policy with the actions listed in `iam_permissions.py`; it does not attach AWS managed policies such as `SecurityAudit` or `ViewOnlyAccess`. The policy can be attached to a named role or granted to a user through a group. The tool uses the caller's resolved credentials and does not assume a cross-account role itself. |
 | Checkpoint files expose sensitive state | Information Disclosure | Low | Checkpoint directory created `0o700`, files `0o600`. Contains only assessment progress metadata, not credentials. |
 | Session token reuse after expiration | Spoofing | Low | boto3 handles credential refresh natively from the caller's configured credentials (profile, environment, or instance/SSO). |
 
@@ -93,7 +93,7 @@ bucket before upload.
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
 | Auto-created or pre-existing selected report bucket is publicly exposed | Information Disclosure | High | Before every upload, the publisher applies S3 Block Public Access (all four flags), enables versioning, and preserves existing default encryption or adds SSE-S3 when absent. This also changes an existing selected bucket and has no automatic rollback. |
-| Over-broad write permissions on the assessment role | Elevation of Privilege | Medium | The default CloudFormation role is read-only and does not grant S3 report-publishing writes. When `--s3-output` is enabled, operators must add a separate policy scoped to `arn:aws:s3:::amazon-connect-assessment-report-*` and its objects. Publishing is opt-in. |
+| Over-broad write permissions on the assessment principal | Elevation of Privilege | Medium | The CloudFormation policy is read-only and does not grant S3 report-publishing writes. When `--s3-output` is enabled, operators must add a separate policy scoped to the selected report bucket and its objects. Publishing is opt-in. |
 | Bucket-name takeover (global S3 namespace) | Spoofing | Low | `head_bucket` checks ownership before upload; a `403` (owned elsewhere) surfaces an error rather than silently uploading. Operators can override with `--s3-bucket`. |
 | Failed upload aborts the assessment | Denial of Service | Low | Upload failures are caught and reported; the assessment still succeeds and local reports remain. |
 
@@ -103,12 +103,17 @@ bucket before upload.
 
 | Category | Key risks | Primary controls |
 |---|---|---|
-| **Spoofing** | Credential misuse; bucket-name takeover | Same-account read-only inline policy (no cross-account assumption); bucket ownership checked via `head_bucket` before upload |
+| **Spoofing** | Credential misuse; bucket-name takeover | Same-account read-only customer-managed policy; bucket ownership checked via `head_bucket` before upload |
 | **Tampering** | Adversarial flow content | Iterative bounded parsing; Script-safe JSON and React text rendering |
-| **Repudiation** | Assessment actions not auditable | All AWS API calls logged in CloudTrail automatically |
+| **Repudiation** | Assessment actions not auditable | Verify CloudTrail coverage for the relevant API events and account; event recording depends on event type and trail configuration |
 | **Information Disclosure** | Credential leakage; public report bucket | No credentials in logs/reports; Block Public Access + SSE on report bucket; restrictive local file permissions |
-| **Denial of Service** | Graph explosion | Bounded traversal (depth 50, paths 5000) |
-| **Elevation of Privilege** | XSS in reports; over-broad IAM | Script-safe JSON and React text rendering; least-privilege read-only role, with optional S3 writes granted separately and scoped to the report bucket |
+| **Denial of Service** | Graph explosion | Bounded path enumeration per instance (depth 50, paths 5000) |
+| **Elevation of Privilege** | XSS in reports; over-broad IAM | Script-safe JSON and React text rendering; customer-managed read-only policy, with optional S3 writes granted separately for the report bucket |
+
+CloudTrail [event selectors](https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_EventSelector.html)
+determine which management and data events a trail logs. A trail's default
+selectors include read and write management events but no data events; do not
+assume every assessment API call appears in the configured trail.
 
 ---
 
@@ -143,9 +148,10 @@ bucket before upload.
 │ bucket (hardened,  │  │  ├─ Amazon Connect Customer    │
 │ BPA + SSE + ver.)  │  │  ├─ IAM / STS                  │
 └────────────────────┘  │  ├─ CloudTrail                 │
-                        │  ├─ CloudWatch                 │
-                        │  ├─ KMS                        │
-                        │  └─ Lambda (describe only)     │
+                        │  ├─ CloudWatch / KMS           │
+                        │  ├─ Lambda / Lex               │
+                        │  ├─ Q in Connect / Bedrock     │
+                        │  └─ Service Quotas             │
                         └──────────────┬────────────────┘
                                        │ Returns
                                        ▼
@@ -174,7 +180,7 @@ bucket before upload.
 | Local attacker on same host accesses reports | Low | Medium | Standard host security model — mitigate with OS-level access controls |
 | Malicious flow content reaches a future frontend change that introduces an unsafe HTML sink | Low | Medium | Covered by script-safe JSON, React text rendering, raw-HTML-disabled markdown, report-contract tests, and code review |
 | boto3 dependency has a vulnerability | Low | High | Mitigated by dependency scanning in CI and regular updates |
-| Large account with 1000+ flows causes high memory during graph construction | Medium | Low | Bounded by MAX_TOTAL_PATHS (5000); graph holds only tier-1/tier-2 flows |
+| Large account with 1000+ flows causes high memory during graph construction | Medium | Low | `MAX_TOTAL_PATHS` bounds enumerated paths per instance, not super-graph construction or total memory across instances. Large accounts still require monitoring and output-size limits. |
 | Report bucket retains historical reports indefinitely | Low | Low | Versioning is enabled by design; operators can apply lifecycle rules |
 
 ---

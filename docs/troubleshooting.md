@@ -132,7 +132,11 @@ Credentials work but no instances are returned.
 
 ### Checks return `Skipped` instead of Pass/Fail
 
-The IAM role is missing the permission for that specific API. The finding description names it exactly. Grant the permission and re-run.
+A `Skipped` result means the check could not complete its evaluation. Inspect
+the finding's description and evidence: possible causes include a denied API
+read, incomplete or unavailable data, or a resource that changed during the
+assessment. If the evidence identifies a denied action, grant that read
+permission and re-run. Do not treat partial evidence as a passing result.
 
 For the full read-only assessment permission set, see
 `docs/iam-policy-template.json` or deploy
