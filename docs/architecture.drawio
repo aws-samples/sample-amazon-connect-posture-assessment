@@ -8,14 +8,14 @@
         <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#232F3E;" value="Amazon Connect Customer Posture Assessment Tool — Deployment Architecture" vertex="1">
           <mxGeometry height="40" width="1720" x="40" y="25" as="geometry" />
         </mxCell>
-        <mxCell id="scopeNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontColor=#5F6B7A;" value="One assessment targets one AWS account and one selected Region; the report may contain multiple Amazon Connect instances in that scope." vertex="1">
+        <mxCell id="scopeNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontColor=#5F6B7A;" value="One run selects one account and Connect Region; linked integrations may be read in another Region, and the report may include multiple Connect instances." vertex="1">
           <mxGeometry height="28" width="1720" x="40" y="63" as="geometry" />
         </mxCell>
 
         <mxCell id="runnerBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Assessment runner and self-contained report&lt;br&gt;(local workstation, AWS CloudShell, or CI runner / browser)" vertex="1">
           <mxGeometry height="1015" width="850" x="40" y="105" as="geometry" />
         </mxCell>
-        <mxCell id="awsBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Target AWS account / one selected Region" vertex="1">
+        <mxCell id="awsBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Target AWS account / selected Connect Region and linked service Regions" vertex="1">
           <mxGeometry height="1015" width="830" x="930" y="105" as="geometry" />
         </mxCell>
 
@@ -66,7 +66,7 @@
         <mxCell id="evidence" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#247BA0;strokeWidth=1.5;fontColor=#164A63;fontSize=12;align=center;verticalAlign=middle;" value="Adaptive evidence&lt;br&gt;wide viewport: tables · narrow viewport: cards&lt;br&gt;full values retained for copy, detail, and print" vertex="1">
           <mxGeometry height="72" width="370" x="75" y="975" as="geometry" />
         </mxCell>
-        <mxCell id="localOutputs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="Local / browser outputs&lt;br&gt;HTML · ASFF · top-level JSON + CSV = full assessment / all instances&lt;br&gt;print / PDF = selected report scope" vertex="1">
+        <mxCell id="localOutputs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="Local / browser outputs&lt;br&gt;HTML · JSON · CSV: full assessment&lt;br&gt;ASFF: failed controls · print / PDF: selected scope" vertex="1">
           <mxGeometry height="72" width="370" x="485" y="975" as="geometry" />
         </mxCell>
         <mxCell id="runnerNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="No application backend or persistent service is deployed. The runner performs the assessment and exits; the generated HTML runs locally in the reader's browser." vertex="1">
@@ -98,7 +98,7 @@
         <mxCell id="cloudwatch" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon CloudWatch&lt;br&gt;metrics, alarms, logs" vertex="1">
           <mxGeometry height="78" width="330" x="1360" y="440" as="geometry" />
         </mxCell>
-        <mxCell id="cloudtrail" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS CloudTrail&lt;br&gt;audit configuration" vertex="1">
+        <mxCell id="cloudtrail" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS CloudTrail&lt;br&gt;trail config and failover events" vertex="1">
           <mxGeometry height="78" width="330" x="995" y="535" as="geometry" />
         </mxCell>
         <mxCell id="s3source" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F9E9;strokeColor=#7AA116;strokeWidth=1.5;fontColor=#40560B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon S3&lt;br&gt;Connect storage configuration" vertex="1">
@@ -113,20 +113,32 @@
         <mxCell id="kms" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#DD344C;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS KMS&lt;br&gt;encryption posture" vertex="1">
           <mxGeometry height="78" width="220" x="1470" y="630" as="geometry" />
         </mxCell>
-        <mxCell id="connectBoundaryNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="Connect flow JSON supplies the ACXD handoff evidence. Agentic CX application internals remain outside the assessment trust and evidence boundary." vertex="1">
-          <mxGeometry height="55" width="695" x="995" y="735" as="geometry" />
+        <mxCell id="serviceQuotas" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Service Quotas&lt;br&gt;Connect limits" vertex="1">
+          <mxGeometry height="66" width="165" x="995" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="iamInspection" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="AWS IAM&lt;br&gt;roles and policies" vertex="1">
+          <mxGeometry height="66" width="165" x="1172" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="qConnect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Amazon Q in Connect&lt;br&gt;AI configuration" vertex="1">
+          <mxGeometry height="66" width="165" x="1349" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="bedrock" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Amazon Bedrock&lt;br&gt;logging and profiles" vertex="1">
+          <mxGeometry height="66" width="164" x="1526" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="connectBoundaryNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="Connect flow JSON supplies ACXD handoff evidence; Agentic CX application internals are not inspected." vertex="1">
+          <mxGeometry height="25" width="695" x="995" y="797" as="geometry" />
         </mxCell>
 
         <mxCell id="publishArea" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=1.5;fontColor=#5A2B6E;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;spacingLeft=16;dashed=1;" value="Report publication — opt-in --s3-output only" vertex="1">
           <mxGeometry height="200" width="745" x="970" y="855" as="geometry" />
         </mxCell>
-        <mxCell id="reportBucket" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F9E9;strokeColor=#7AA116;strokeWidth=1.5;fontColor=#40560B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon S3 report bucket&lt;br&gt;Block Public Access · SSE-S3 · versioning" vertex="1">
+        <mxCell id="reportBucket" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F9E9;strokeColor=#7AA116;strokeWidth=1.5;fontColor=#40560B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon S3 report bucket&lt;br&gt;Block Public Access · versioning&lt;br&gt;SSE-S3 report uploads" vertex="1">
           <mxGeometry height="72" width="310" x="995" y="910" as="geometry" />
         </mxCell>
         <mxCell id="securityNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#5F6B7A;whiteSpace=wrap;" value="Assessment execution otherwise reads configuration and telemetry. --s3-output is the only assessment write path. Optional IAM setup above is a separate operator-run provisioning action." vertex="1">
           <mxGeometry height="82" width="360" x="1330" y="905" as="geometry" />
         </mxCell>
-        <mxCell id="awsNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="The account / Region boundary remains fixed for the run; choosing a browser report scope only filters instances already present in that assessment." vertex="1">
+        <mxCell id="awsNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="Browser report scope filters Connect instances in this run; it does not expand the account or Connect Region assessed." vertex="1">
           <mxGeometry height="45" width="745" x="970" y="1070" as="geometry" />
         </mxCell>
 
@@ -135,16 +147,16 @@
         <mxCell id="e_credentials_factory" edge="1" parent="1" source="credentials" target="factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_factory_engine" edge="1" parent="1" source="factory" target="engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_engine_catalog" edge="1" parent="1" source="engine" target="catalog" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#D86613;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e_catalog_report" edge="1" parent="1" source="catalog" target="reportGenerator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;" value="findings + Journey"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_catalog_report" edge="1" parent="1" source="catalog" target="reportGenerator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=1;entryX=0.5;entryY=0;" value=""><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="60" y="610" /><mxPoint x="60" y="740" /><mxPoint x="260" y="740" /></Array></mxGeometry></mxCell>
         <mxCell id="e_frontend_report" edge="1" parent="1" source="frontend" target="reportGenerator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;dashed=1;" value="committed build assets"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e_report_browser" edge="1" parent="1" source="reportGenerator" target="browserScope" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;" value="self-contained HTML"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_report_browser" edge="1" parent="1" source="reportGenerator" target="browserScope" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.24;entryY=0;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_browser_evidence" edge="1" parent="1" source="browserScope" target="evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_browser_outputs" edge="1" parent="1" source="browserScope" target="localOutputs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_cfn_policy" edge="1" parent="1" source="cloudformation" target="managedPolicy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_policy_iam" edge="1" parent="1" source="managedPolicy" target="iam" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e_engine_readonly" edge="1" parent="1" source="engine" target="readOnlyApis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value="read-only inspection"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_engine_readonly" edge="1" parent="1" source="engine" target="readOnlyApis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e_readonly_targets" edge="1" parent="1" source="readOnlyApis" target="inspectionTargets" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e_report_bucket" edge="1" parent="1" source="reportGenerator" target="reportBucket" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;fontSize=11;fontColor=#5A2B6E;" value="opt-in --s3-output"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="900" y="946" /></Array></mxGeometry></mxCell>
+        <mxCell id="e_report_bucket" edge="1" parent="1" source="reportGenerator" target="reportBucket" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;exitX=0.95;exitY=1;entryX=0;entryY=0.5;" value=""><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="430" y="850" /><mxPoint x="900" y="850" /><mxPoint x="900" y="946" /></Array></mxGeometry></mxCell>
 
         <mxCell id="legendTitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontStyle=1;fontColor=#232F3E;" value="Legend" vertex="1"><mxGeometry height="25" width="70" x="40" y="1150" as="geometry" /></mxCell>
         <mxCell id="legendRead" parent="1" style="text;html=1;strokeColor=#247BA0;strokeWidth=2;fillColor=#EAF3F8;align=center;verticalAlign=middle;fontSize=11;fontColor=#164A63;" value="Read-only inspection path" vertex="1"><mxGeometry height="26" width="200" x="115" y="1149" as="geometry" /></mxCell>

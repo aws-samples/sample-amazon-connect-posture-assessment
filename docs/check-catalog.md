@@ -9,9 +9,9 @@ The catalog has 23 `CONTROL`, 25 `MANUAL_REVIEW`, and 16 `INFORMATIONAL`
 records. The pillar totals are Security 19, Resilience 18, Cost Optimization 16,
 Operational Excellence 8, and Performance Efficiency 3.
 
-Run `amazon-connect-assessment --list-checks` to see the same unified catalog.
-Journey-backed controls appear in that output and use the same filters as
-BaseCheck controls.
+Run `amazon-connect-assessment --list-checks` to see the controls selected from
+this catalog after configuration and CLI filters. Journey-backed controls
+appear in that output and use the same filters as BaseCheck controls.
 
 ## Status and disposition
 
@@ -218,9 +218,9 @@ they are catalog records rather than a second findings model:
 
 The journey pipeline resolves phone-number associations, builds an instance-wide
 flow graph, and performs bounded static path enumeration with a maximum depth of
-50, 200 paths per phone number, and 5,000 paths per run. Path-local cycle edges
-are pruned, while the separate iterative structural closure still reaches every
-statically resolvable node. A depth, path, or step cap, dynamic target, or
+50, 200 paths per phone number, and 5,000 paths per instance. Path-local cycle
+edges are pruned, while the separate iterative structural closure still reaches
+every statically resolvable node. A depth, path, or step cap, dynamic target, or
 unresolved flow reference marks enumeration incomplete. These limits prevent an
 exhaustive-runtime claim: a known structural defect can still fail, while clean
 but incomplete evidence is not treated as proof that every possible route is
@@ -239,13 +239,17 @@ every active filter.
 and the two legacy aliases described in [Canonical identity and evidence
 contract](#canonical-identity-and-evidence-contract). Inputs are normalized and
 deduplicated before selection. `--list-checks` displays the unified selected
-controls, including Journey-backed controls, with severity and disposition. It
-never displays an alias.
+controls, including Journey-backed controls, with effective severity and
+disposition. It never displays an alias. The table above shows catalog default
+severities; configuration can override a BaseCheck severity. In this checkout,
+`config/assessment_config.yaml` disables `ops-auto-resolve-001` and raises
+`cost-unused-001` from Low to Medium.
 
 Examples:
 
 ```bash
-# List all 64 canonical controls without calling AWS
+# List controls selected by the effective configuration without calling AWS
+# From the repository root, the bundled config selects 63 of 64 controls
 amazon-connect-assessment --list-checks
 
 # Select one BaseCheck control and one Journey-backed control

@@ -28,6 +28,7 @@ from amazon_connect_assessment.models import (
     Pillar,
     Severity,
 )
+from amazon_connect_assessment.report.asff_export import export_asff
 from amazon_connect_assessment.report_generator import ReportGenerator
 
 
@@ -138,6 +139,22 @@ class TestReportGenerator:
                 sample_assessment_result,
                 "json",
             )
+
+    def test_json_and_asff_with_shared_template_keep_both_reports(
+        self, sample_assessment_result, tmp_path
+    ):
+        template = "assessment_{assessment_id}.json"
+        json_path = ReportGenerator().generate_json_report(
+            sample_assessment_result, str(tmp_path), filename_template=template
+        )
+        asff_path = export_asff(sample_assessment_result, str(tmp_path), filename_template=template)
+
+        assert json_path != asff_path
+        assert asff_path.endswith("_asff.json")
+        with open(json_path, encoding="utf-8") as report_file:
+            assert json.load(report_file)["assessment_id"] == sample_assessment_result.assessment_id
+        with open(asff_path, encoding="utf-8") as report_file:
+            assert "Findings" in json.load(report_file)
 
     def test_generate_html_report_basic(self, sample_assessment_result):
         """Test basic HTML report generation."""

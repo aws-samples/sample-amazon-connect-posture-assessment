@@ -152,7 +152,7 @@ class TestFindingToAsffBasicShape:
             filename_template="assessment_{assessment_id}_{region}",
         )
 
-        assert path == str(tmp_path / "assessment_assessment-123_us-east-1.json")
+        assert path == str(tmp_path / "assessment_assessment-123_us-east-1_asff.json")
 
     def test_export_rejects_path_template(self, tmp_path):
         result = SimpleNamespace(

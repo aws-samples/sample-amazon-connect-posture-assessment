@@ -97,7 +97,7 @@ numbers and the branching complexity of parsed flows. The pipeline:
 - calls `ListPhoneNumbersV2` with pagination;
 - builds a super-graph from already parsed flows in memory; and
 - runs bounded iterative static enumeration from each phone-number entry point,
-  with maximum depth 50, 200 paths per number, and 5,000 paths for the run.
+  with maximum depth 50, 200 paths per number, and 5,000 paths per instance.
 
 Cycle edges are pruned per path, but the separate iterative structural closure
 still reaches every statically resolvable node. Enumeration is marked incomplete
@@ -121,7 +121,7 @@ The journey mapping pipeline has its own bounds independent of the parallel engi
 |---|---|---|
 | `journey_map.max_paths_per_did` | 200 | Max paths enumerated from a single phone number. Reduce to 50 for faster runs. |
 | `journey_map.max_depth` | 50 | Max DFS depth per path. Reduce if your flows are known to be shallow. |
-| Global `MAX_TOTAL_PATHS` | 5000 | Hard cap on total paths across all entry points. Prevents memory issues on large topologies. |
+| `MAX_TOTAL_PATHS` | 5000 | Hard cap on paths across an instance's phone-number entry points. Bounds path enumeration for each instance, not graph construction or a multi-instance run. |
 
 Configure via `assessment_config.yaml`:
 
