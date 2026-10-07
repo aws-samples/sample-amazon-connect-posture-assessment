@@ -8,9 +8,10 @@ separately and be tested in isolation.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from ..models import CheckStatus, Finding, Pillar, Severity
+from ..models import Finding, Pillar, Severity
+from ..score_policy import compute_scored_control_counts, is_control_failure
 
 
 @dataclass
@@ -20,8 +21,9 @@ class PostureScore:
     pillar: Pillar
     total_checks: int
     passed_checks: int
-    pass_rate: float  # 0.0 - 100.0
-    maturity_level: str  # "Basic" | "Intermediate" | "Advanced"
+    scored_control_denominator: int
+    pass_rate: Optional[float]  # 0.0 - 100.0, or None when not assessed
+    maturity_level: str  # "Not assessed" | "Basic" | "Intermediate" | "Advanced"
     improvement_actions: List[Dict] = field(default_factory=list)
 
 
@@ -30,7 +32,9 @@ _BASIC_THRESHOLD = 50.0
 _INTERMEDIATE_THRESHOLD = 80.0
 
 
-def _maturity(pass_rate: float) -> str:
+def _maturity(pass_rate: Optional[float]) -> str:
+    if pass_rate is None:
+        return "Not assessed"
     if pass_rate >= _INTERMEDIATE_THRESHOLD:
         return "Advanced"
     if pass_rate >= _BASIC_THRESHOLD:
@@ -85,22 +89,14 @@ def generate_posture_roadmap(findings: List[Finding]) -> Dict[str, PostureScore]
         if not pillar_findings:
             continue
 
-        # Exclude NOT_APPLICABLE and SKIPPED from the maturity denominator:
-        # a check that didn't apply or couldn't run shouldn't drag the score
-        # down or falsely inflate it. Total is preserved for display only.
+        # Preserve all findings for display while scoring only evaluated controls.
         total = len(pillar_findings)
-        evaluated_findings = [
-            f
-            for f in pillar_findings
-            if f.status not in (CheckStatus.NOT_APPLICABLE, CheckStatus.SKIPPED)
-        ]
-        evaluated_total = len(evaluated_findings)
-        passed = sum(1 for f in evaluated_findings if f.status == CheckStatus.PASS)
-        pass_rate = (passed / evaluated_total * 100) if evaluated_total > 0 else 0.0
+        passed, scored_total = compute_scored_control_counts(pillar_findings)
+        pass_rate = (passed / scored_total * 100) if scored_total > 0 else None
         maturity = _maturity(pass_rate)
 
-        # Prioritize improvement actions from failed findings.
-        failed = [f for f in pillar_findings if f.status == CheckStatus.FAIL]
+        # Prioritize improvement actions from failed controls only.
+        failed = [finding for finding in pillar_findings if is_control_failure(finding)]
         failed.sort(key=lambda f: _SEVERITY_ORDER.get(f.severity, 4))
         actions = []
         for f in failed[:10]:
@@ -125,7 +121,8 @@ def generate_posture_roadmap(findings: List[Finding]) -> Dict[str, PostureScore]
             pillar=pillar,
             total_checks=total,
             passed_checks=passed,
-            pass_rate=round(pass_rate, 1),
+            scored_control_denominator=scored_total,
+            pass_rate=round(pass_rate, 1) if pass_rate is not None else None,
             maturity_level=maturity,
             improvement_actions=actions,
         )

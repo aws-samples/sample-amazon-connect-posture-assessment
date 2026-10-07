@@ -1,6 +1,6 @@
 # Contributing Guidelines
 
-Thank you for your interest in contributing to our project. Whether it's a bug report, a new feature, a correction, or additional
+Thank you for your interest in contributing to our project. Whether it's a bug report, new feature, correction, or additional
 documentation, we greatly value feedback and contributions from our community.
 
 Please read through this document before submitting any issues or pull requests so that we have all the necessary
@@ -54,9 +54,14 @@ To send us a pull request, please:
    # Run unit tests
    python -m pytest tests/ -v
 
-   # Only if you changed the HTML report UI (frontend/src or its deps); Node.js 20+.
-   # Commit the rebuilt amazon_connect_assessment/templates/app/ bundle with your change.
-   cd frontend && npm ci && npm test && npm run check
+   # Only when changing the Cloudscape report UI (Node.js 20+)
+   cd frontend
+   npm ci
+   npm audit --audit-level=high
+   npm test
+   npm run build
+   npm run check
+   cd ..
    ```
 5. Commit to your fork using clear commit messages.
 6. Send us a pull request, answering any default questions in the pull request interface.
@@ -66,28 +71,28 @@ To send us a pull request, please:
 
 The following checks run automatically on every pull request:
 
-- **CI** (`ci.yml`) — `ruff check` (lint) and `ruff format --check` (formatting), `mypy` type-checking, and `pytest` with the coverage gate (`--cov-fail-under=65`), all run across the supported Python matrix; a separate job audits dependencies
+- **CI** (`ci.yml`) — Python lint, formatting, mypy, and pytest coverage plus a Node.js 20 job that audits/tests the React/Cloudscape frontend and verifies the committed `templates/app/` bundle
 - **CloudFormation Lint** (`cfn-lint.yml`) — `cfn-lint` validation of `cloudformation/*.yaml`
 - **ASH Security Scan** (`ash-security-scan.yml`, plus a full-repository scan) — [Automated Security Helper](https://github.com/awslabs/automated-security-helper) scans changed files for secrets, dependency vulnerabilities, and IaC misconfigurations
 
 All checks must pass before a pull request can be merged.
 
-GitHub provides additional documentation on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
+GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
 [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 
 
 ## Finding contributions to work on
-Looking at the existing issues is a great way to find something to contribute to. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
+Looking at the existing issues is a great way to find something to contribute on. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
 
 
 ## Code of Conduct
 This project has adopted the [Amazon Open Source Code of Conduct](https://aws.github.io/code-of-conduct).
-For more information, see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact
+For more information see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact
 opensource-codeofconduct@amazon.com with any additional questions or comments.
 
 
 ## Security issue notifications
-If you discover a potential security issue in this project, we ask that you notify AWS/Amazon Security through our [vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/). Please do **not** create a public GitHub issue.
+If you discover a potential security issue in this project we ask that you notify AWS/Amazon Security through our [vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/). Please do **not** create a public github issue.
 
 
 ## Licensing

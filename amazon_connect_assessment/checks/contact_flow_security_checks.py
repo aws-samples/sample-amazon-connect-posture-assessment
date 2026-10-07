@@ -452,17 +452,17 @@ class DynamicPromptInjectionCheck(BaseCheck):
 
 
 class LambdaResponseValidationCheck(BaseCheck):
-    """Detect Lambda returns used for branching without validation (Req 21)."""
+    """Review Lambda conditional branches for a default fallback edge."""
 
     def __init__(self):
         super().__init__(
             check_id="sec-lambda-validation-001",
-            name="Lambda Response Validation",
+            name="Lambda Branch Default Fallback Review",
             pillar=Pillar.SECURITY,
             severity=Severity.MEDIUM,
             description=(
-                "Detects contact flows that branch on Lambda return values "
-                "without validating the response shape or providing a default."
+                "Identifies Lambda actions with conditional branches but no "
+                "parser-visible default fallback edge."
             ),
         )
 

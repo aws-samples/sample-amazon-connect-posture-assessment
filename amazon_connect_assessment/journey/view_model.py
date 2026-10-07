@@ -36,6 +36,21 @@ _READER_LABELS = {
     "InvalidPhoneNumber": "Invalid phone number",
     "ContactNotLinked": "Contact not linked",
 }
+_ACXD_ACTION_TYPE = "ConnectParticipantWithAgenticCX"
+_ACXD_READER_LABELS = {
+    "Default": "Completed",
+    "Escalation": "Escalated to agent",
+    "InputTimeLimitExceeded": "Idle timeout",
+    "NoMatchingCondition": "Other outcome",
+    "NoMatchingError": "Error",
+}
+_ACXD_OUTCOME_MEANINGS = {
+    "Default": "The Agentic CX interaction completed and the flow continued normally.",
+    "Escalation": "The Agentic CX application requested a handoff to an agent.",
+    "InputTimeLimitExceeded": "The Agentic CX interaction reached its configured idle limit.",
+    "NoMatchingCondition": "The Agentic CX outcome did not match another configured route.",
+    "NoMatchingError": "The Agentic CX action used its configured catch-all error route.",
+}
 _OUTCOME_MEANINGS = {
     "NoMatchingCondition": "The caller's response did not match a configured choice.",
     "NoMatchingError": (
@@ -303,7 +318,7 @@ def _collect_raw_edges(graph: ContactFlowGraph) -> List[_RawEdge]:
                 _RawEdge(
                     source=action.action_id,
                     target=transition.target_action_id,
-                    outcome=_normalize_outcome(transition),
+                    outcome=_normalize_outcome(transition, action.action_type),
                     ordinal=ordinal,
                 )
             )
@@ -311,10 +326,28 @@ def _collect_raw_edges(graph: ContactFlowGraph) -> List[_RawEdge]:
     return edges
 
 
-def _normalize_outcome(transition: FlowTransition) -> JourneyOutcome:
+def _normalize_outcome(transition: FlowTransition, source_action_type: str = "") -> JourneyOutcome:
     raw_label = str(transition.condition or "").strip()
     token, operator = _condition_token(raw_label)
     known_token = token if token in _READER_LABELS else raw_label
+
+    if source_action_type == _ACXD_ACTION_TYPE:
+        acxd_token = token or "Default"
+        if acxd_token in _ACXD_READER_LABELS:
+            route_type = (
+                "fallback"
+                if acxd_token in {"InputTimeLimitExceeded", "NoMatchingCondition"}
+                else "exception"
+                if acxd_token == "NoMatchingError"  # nosec B105 - flow error-route name
+                else "normal"
+            )
+            return JourneyOutcome(
+                label=_ACXD_READER_LABELS[acxd_token],
+                raw_label=raw_label or "Default",
+                route_type=route_type,
+                transition_type=transition.transition_type or "default",
+                meaning=_ACXD_OUTCOME_MEANINGS[acxd_token],
+            )
 
     if known_token in _FALLBACK_TYPES:
         route_type = "fallback"
@@ -647,6 +680,17 @@ def _display_labels(
         if item.transition_type == "condition" and item.route_type == "normal"
     ]
     fallback_outcomes = [item for item in outcomes if item.route_type == "fallback"]
+
+    if _ACXD_ACTION_TYPE in source_action_types:
+        return list(
+            dict.fromkeys(
+                item.label
+                for item in sorted(
+                    outcomes,
+                    key=lambda item: (_ROUTE_PRIORITY[item.route_type], item.label.casefold()),
+                )
+            )
+        ) or ["Completed"]
 
     if default_outcome is not None:
         if (

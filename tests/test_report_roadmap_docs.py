@@ -8,6 +8,7 @@ from amazon_connect_assessment.docs_generator import DocsGenerator
 from amazon_connect_assessment.models import (
     CheckStatus,
     Finding,
+    FindingDisposition,
     Pillar,
     Severity,
 )
@@ -16,7 +17,12 @@ from amazon_connect_assessment.report.posture_roadmap import (
 )
 
 
-def _make_finding(pillar, severity, status):
+def _make_finding(
+    pillar,
+    severity,
+    status,
+    disposition=FindingDisposition.CONTROL,
+):
     return Finding(
         check_id=f"test-{pillar.value}-{status.value}",
         check_name="Test",
@@ -27,6 +33,7 @@ def _make_finding(pillar, severity, status):
         resource_type="ConnectInstance",
         description="desc",
         remediation="fix it",
+        disposition=disposition,
     )
 
 
@@ -108,27 +115,88 @@ class TestPostureRoadmap:
 
 
 class TestDocsGenerator:
-    def test_catalog_includes_all_registered_checks(self, tmp_path):
+    def test_generated_catalog_includes_all_unified_selected_controls(self, tmp_path):
+        # Arrange
         registry = CheckRegistry()
         register_all_checks(registry)
         output = str(tmp_path / "check-catalog.md")
+
+        # Act
         DocsGenerator().generate_catalog(registry, output)
-
         content = open(output, encoding="utf-8").read()
-        # Summary table present.
-        assert "| Check ID |" in content
-        # Every check ID appears.
-        for check in registry.get_all_checks():
-            assert check.check_id in content
 
-    def test_catalog_has_all_pillars(self, tmp_path):
+        # Assert
+        assert "| Control ID |" in content
+        assert len(registry.get_selected_controls()) == 64
+        for control in registry.get_selected_controls():
+            assert control.control_id in content
+        assert "sec-flow-auth-001" in content
+        assert "cost-containment-001" in content
+        assert "| `journey-sec-001` |" not in content
+        assert "| `journey-cost-001` |" not in content
+
+    def test_generated_catalog_includes_disposition_executor_and_methodology(self, tmp_path):
+        # Arrange
+        registry = CheckRegistry()
+        register_all_checks(registry, check_ids={"sec-flow-auth-001", "security-iam-001"})
+        output = str(tmp_path / "check-catalog.md")
+
+        # Act
+        DocsGenerator().generate_catalog(registry, output)
+        content = open(output, encoding="utf-8").read()
+
+        # Assert
+        assert "Manual Review" in content
+        assert "Journey" in content
+        assert "Base Check" in content
+        assert "Root condition" in content
+        assert "Why this is assessed" in content
+        assert "What the evidence cannot prove" in content
+        assert "Verification and closure" in content
+
+    def test_generated_catalog_has_all_pillars(self, tmp_path):
+        # Arrange
         registry = CheckRegistry()
         register_all_checks(registry)
         output = str(tmp_path / "check-catalog.md")
+
+        # Act
         DocsGenerator().generate_catalog(registry, output)
         content = open(output, encoding="utf-8").read()
+
+        # Assert
         assert "## Security" in content
         assert "## Resilience" in content
         assert "## Cost Optimization" in content
         assert "## Operational Excellence" in content
         assert "## Performance Efficiency" in content
+
+
+def test_roadmap_mixed_dispositions_counts_only_scored_controls_and_failed_actions():
+    # Arrange
+    findings = [
+        _make_finding(Pillar.SECURITY, Severity.HIGH, CheckStatus.PASS),
+        _make_finding(Pillar.SECURITY, Severity.CRITICAL, CheckStatus.FAIL),
+        _make_finding(
+            Pillar.SECURITY,
+            Severity.CRITICAL,
+            CheckStatus.FAIL,
+            FindingDisposition.MANUAL_REVIEW,
+        ),
+        _make_finding(
+            Pillar.SECURITY,
+            Severity.CRITICAL,
+            CheckStatus.FAIL,
+            FindingDisposition.INFORMATIONAL,
+        ),
+    ]
+
+    # Act
+    posture = generate_posture_roadmap(findings)["security"]
+
+    # Assert
+    assert posture.total_checks == 4
+    assert posture.passed_checks == 1
+    assert posture.scored_control_denominator == 2
+    assert posture.pass_rate == 50.0
+    assert len(posture.improvement_actions) == 1

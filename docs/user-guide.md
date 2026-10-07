@@ -10,9 +10,9 @@ operations, and CI/CD usage. For configuration keys, see
 ## Table of Contents
 
 - [Installation](#installation)
-  - [pipx](#pipx)
+  - [Repository workspace](#repository-workspace)
   - [AWS CloudShell](#aws-cloudshell)
-  - [Contributor virtual environment](#contributor-virtual-environment)
+  - [Contributor dependencies](#contributor-dependencies)
 - [AWS Access](#aws-access)
 - [Running Assessments](#running-assessments)
 - [Report Operations](#report-operations)
@@ -21,36 +21,31 @@ operations, and CI/CD usage. For configuration keys, see
 
 ## Installation
 
-Choose the installation path that matches how you will use the tool.
+Use a virtual environment in the repository workspace. A global `pipx` or
+system installation can remain on `PATH` after the repository changes and run
+older controls or report code.
 
-### pipx
-
-Recommended for repeated workstation use:
+### Repository workspace
 
 ```bash
-# Install pipx once
-brew install pipx                          # macOS
-python3 -m pip install --user pipx         # Linux / Windows
-python3 -m pipx ensurepath                 # Linux / Windows
-
-# Clone and install
 git clone <repository-url>
 cd amazon-connect-assessment
-pipx install .
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -e .
+python -m amazon_connect_assessment.cli --version
 ```
 
-Upgrade later with:
+Run the module from the repository root with the activated environment. The
+editable install also creates an environment-local
+`.venv/bin/amazon-connect-assessment` console entry point.
+
+After pulling changes, keep the same environment current:
 
 ```bash
-cd amazon-connect-assessment
 git pull
-pipx reinstall amazon-connect-assessment
-```
-
-Remove it with:
-
-```bash
-pipx uninstall amazon-connect-assessment
+source .venv/bin/activate
+python -m pip install -e .
 ```
 
 ### AWS CloudShell
@@ -61,33 +56,39 @@ signed-in AWS Console session.
 ```bash
 git clone <repository-url>
 cd amazon-connect-assessment
-pip3 install --user .
-amazon-connect-assessment --region us-east-1 --output-dir ./reports
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+python -m amazon_connect_assessment.cli \
+  --region us-east-1 \
+  --output-dir ./reports
 ```
 
 Download generated reports from the CloudShell **Actions → Download file**
 menu. CloudShell sessions are ephemeral, so this path is best for one-off runs.
 
-### Contributor virtual environment
+### Contributor dependencies
 
-Use a virtual environment when modifying the tool:
+Contributors use the same workspace and invocation, with development and test
+extras:
 
 ```bash
-git clone <repository-url>
-cd amazon-connect-assessment
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -e ".[dev,test]"
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -e ".[dev,test]"
+python -m amazon_connect_assessment.cli --help
 ```
 
 For installation failures, see [troubleshooting.md](troubleshooting.md).
 
 ## AWS Access
 
-The assessment is read-only against the
+The assessment uses read-oriented `List`, `Get`, `Describe`, and `Head`
+operations against the
 [Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html)
-resources it inspects. The optional `--s3-output` feature creates or hardens
-the selected report bucket and uploads generated reports.
+resources and supporting services it inspects. The consequential opt-in
+`--s3-output` feature creates or hardens the selected report bucket and uploads
+reports.
 
 Confirm the active identity and region access:
 
@@ -136,23 +137,24 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-The complete read permission source is
-[iam-policy-template.json](iam-policy-template.json). The CloudFormation
-template does not grant the additional S3 write permissions required by
-`--s3-output`.
+The canonical read-permission source is
+`amazon_connect_assessment/iam_permissions.py`. It generates
+[iam-policy-template.json](iam-policy-template.json), and drift tests keep the
+CloudFormation template action-equivalent. The template does not grant the
+additional S3 write permissions required by `--s3-output`.
 
 ### Profiles, SSO, and environment variables
 
 ```bash
 # Default profile
-amazon-connect-assessment --region us-east-1 --output-dir ./reports
+python -m amazon_connect_assessment.cli --region us-east-1 --output-dir ./reports
 
 # Named profile
-amazon-connect-assessment --profile my-profile --region us-east-1
+python -m amazon_connect_assessment.cli --profile my-profile --region us-east-1
 
 # SSO profile
 aws sso login --profile my-sso-profile
-amazon-connect-assessment --profile my-sso-profile --region us-east-1
+python -m amazon_connect_assessment.cli --profile my-sso-profile --region us-east-1
 ```
 
 For CI/CD or temporary credentials:
@@ -163,14 +165,14 @@ export AWS_SECRET_ACCESS_KEY="..."
 export AWS_DEFAULT_REGION="us-east-1"
 export AWS_SESSION_TOKEN="..."   # temporary credentials only
 
-amazon-connect-assessment --output-dir ./reports
+python -m amazon_connect_assessment.cli --output-dir ./reports
 ```
 
 Validate access before a long run:
 
 ```bash
-amazon-connect-assessment --check-permissions --region us-east-1
-amazon-connect-assessment --dry-run --region us-east-1
+python -m amazon_connect_assessment.cli --check-permissions --region us-east-1
+python -m amazon_connect_assessment.cli --dry-run --region us-east-1
 ```
 
 ## Running Assessments
@@ -178,43 +180,68 @@ amazon-connect-assessment --dry-run --region us-east-1
 Basic assessment:
 
 ```bash
-amazon-connect-assessment --region us-east-1 --output-dir ./reports
+python -m amazon_connect_assessment.cli --region us-east-1 --output-dir ./reports
 ```
 
 Common options:
 
 ```bash
-# Assess one instance (instance ID UUID, not alias/ARN; the run stops if it is not in --region)
-amazon-connect-assessment \
+# List the unified 64-control catalog without calling AWS
+python -m amazon_connect_assessment.cli --list-checks
+
+# Select canonical controls (BaseCheck and Journey-backed IDs behave the same)
+python -m amazon_connect_assessment.cli \
+  --region us-east-1 \
+  --checks sec-cloudtrail-001 journey-res-001
+
+# Assess one instance
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --instance-id <id> \
   --output-dir ./reports
 
 # Select pillars and severities
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --pillars security resilience \
   --severity critical high
 
-# Skip flow analysis, including ContactFlowAnalyzer API calls
-amazon-connect-assessment \
+# Skip flow analysis and every flow-dependent control, including
+# res-hardcoded-routing-001.
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --skip-flow-analysis
 
 # Generate all report formats
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --output-format html json csv asff
 
 # Tune journey-scoring bounds
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --config config/assessment_config.yaml
 ```
 
-Use `amazon-connect-assessment --help` for the complete CLI reference,
-including check selection, worker controls, retries, logging, checkpoints,
+Use `python -m amazon_connect_assessment.cli --help` for the complete CLI reference,
+including control selection, worker controls, retries, logging, checkpoints,
 configuration inspection, and report options.
+
+The catalog contains 64 canonical controls: 60 BaseCheck executors and 4
+Journey-backed executors. `--pillars`, `--severity`, `--checks`,
+`--exclude-checks`, config enablement, and `--skip-flow-analysis` form one
+AND-filtered selection. Journey-backed controls appear in `--list-checks` with
+their pillar, severity, and disposition.
+
+For backward compatibility, `journey-sec-001` selects `sec-flow-auth-001` and
+`journey-cost-001` selects `cost-containment-001`. Listings, current examples,
+and reports emit only canonical IDs.
+
+Journey analysis statically enumerates paths with maximum depth 50, 200 paths
+per phone number, and 5,000 paths per run. Cycle edges are pruned per path
+without reducing structural node reachability. A reached cap, dynamic target,
+or unresolved flow reference makes the result incomplete; the tool retains
+partial evidence and does not claim that every runtime route was evaluated.
 
 ## Report Operations
 
@@ -225,21 +252,74 @@ open reports/connect_assessment_*.html        # macOS
 xdg-open reports/connect_assessment_*.html    # Linux
 ```
 
-The HTML report is self-contained and can be viewed offline. Filter and sort
-findings in the findings table and select a row to open its evidence and
-remediation in the side panel. The Caller Journey Map renders contact flows
-targeted by inbound phone numbers; select any step or route to inspect it. See
-[report-formats.md](report-formats.md) for the output contracts.
+The HTML report is self-contained and can be viewed offline. It separates
+scored control outcomes from manual-review candidates and informational
+inventory. `CheckStatus` explains whether execution passed, failed, was
+skipped, errored, or was not applicable; disposition explains whether the
+record contributes to posture scoring. Only passed and failed `CONTROL`
+records enter the scored-control denominator.
 
-Journey finding evidence masks phone numbers to the last four digits. The
-Caller Journey Map uses full inbound phone numbers as entry-point labels, so
-HTML and JSON report payloads contain those numbers and should be handled as
-sensitive data.
+Each finding includes methodology explaining why it is assessed, the evidence
+source, proof limitations, developer/admin meaning, and verification criteria.
+The Caller Journey Map renders contact flows targeted by inbound phone numbers.
+
+### Scope and drill-downs
+
+A report opens at **All instances**. Use **Report scope** to select one instance;
+the executive summary, charts, recommendations, journey map, and findings are
+recomputed for that scope. Scope covers only the AWS account and region used by
+the assessment run.
+
+Clickable metric values and chart segments open the findings table with exact
+filters. Depending on the selected value, these filters use
+`score_classification`, `status`, `disposition`, `severity`, and
+`pillarLabel`. Changing report scope resets the findings query to the selected
+scope's default filter. The table's **Export page (CSV)** action follows the
+current scope, pillar, filter, sort order, and page.
+
+Evidence automatically uses a Cloudscape table when the detail panel is wide
+enough and responsive cards when it is narrow. Long values remain available
+for copying. Print output expands complete descriptions, methodology,
+remediation or review actions, and evidence rather than abbreviated display
+values.
+
+### Export scope
+
+The top-level **Export** menu has intentionally different scope rules:
+
+- **Full report data (JSON)** exports the complete embedded report across all
+  instances, independent of the current scope and findings filter.
+- **All findings, all instances (CSV)** exports every embedded finding,
+  independent of the current scope and findings filter.
+- **Print scoped report / save as PDF** prints every finding in the current
+  instance scope, independent of the on-screen filter and pagination. At **All
+  instances**, it prints all instances.
+
+CLI-generated JSON and CSV files also contain the complete assessment run. If
+the run used `--instance-id`, that complete run is already single-instance.
+Assessment and finding timestamps are exported as UTC ISO 8601 values; HTML
+labels them `UTC`, ASFF uses `Z`, and generated filename timestamps use UTC.
+PDF is a browser print/save operation, not a CLI output format.
+
+See [report-formats.md](report-formats.md) for the JSON, CSV, HTML, and ASFF
+contracts. ASFF contains failed controls only.
+
+### Agentic CX proof boundary
+
+The three ACXD controls inspect reachable
+`ConnectParticipantWithAgenticCX` actions in parsed customer-authored Connect
+flows. They report Connect-side handoff inventory, required error routes, and
+whether an authored condition contains the case-insensitive exact token
+`Escalation` for manual review. That token does not prove a successful
+escalated-to-agent runtime outcome. The controls do not call Agentic CX Designer
+APIs or prove application internals, builds, deployments, alias resolution,
+runtime containment, or guardrails. Context-variable values are not retained
+in evidence.
 
 ### Publish reports to S3
 
 ```bash
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --output-format html json \
   --s3-output
@@ -247,12 +327,12 @@ amazon-connect-assessment \
 
 The default bucket is
 `amazon-connect-assessment-report-<account_id>`. Override it with
-`--s3-bucket`. A missing bucket is created with Block Public Access, SSE-S3
-encryption, and versioning enabled. If the target bucket already exists, the
-tool applies Block Public Access, enables versioning, and adds SSE-S3 default
-encryption only when the bucket does not already have an encryption
-configuration. Use a dedicated report bucket if those changes are not
-appropriate for an existing shared bucket.
+`--s3-bucket`. Before upload, the publisher applies Block Public Access and
+versioning to a new or existing selected bucket and preserves existing default
+encryption or adds SSE-S3 when none is configured. Enabling this option can
+therefore modify an existing bucket, and those hardening changes do not roll
+back automatically if upload later fails. Review the selected bucket and grant
+write access deliberately.
 
 Required additional permissions include:
 
@@ -271,13 +351,13 @@ Generate a JSON baseline, then compare a later run:
 
 ```bash
 # Baseline
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --output-format html json \
   --output-dir ./reports
 
 # Later run
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --output-format html \
   --diff reports/connect_assessment_<baseline>.json \
@@ -321,7 +401,7 @@ jobs:
           aws-region: us-east-1
       - name: Run assessment
         run: |
-          amazon-connect-assessment \
+          python -m amazon_connect_assessment.cli \
             --region us-east-1 \
             --output-format html json \
             --output-dir ./reports \

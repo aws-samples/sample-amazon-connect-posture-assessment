@@ -40,6 +40,8 @@ AWS Well-Architected Framework Reference:
 https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html
 """
 
+import re
+
 from ..models import (
     CheckStatus,
     Finding,
@@ -51,88 +53,83 @@ from ..models import (
 )
 from .base import BaseCheck, CheckContext
 
+_IAM_ROLE_ARN_RE = re.compile(
+    r"^arn:(?:aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+)
+
 
 class IAMServiceRoleCheck(BaseCheck):
-    """
-    Check for proper IAM service role configuration.
-
-    AWS Well-Architected Framework: Security Pillar - Design Principle 2
-    "Apply security at all layers"
-
-    Reference: https://docs.aws.amazon.com/connect/latest/adminguide/connect-slr.html
-    """
+    """Check only that Connect reports a syntactically valid service-role ARN."""
 
     def __init__(self):
         super().__init__(
             check_id="security-iam-001",
-            name="IAM Service Role Configuration Check",
+            name="IAM Service Role Presence and ARN Format",
             pillar=Pillar.SECURITY,
             severity=Severity.CRITICAL,
-            description="Validates that Amazon Connect instance has a properly configured IAM service role with appropriate permissions following the principle of least privilege",
-            remediation_template="Ensure your Amazon Connect instance has a service role configured with the minimum required permissions. Review the service role policy to ensure it follows the principle of least privilege. Reference: https://docs.aws.amazon.com/connect/latest/adminguide/connect-slr.html",
+            description=(
+                "Checks whether the Amazon Connect instance reports a service-role "
+                "ARN in a supported AWS partition and IAM role ARN format."
+            ),
+            remediation_template=(
+                "Configure the Amazon Connect instance with its intended IAM service-role "
+                "ARN, or correct the reported ARN format. Validate role permissions and "
+                "trust separately. Reference: "
+                "https://docs.aws.amazon.com/connect/latest/adminguide/connect-slr.html"
+            ),
         )
 
     def execute(self, context: CheckContext) -> Finding:
-        """
-        Execute IAM service role configuration check.
-
-        Args:
-            context: CheckContext containing instance data and AWS clients
-
-        Returns:
-            Finding: Result of the IAM service role check
-        """
+        """Evaluate service-role presence and IAM role ARN syntax."""
         instance = context.instance
+        evidence = {
+            "instance_id": instance.instance_id,
+            "service_role_arn": instance.service_role,
+            "identity_management_type": instance.identity_management_type,
+            "supported_partitions": ["aws", "aws-us-gov", "aws-cn"],
+            "validation_scope": "service-role presence and IAM role ARN format only",
+            "limitations": [
+                "Does not verify that the role exists.",
+                "Does not inspect the role trust policy or permissions.",
+                "Does not establish least privilege or effective access.",
+            ],
+        }
 
-        try:
-            evidence = {
-                "instance_id": instance.instance_id,
-                "service_role": instance.service_role,
-                "identity_management_type": instance.identity_management_type,
-            }
-
-            # Check if service role is configured
-            if not instance.service_role:
-                return self.create_finding(
-                    status=CheckStatus.FAIL,
-                    resource_id=instance.instance_id,
-                    resource_type="ConnectInstance",
-                    description=f"Connect instance {instance.display_name} does not have a service role configured. A service role is required for Amazon Connect to access other AWS services on your behalf.",
-                    evidence=evidence,
-                )
-
-            # Validate service role ARN format
-            if not instance.service_role.startswith("arn:aws:iam::"):
-                return self.create_finding(
-                    status=CheckStatus.FAIL,
-                    resource_id=instance.instance_id,
-                    resource_type="ConnectInstance",
-                    description=f"Connect instance {instance.display_name} has an invalid service role ARN format: {instance.service_role}",
-                    evidence=evidence,
-                )
-
-            # For MVP, we validate basic service role presence and format
-            # In a full implementation, we would also check the role's policies
-            evidence["service_role_configured"] = True
-            evidence["service_role_arn_valid"] = True
-
+        if not instance.service_role:
             return self.create_finding(
-                status=CheckStatus.PASS,
+                status=CheckStatus.FAIL,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
-                description=f"Connect instance {instance.display_name} has a properly configured service role: {instance.service_role}",
+                description=(
+                    f"Connect instance {instance.display_name} does not report a service-role ARN."
+                ),
                 evidence=evidence,
             )
 
-        except Exception as e:
-            self.logger.error(f"Error executing IAM service role check: {str(e)}")
+        if not _IAM_ROLE_ARN_RE.fullmatch(instance.service_role):
             return self.create_finding(
-                status=CheckStatus.ERROR,
+                status=CheckStatus.FAIL,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
-                description=f"Failed to execute IAM service role check: {str(e)}",
-                evidence={"error": str(e)},
+                description=(
+                    f"Connect instance {instance.display_name} reports a malformed or "
+                    f"unsupported IAM role ARN: {instance.service_role}"
+                ),
+                evidence=evidence,
             )
+
+        evidence["service_role_present"] = True
+        evidence["service_role_arn_format_valid"] = True
+        return self.create_finding(
+            status=CheckStatus.PASS,
+            resource_id=instance.instance_id,
+            resource_type="ConnectInstance",
+            description=(
+                f"Connect instance {instance.display_name} reports a service-role ARN "
+                "in the expected IAM role ARN format."
+            ),
+            evidence=evidence,
+        )
 
 
 class DataProtectionCheck(BaseCheck):

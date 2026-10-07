@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "title": "Amazon Connect Assessment Report",
+  "title": "Amazon Connect Customer Posture Assessment Report",
   "generated_at": "2026-01-15 10:05:00 UTC",
   "assessment": {
     "id": "contract-fixture",
@@ -26,20 +26,34 @@
     "low_findings": 0,
     "not_applicable_checks": 0,
     "registered_checks": null,
-    "journey_findings": 0
+    "journey_findings": 0,
+    "control_findings": 1,
+    "manual_review_findings": 0,
+    "informational_findings": 1,
+    "scored_control_passes": 0,
+    "scored_control_failures": 1,
+    "unevaluated_controls": 0,
+    "not_applicable_controls": 0,
+    "scored_control_numerator": 0,
+    "scored_control_denominator": 1
   },
   "stats": {
     "total_checks": 2,
+    "total_records": 2,
     "registered_checks": 2,
     "journey_findings": 0,
-    "pass_rate": 50.0,
+    "pass_rate": 0.0,
+    "pass_rate_display": "0.0%",
     "risk_score": 100,
     "status_breakdown": {
-      "passed": 1,
+      "passed": 0,
       "failed": 1,
       "error": 0,
       "skipped": 0,
-      "not_applicable": 0
+      "unevaluated": 0,
+      "not_applicable": 0,
+      "manual_review": 0,
+      "informational": 1
     },
     "severity_breakdown": {
       "critical": 1,
@@ -57,29 +71,188 @@
     "instances_assessed": 1,
     "execution_time": 12.5,
     "has_critical_issues": true,
-    "has_high_issues": false
+    "has_high_issues": false,
+    "control_findings": 1,
+    "manual_review_findings": 0,
+    "manual_review_non_scoring_records": 0,
+    "manual_review_candidates": 0,
+    "informational_findings": 1,
+    "informational_non_scoring_records": 1,
+    "scored_control_passes": 0,
+    "scored_control_failures": 1,
+    "unevaluated_controls": 0,
+    "not_applicable_controls": 0,
+    "not_applicable_records": 0,
+    "scored_control_numerator": 0,
+    "scored_control_denominator": 1,
+    "scored_control_pass_rate": 0.0
+  },
+  "charts": {
+    "status_distribution": {
+      "labels": [
+        "Scored control passes",
+        "Scored control failures",
+        "Unevaluated controls",
+        "Not applicable records",
+        "Manual reviews",
+        "Informational records"
+      ],
+      "data": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ],
+      "colors": [
+        "#28a745",
+        "#dc3545",
+        "#ffc107",
+        "#adb5bd",
+        "#0972d3",
+        "#6c757d"
+      ]
+    },
+    "severity_distribution": {
+      "labels": [
+        "Critical",
+        "High",
+        "Medium",
+        "Low"
+      ],
+      "data": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "colors": [
+        "#dc3545",
+        "#fd7e14",
+        "#ffc107",
+        "#17a2b8"
+      ]
+    },
+    "pillar_breakdown": {
+      "resilience": {
+        "total_records": 1,
+        "scored_control_numerator": 0,
+        "scored_control_denominator": 0,
+        "passed": 0,
+        "failed": 0,
+        "pass_rate": null,
+        "manual_review_candidates": 0,
+        "informational_records": 1,
+        "unevaluated_controls": 0,
+        "not_applicable_records": 0,
+        "not_applicable_controls": 0
+      },
+      "security": {
+        "total_records": 1,
+        "scored_control_numerator": 0,
+        "scored_control_denominator": 1,
+        "passed": 0,
+        "failed": 1,
+        "pass_rate": 0.0,
+        "manual_review_candidates": 0,
+        "informational_records": 0,
+        "unevaluated_controls": 0,
+        "not_applicable_records": 0,
+        "not_applicable_controls": 0
+      },
+      "cost_optimization": {
+        "total_records": 0,
+        "scored_control_numerator": 0,
+        "scored_control_denominator": 0,
+        "passed": 0,
+        "failed": 0,
+        "pass_rate": null,
+        "manual_review_candidates": 0,
+        "informational_records": 0,
+        "unevaluated_controls": 0,
+        "not_applicable_records": 0,
+        "not_applicable_controls": 0
+      },
+      "operational_excellence": {
+        "total_records": 0,
+        "scored_control_numerator": 0,
+        "scored_control_denominator": 0,
+        "passed": 0,
+        "failed": 0,
+        "pass_rate": null,
+        "manual_review_candidates": 0,
+        "informational_records": 0,
+        "unevaluated_controls": 0,
+        "not_applicable_records": 0,
+        "not_applicable_controls": 0
+      },
+      "performance_efficiency": {
+        "total_records": 0,
+        "scored_control_numerator": 0,
+        "scored_control_denominator": 0,
+        "passed": 0,
+        "failed": 0,
+        "pass_rate": null,
+        "manual_review_candidates": 0,
+        "informational_records": 0,
+        "unevaluated_controls": 0,
+        "not_applicable_records": 0,
+        "not_applicable_controls": 0
+      }
+    }
+  },
+  "posture_roadmap": {
+    "resilience": {
+      "pillar": "resilience",
+      "total_records": 1,
+      "scored_control_numerator": 0,
+      "scored_control_denominator": 0,
+      "pass_rate": null,
+      "maturity_level": "Not assessed",
+      "improvement_actions": []
+    },
+    "security": {
+      "pillar": "security",
+      "total_records": 1,
+      "scored_control_numerator": 0,
+      "scored_control_denominator": 1,
+      "pass_rate": 0.0,
+      "maturity_level": "Basic",
+      "improvement_actions": [
+        {
+          "check_id": "SEC-001",
+          "title": "Recordings use a customer-managed key",
+          "severity": "critical",
+          "guidance": "Use a customer-managed key",
+          "effort": "Medium",
+          "impact": "High"
+        }
+      ]
+    }
   },
   "insights": [
     {
       "type": "critical",
-      "message": "Found 1 critical security or compliance issues requiring immediate attention."
+      "message": "Found 1 critical failed controls requiring immediate attention."
     },
     {
       "type": "warning",
-      "message": "Compliance rate of 50.0% indicates significant configuration issues need attention."
+      "message": "Scored control pass rate is 0.0% and needs attention."
     }
   ],
   "recommendations": [
     {
       "priority": "critical",
-      "title": "Address Critical Security Issues",
-      "description": "Immediately review and remediate 1 critical findings to ensure security and compliance.",
+      "title": "Address Critical Failed Controls",
+      "description": "Review and remediate 1 critical failed controls.",
       "findings_count": 1
     }
   ],
   "filters": {
     "default_severity": "critical",
-    "default_status": "fail"
+    "default_status": "fail",
+    "default_disposition": "control"
   },
   "pillars": [
     {
@@ -116,7 +289,6 @@
   ],
   "findings": [
     {
-      "key": "0",
       "check_id": "RES-001",
       "check_name": "Queues have overflow",
       "pillar": "resilience",
@@ -124,18 +296,39 @@
       "status": "pass",
       "resource_id": "i-0001",
       "resource_type": "ConnectInstance",
-      "resource_label": "'contact-center' (i-0001)",
-      "instance": "contact-center",
-      "timestamp": "2026-01-15 10:00:00 UTC",
       "description": "All queues overflow.",
-      "description_html": "<p>All queues overflow.</p>\n",
-      "remediation_html": "<p>None needed.</p>\n",
+      "remediation": "None needed.",
       "structured_remediation": null,
       "evidence": null,
+      "timestamp": "2026-01-15T10:00:00",
+      "disposition": "informational",
+      "instance_id": "i-0001",
+      "score_classification": "non_scoring",
+      "methodology": {
+        "reason": "Queue routing inventory supports an operational review.",
+        "evidence_source": "Amazon Connect queue configuration",
+        "proof_limitations": "Configuration does not prove runtime overflow behavior.",
+        "developer_admin_meaning": "This record is planning context, not compliance.",
+        "verification_criteria": "Review queue behavior with representative contacts.",
+        "responsible_function": null,
+        "primary_lens_reference": null
+      },
+      "key": "0",
+      "resource_label": "'contact-center' (i-0001)",
+      "instance": "contact-center",
+      "description_html": "<p>All queues overflow.</p>\n",
+      "remediation_html": "<p>None needed.</p>\n",
+      "action_label": "Suggested follow-up",
+      "reason": "Queue routing inventory supports an operational review.",
+      "evidence_source": "Amazon Connect queue configuration",
+      "proof_limitations": "Configuration does not prove runtime overflow behavior.",
+      "developer_admin_meaning": "This record is planning context, not compliance.",
+      "verification_criteria": "Review queue behavior with representative contacts.",
+      "responsible_function": "",
+      "primary_lens_reference": "",
       "evidence_json": ""
     },
     {
-      "key": "1",
       "check_id": "SEC-001",
       "check_name": "Recordings use a customer-managed key",
       "pillar": "security",
@@ -143,12 +336,8 @@
       "status": "fail",
       "resource_id": "i-0001",
       "resource_type": "ConnectInstance",
-      "resource_label": "'contact-center' (i-0001)",
-      "instance": "contact-center",
-      "timestamp": "2026-01-15 10:00:00 UTC",
       "description": "Recordings use **SSE-S3**.",
-      "description_html": "<p>Recordings use <strong>SSE-S3</strong>.</p>\n",
-      "remediation_html": "",
+      "remediation": "Use a KMS key.",
       "structured_remediation": {
         "summary": "Use a customer-managed key",
         "steps": [
@@ -233,6 +422,32 @@
           }
         ]
       },
+      "timestamp": "2026-01-15T10:00:00",
+      "disposition": "control",
+      "instance_id": "i-0001",
+      "score_classification": "scored_fail",
+      "methodology": {
+        "reason": "Recordings require an explicit encryption-at-rest control.",
+        "evidence_source": "Amazon Connect storage configuration",
+        "proof_limitations": "Configuration does not prove key policy correctness.",
+        "developer_admin_meaning": "The returned storage mode needs remediation.",
+        "verification_criteria": "Rerun and confirm encrypted storage evidence.",
+        "responsible_function": null,
+        "primary_lens_reference": null
+      },
+      "key": "1",
+      "resource_label": "'contact-center' (i-0001)",
+      "instance": "contact-center",
+      "description_html": "<p>Recordings use <strong>SSE-S3</strong>.</p>\n",
+      "remediation_html": "",
+      "action_label": "Remediation",
+      "reason": "Recordings require an explicit encryption-at-rest control.",
+      "evidence_source": "Amazon Connect storage configuration",
+      "proof_limitations": "Configuration does not prove key policy correctness.",
+      "developer_admin_meaning": "The returned storage mode needs remediation.",
+      "verification_criteria": "Rerun and confirm encrypted storage evidence.",
+      "responsible_function": "",
+      "primary_lens_reference": "",
       "evidence_json": "{\n  \"compliant\": false,\n  \"buckets\": [\n    {\n      \"name\": \"recordings\",\n      \"arn\": \"arn:aws:s3:::recordings\"\n    }\n  ],\n  \"limits\": {\n    \"checked\": 3\n  },\n  \"queues\": [\n    \"general\"\n  ]\n}"
     }
   ],

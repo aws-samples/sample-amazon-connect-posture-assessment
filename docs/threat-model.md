@@ -22,18 +22,18 @@ This document identifies the security boundaries, trust zones, threat actors, at
 
 ## System overview
 
-The Amazon Connect Customer Posture Assessment Tool is a **read-only** assessment tool that:
+The Amazon Connect Customer Posture Assessment Tool is a **read-oriented** assessment tool that:
 - Runs as a CLI process on a user's workstation, AWS CloudShell, or a CI runner
 - Authenticates to AWS using existing credentials (profile, role assumption, or environment variables)
-- Makes read-only assessment calls to Amazon Connect Customer and supporting services
+- Uses `List`, `Get`, `Describe`, and `Head` operations against Amazon Connect Customer and supporting services
 - Produces HTML/JSON/CSV/ASFF reports on the local filesystem
-- Optionally (`--s3-output`) creates or hardens a selected S3 report bucket in the assessed account and uploads reports
-- Never modifies, creates, or deletes assessed resources other than the selected S3 report bucket
+- Optionally (`--s3-output`) creates or hardens the selected S3 report bucket and uploads reports
+- Never modifies, creates, or deletes any AWS resource it assesses
 
-The only write path is `--s3-output`. It can create the default
-`amazon-connect-assessment-report-*` bucket or use an operator-selected existing
-bucket. Existing buckets receive Block Public Access and versioning; SSE-S3
-default encryption is added only when no encryption configuration exists.
+The consequential opt-in write path is `--s3-output`. It may create the selected
+`amazon-connect-assessment-report-*` bucket, and it also applies Block Public
+Access and versioning and ensures default encryption on an existing selected
+bucket before upload.
 
 ---
 
@@ -64,9 +64,9 @@ default encryption is added only when no encryption configuration exists.
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Depth bounded at 50; paths capped at 200 per entry and 5000 globally. |
-| Combinatorial explosion from highly branching flows | Denial of Service | Medium | `max_paths` and `MAX_TOTAL_PATHS` caps prevent unbounded growth. Path enumeration short-circuits once limits are hit. |
-| Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | Flow-derived text reaches the report only as JSON data (`<`, `>`, `&` escaped as `\u003c`/`\u003e`/`\u0026` so no string can close the data island) and is rendered as text by React. |
+| Deeply nested or circular flow graphs cause stack overflow | Denial of Service | High | All graph traversal is **iterative** (explicit stack), never recursive. Static path enumeration is bounded at depth 50, 200 paths per phone number, and 5,000 paths globally. Path-local cycle edges are pruned without preventing the separate structural closure from reaching every statically resolvable node. |
+| Combinatorial explosion from highly branching flows | Denial of Service | Medium | Depth, per-number path, global path, and step caps prevent unbounded growth. A reached cap, dynamic target, or unresolved cross-flow reference marks enumeration incomplete; clean partial evidence is not treated as exhaustive proof. |
+| Adversarial flow parameters crafted for XSS in reports | Elevation of Privilege | Medium | The static report shell HTML-escapes its title and pins the inline bundle with a CSP hash, assessment data is serialized into a script-safe JSON island, React renders ordinary strings as text, and markdown disables raw HTML. |
 | Malformed flow JSON crashes the parser | Denial of Service | Low | Parser validates input type, skips non-dict actions gracefully, and uses `.get()` with defaults throughout. |
 | Dynamic attribute references used to confuse graph analysis | Spoofing | Low | Dynamic references are detected and recorded in `dynamic_references` — never followed as if they were static edges. |
 
@@ -84,8 +84,7 @@ default encryption is added only when no encryption configuration exists.
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| XSS in HTML report via injected flow names or parameters | Elevation of Privilege | Medium | All assessment data is embedded as an escaped JSON data island and rendered as text by React (Cloudscape components). The only pre-rendered markup is finding markdown, produced by markdown-it with raw HTML disabled; markdown links must be absolute `http(s)`/`mailto` (others render as text) and images render as alt text, so the report never fetches remote content. Reference URLs are scheme-allowlisted (`_safe_url`). The inlined UI bundle is static, developer-built code; `</script`/`</style` sequences in it are neutralised on load. Jinja2 autoescaping stays on for the shell template. |
-| Full inbound phone numbers disclosed through a shared report | Information Disclosure | High | Journey finding evidence masks numbers, but the Caller Journey Map embeds full inbound numbers in HTML and JSON report payloads. Documentation instructs operators to treat reports as sensitive and restrict distribution and storage. |
+| XSS in HTML report via injected flow names or parameters | Elevation of Privilege | Medium | Shell placeholder escaping and CSP script hash, script-safe JSON encoding, React text rendering, and raw-HTML-disabled markdown protect all assessment values. |
 | Local report file accessible to unauthorized users | Information Disclosure | Medium | Reports written to a local directory; access governed by OS file permissions. |
 | Report tampering after generation | Tampering | Low | Reports are static, point-in-time snapshots. ASFF output can be verified via Security Hub import validation. |
 
@@ -93,8 +92,7 @@ default encryption is added only when no encryption configuration exists.
 
 | Threat | Category | Risk | Mitigation |
 |---|---|---|---|
-| Auto-created report bucket is world-readable | Information Disclosure | High | Buckets are created with S3 Block Public Access (all four flags), default SSE-S3 encryption, and versioning enabled. |
-| Existing shared bucket settings changed unexpectedly | Tampering | Medium | Publishing reapplies Block Public Access and enables versioning on any existing target bucket; it preserves an existing encryption configuration. Operators are told to use a dedicated bucket unless those changes are acceptable. |
+| Auto-created or pre-existing selected report bucket is publicly exposed | Information Disclosure | High | Before every upload, the publisher applies S3 Block Public Access (all four flags), enables versioning, and preserves existing default encryption or adds SSE-S3 when absent. This also changes an existing selected bucket and has no automatic rollback. |
 | Over-broad write permissions on the assessment role | Elevation of Privilege | Medium | The default CloudFormation role is read-only and does not grant S3 report-publishing writes. When `--s3-output` is enabled, operators must add a separate policy scoped to `arn:aws:s3:::amazon-connect-assessment-report-*` and its objects. Publishing is opt-in. |
 | Bucket-name takeover (global S3 namespace) | Spoofing | Low | `head_bucket` checks ownership before upload; a `403` (owned elsewhere) surfaces an error rather than silently uploading. Operators can override with `--s3-bucket`. |
 | Failed upload aborts the assessment | Denial of Service | Low | Upload failures are caught and reported; the assessment still succeeds and local reports remain. |
@@ -106,11 +104,11 @@ default encryption is added only when no encryption configuration exists.
 | Category | Key risks | Primary controls |
 |---|---|---|
 | **Spoofing** | Credential misuse; bucket-name takeover | Same-account read-only inline policy (no cross-account assumption); bucket ownership checked via `head_bucket` before upload |
-| **Tampering** | Adversarial flow content | Iterative bounded parsing; escaped JSON data island rendered as text |
+| **Tampering** | Adversarial flow content | Iterative bounded parsing; Script-safe JSON and React text rendering |
 | **Repudiation** | Assessment actions not auditable | All AWS API calls logged in CloudTrail automatically |
 | **Information Disclosure** | Credential leakage; public report bucket | No credentials in logs/reports; Block Public Access + SSE on report bucket; restrictive local file permissions |
 | **Denial of Service** | Graph explosion | Bounded traversal (depth 50, paths 5000) |
-| **Elevation of Privilege** | XSS in reports; over-broad IAM | JSON data island rendered as text by React, XSS-safe markdown; least-privilege read-only role, with optional S3 writes granted separately and scoped to the report bucket |
+| **Elevation of Privilege** | XSS in reports; over-broad IAM | Script-safe JSON and React text rendering; least-privilege read-only role, with optional S3 writes granted separately and scoped to the report bucket |
 
 ---
 
@@ -138,7 +136,7 @@ default encryption is added only when no encryption configuration exists.
 │      │ optional --s3-output                                   │
 └──────┼─────────────────────────────────────────────────────── ┘
        │                          │
-       │ HTTPS (TLS)              │ Read-only API calls (TLS)
+       │ HTTPS (TLS)              │ Read-oriented API calls (TLS)
        ▼                          ▼
 ┌────────────────────┐  ┌───────────────────────────────┐
 │ Z2: S3 report      │  │ Z2: AWS APIs                   │
@@ -165,7 +163,7 @@ default encryption is added only when no encryption configuration exists.
 1. The execution host is not compromised — if it is, all bets are off (the attacker already has credential access).
 2. AWS API responses are authentic (TLS verified by boto3/botocore).
 3. Contact flow JSON may contain arbitrary string values but conforms to the Connect flow schema structure (dict with `Actions` array).
-4. When `--s3-output` is used, the operator intends to create or harden the selected report bucket and upload reports in the assessed account.
+4. When `--s3-output` is used, the operator intends to create or modify the selected report bucket in the assessed account by applying hardening settings and uploading reports.
 
 ---
 
@@ -174,7 +172,7 @@ default encryption is added only when no encryption configuration exists.
 | Risk | Likelihood | Impact | Acceptance rationale |
 |---|---|---|---|
 | Local attacker on same host accesses reports | Low | Medium | Standard host security model — mitigate with OS-level access controls |
-| Malicious flow name containing JavaScript reaches the DOM through a future UI change that injects data as HTML (e.g. a new `dangerouslySetInnerHTML`) | Low | Medium | Only server-rendered markdown is injected as HTML; tests pin the data-island escaping; code review of `frontend/` changes |
+| Malicious flow content reaches a future frontend change that introduces an unsafe HTML sink | Low | Medium | Covered by script-safe JSON, React text rendering, raw-HTML-disabled markdown, report-contract tests, and code review |
 | boto3 dependency has a vulnerability | Low | High | Mitigated by dependency scanning in CI and regular updates |
 | Large account with 1000+ flows causes high memory during graph construction | Medium | Low | Bounded by MAX_TOTAL_PATHS (5000); graph holds only tier-1/tier-2 flows |
 | Report bucket retains historical reports indefinitely | Low | Low | Versioning is enabled by design; operators can apply lifecycle rules |

@@ -8,6 +8,18 @@
 > [the check catalog](../check-catalog.md), [the configuration guide](../configuration.md),
 > and the [development guide](../development-guide.md).
 
+> **Implementation boundary:** This remains design and historical reference
+> material. The delivered scanner has a disposition-aware 64-control catalog
+> (60 `BaseCheck`, 4 Journey), a self-contained React/Cloudscape report, a
+> bounded phone-number-driven Journey pipeline, and three Connect-side ACXD
+> checks. The broader weighted Customer Mirror score, Mermaid/DOT metric
+> overlays, peer benchmarks, and benchmark-based improvement estimates below
+> are unimplemented legacy targets, not current output.
+>
+> A run discovers resources only in the active AWS account and selected region.
+> `--instance-id` can narrow that run to one discovered instance; it does not
+> create an account-spanning or cross-region view.
+
 > **Goal**: Run scripts against a customer's Amazon Connect Customer instance to produce a "mirror" of how they use Amazon Connect Customer today — then give actionable recommendations to improve resilience, security, cost efficiency, and end-customer experience. *Consolidated from: AWS Specialist Agent TFC knowledge, Neura Connect Orchestration Agent, and internal SA framework.*
 
 ---
@@ -31,7 +43,8 @@
 **API call sequence:**
 
 ```python
-# Step 1: Enumerate all instances (across all regions for DR check)
+# Step 1: Conceptually enumerate instances across target regions.
+# Current implementation calls ListInstances only in the selected run region.
 connect.list_instances()
 # Returns: InstanceSummaryList[].{Id, Arn, InstanceStatus, IdentityManagementType}
 
@@ -898,9 +911,16 @@ agent_metrics = connect.get_metric_data_v2(
 
 ```
 
-### 5.7 Journey Visualization Output
+### 5.7 Journey Visualization Output (legacy target)
 
-For each top flow, produce:
+> **Not implemented as described.** The delivered Journey pipeline uses parsed
+> Connect flow topology and bounded path enumeration to produce four aggregate
+> control outcomes plus the report's interactive Journey view. It does not add
+> Mermaid/DOT output, contact-volume, abandonment, timing, or sentiment metrics
+> to nodes. The metric-enriched output below is retained as a future design
+> target.
+
+For each top flow, the legacy design proposed:
 
 | Layer | What You Extract |
 | --- | --- |
@@ -927,7 +947,11 @@ For each top flow, produce:
 - % abandoned (and at which point)
 - Avg total customer experience time (IVR + wait + handle)
 
-### 5.8 Flow-Level Risk Scoring
+### 5.8 Flow-Level Risk Scoring (legacy target)
+
+> **Not implemented.** The current report scores only passed and failed
+> `CONTROL` records under the shared disposition-aware score policy. It does not
+> apply the weighted flow score or RAG thresholds in this example.
 
 ```python
 SEVERITY_WEIGHTS = {'CRITICAL': 25, 'HIGH': 10, 'MEDIUM': 5, 'LOW': 1}
@@ -946,7 +970,39 @@ def score_flow(findings):
 
 ## 6. The Customer Mirror
 
-### Health Score Card
+### Delivered report
+
+The implemented report contains one disposition-aware outcome for each selected
+canonical control and assessed instance. The current catalog has 64 controls:
+60 `BaseCheck` executors and four Journey-backed executors. Only passed and
+failed `CONTROL` records contribute to posture scoring; manual-review,
+informational, skipped, errored, and not-applicable records remain visible
+without changing that denominator.
+
+The self-contained React/Cloudscape report provides:
+
+- a report-wide selector for all discovered instances or one instance in the
+  current account and region;
+- recalculated summaries, charts, recommendations, journey data, and findings
+  for the selected instance scope;
+- clickable metric values and chart segments that apply exact findings-table
+  filters;
+- responsive evidence tables/cards and complete evidence in print output;
+- full, unscoped top-level JSON and CSV exports; and
+- browser print/save-as-PDF for all findings in the current instance scope.
+
+The Journey pipeline resolves phone-number entry points, stitches parsed flow
+topology, enumerates bounded paths, and emits four aggregate Journey control
+outcomes. It does not enrich nodes with runtime contact volume, abandonment,
+sentiment, or peer data.
+
+The three ACXD checks reuse parsed flow data and inspect reachable Connect-side
+`ConnectParticipantWithAgenticCX` actions. They assess handoff inventory,
+required error routes, and an explicit escalation-route review candidate. They
+do not call Agentic CX Designer APIs or claim application internals, build or
+deployment state, alias resolution, runtime containment, or guardrails.
+
+### Health Score Card (unimplemented legacy target)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -965,7 +1021,11 @@ def score_flow(findings):
 
 ```
 
-### Report Sections (Delivered to Customer)
+### Legacy Report Sections (not implemented as a contract)
+
+The following block preserves the original report aspiration. Weighted pillar
+scores, estimated cost/CX improvements, Mermaid/DOT metric overlays, feature
+value estimates, and peer benchmarks are not delivered behavior.
 
 ```
 1. EXECUTIVE SUMMARY
@@ -1015,7 +1075,30 @@ def score_flow(findings):
 
 ## 7. Implementation Reference
 
-### Execution Order Per Instance
+### Current delivered architecture
+
+The implementation runs one unified, AND-filtered 64-control plan. Sixty
+controls execute through `BaseCheck`; four controls execute through the
+separate Journey pipeline but share the same catalog and selection rules. Each
+selected control emits one aggregate outcome per assessed instance when its
+execution path applies.
+
+`AssessmentEngine` discovers Connect instances in the active account and one
+selected region, enriches each instance through analyzers, executes selected
+controls, computes disposition-aware statistics, and passes the complete result
+to exporters. The report defaults to all discovered instances and can be
+narrowed interactively to one instance. This is not a cross-region or
+cross-account health mirror.
+
+Flow-dependent controls use already parsed flow content. This includes the four
+Journey controls and the three Connect-side ACXD controls in
+`checks/acxd_checks.py`; the ACXD controls make no Agentic CX service API calls.
+
+### Legacy proposed execution order per instance
+
+The sequence below is retained as historical design input. It is not the
+runtime contract; use the check catalog and code for the current APIs and
+execution plan.
 
 ```
 1.  ListInstances → DescribeInstance → DescribeInstanceAttribute (all attrs)
@@ -1033,10 +1116,15 @@ def score_flow(findings):
 
 ### IAM Permissions Required
 
-Every action in the policy below is **read-only** (no write, create, or delete
-permissions). It uses service-scoped action wildcards and `"Resource": "*"` for
-convenience during initial setup; scope both down for production use as
-described in the least-privilege note immediately following the policy.
+> **Legacy example only; do not deploy this policy.** The wildcard policy below
+> was an early design sketch and is not the delivered permission contract. The
+> canonical action set is `amazon_connect_assessment/iam_permissions.py`, which
+> generates `docs/iam-policy-template.json`. The hand-maintained
+> `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml` is drift-tested for
+> action equivalence. Use those current artifacts, which contain explicit
+> actions, rather than copying this wildcard example.
+
+The original design example follows:
 
 ```json
 {
@@ -1128,14 +1216,16 @@ described in the least-privilege note immediately following the policy.
 
 ---
 
-### Proposed Build Roadmap
+### Delivery Status and Future Roadmap
 
-| Phase | Focus | Deliverable |
+| Capability | Status | Current boundary or future target |
 | --- | --- | --- |
-| **Phase 1** | Core scanner | boto3 script → all checks → JSON findings |
-| **Phase 2** | Flow parser | Contact flow JSON → graph + anti-pattern detection |
-| **Phase 3** | Journey mapper | Graph + metrics → Mermaid visualization |
-| **Phase 4** | Scoring engine | Weighted findings → pillar scores + RAG rating |
-| **Phase 5** | Report generator | HTML/PDF with embedded diagrams + recommendations |
-| **Phase 6** | Benchmarking | Anonymized metrics → peer comparison database |
-| **Phase 7** | Remediation | IaC templates (CloudFormation/CDK) for common fixes |
+| Canonical scanner | **Delivered** | 64 disposition-aware controls: 60 `BaseCheck`, 4 Journey-backed. |
+| Flow parser | **Delivered** | Parses customer-authored Connect flow JSON for static evidence. |
+| Journey mapping | **Delivered** | Phone-number topology, bounded path enumeration, interactive Cloudscape view, and four aggregate controls. Runtime node metrics and Mermaid/DOT output remain future work. |
+| ACXD Connect-side assessment | **Delivered** | Three flow-dependent checks reuse parsed flow data; no Agentic CX Designer API calls. |
+| Scoring | **Delivered with a different model** | Passed/failed `CONTROL` outcomes determine posture. Weighted Customer Mirror pillar scores and RAG thresholds remain legacy targets. |
+| Report generator | **Delivered** | Self-contained Cloudscape HTML plus JSON, CSV, and ASFF. Browser print provides scoped PDF output. |
+| Runtime metric enrichment | **Future** | Contact volume, abandonment, timing, and sentiment overlays on journey nodes. |
+| Benchmarking | **Future** | Anonymized peer comparison and benchmark-derived improvement estimates. |
+| Automated remediation | **Future** | IaC-generated fixes beyond the current explanatory remediation guidance. |

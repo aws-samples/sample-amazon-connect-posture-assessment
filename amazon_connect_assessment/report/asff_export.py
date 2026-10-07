@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from ..models import AssessmentResult, CheckStatus, Finding, Pillar, Severity, to_utc
 from ..report_generator import validate_report_filename
+from ..score_policy import is_control_failure
 
 # ASFF severity label mapping
 _SEVERITY_MAP = {
@@ -48,6 +49,7 @@ _PILLAR_TYPE_MAP = {
 _MAX_TITLE_LENGTH = 256
 _MAX_DESCRIPTION_LENGTH = 1024
 _MAX_REMEDIATION_TEXT_LENGTH = 512
+_MAX_PRODUCT_FIELD_LENGTH = 512
 
 
 def _truncate(text: str, max_length: int) -> str:
@@ -58,6 +60,22 @@ def _truncate(text: str, max_length: int) -> str:
         return text
     marker = "... [truncated]"
     return text[: max_length - len(marker)] + marker
+
+
+_ASFF_LEGACY_ID_ALIASES = {
+    "sec-flow-auth-001": "journey-sec-001",
+    "cost-containment-001": "journey-cost-001",
+}
+_ASFF_CANONICAL_CHECK_ALIASES = {
+    legacy_id: canonical_id for canonical_id, legacy_id in _ASFF_LEGACY_ID_ALIASES.items()
+}
+
+
+def _asff_check_identity(check_id: str) -> tuple[str, str]:
+    """Return canonical field identity and stable legacy provider identity."""
+    canonical_id = _ASFF_CANONICAL_CHECK_ALIASES.get(check_id, check_id)
+    provider_id = _ASFF_LEGACY_ID_ALIASES.get(canonical_id, canonical_id)
+    return canonical_id, provider_id
 
 
 def finding_to_asff(
@@ -72,11 +90,38 @@ def finding_to_asff(
 
     severity_info = _SEVERITY_MAP.get(finding.severity, {"Label": "INFORMATIONAL", "Normalized": 0})
 
+    methodology = finding.methodology
+    canonical_check_id, provider_check_id = _asff_check_identity(finding.check_id)
+    product_fields = {
+        "amazon-connect-assessment/check-id": canonical_check_id,
+        "amazon-connect-assessment/disposition": finding.disposition.value,
+    }
+    if finding.instance_id:
+        product_fields["amazon-connect-assessment/instance-id"] = _truncate(
+            finding.instance_id, _MAX_PRODUCT_FIELD_LENGTH
+        )
+    if methodology:
+        methodology_fields = {
+            "reason": methodology.reason,
+            "evidence-source": methodology.evidence_source,
+            "proof-limitations": methodology.proof_limitations,
+            "developer-admin-meaning": methodology.developer_admin_meaning,
+            "verification-criteria": methodology.verification_criteria,
+            "responsible-function": methodology.responsible_function,
+            "primary-lens-reference": methodology.primary_lens_reference,
+        }
+        for field_name, value in methodology_fields.items():
+            if value:
+                product_fields[f"amazon-connect-assessment/{field_name}"] = _truncate(
+                    value, _MAX_PRODUCT_FIELD_LENGTH
+                )
+
     return {
         "SchemaVersion": "2018-10-08",
-        "Id": f"{generator_id}/{finding.check_id}/{finding.resource_id}",
+        "Id": f"{generator_id}/{provider_check_id}/{finding.resource_id}",
         "ProductArn": f"arn:aws:securityhub:{region}:{account_id}:product/{account_id}/default",
         "GeneratorId": generator_id,
+        "ProductFields": product_fields,
         "AwsAccountId": account_id,
         "Types": [_PILLAR_TYPE_MAP.get(finding.pillar, _TYPE_PREFIX)],
         "CreatedAt": finding_timestamp,
@@ -135,11 +180,7 @@ def export_asff(
     """
     findings_asff = []
     for finding in result.findings:
-        if finding.status in (
-            CheckStatus.PASS,
-            CheckStatus.SKIPPED,
-            CheckStatus.NOT_APPLICABLE,
-        ):
+        if not is_control_failure(finding):
             continue
         asff = finding_to_asff(
             finding,

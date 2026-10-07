@@ -2,6 +2,9 @@
 Tests for cost optimization checks (Tasks 8, 9, 10 / Requirements 13-16, 28-32, 40-41).
 """
 
+import pytest
+
+import amazon_connect_assessment.checks.cost_intelligence_checks as cost_intelligence_checks
 from amazon_connect_assessment.aws_client_factory import AWSClientFactory
 from amazon_connect_assessment.checks.cost_containment_checks import (
     IVRToAgentDataContinuityCheck,
@@ -11,7 +14,9 @@ from amazon_connect_assessment.checks.cost_containment_checks import (
     register_cost_containment_checks,
 )
 from amazon_connect_assessment.checks.cost_intelligence_checks import (
+    HoursOfOperationMismatchCheck,
     PremiumFeaturesCostCheck,
+    UnusedPhoneNumbersCheck,
     UsageMetricsCheck,
     register_cost_intelligence_checks,
 )
@@ -21,7 +26,7 @@ from amazon_connect_assessment.cost.cost_estimator import (
     estimate_containment_savings,
     estimate_unused_numbers_cost,
 )
-from amazon_connect_assessment.models import CheckStatus, ContactFlow
+from amazon_connect_assessment.models import CheckStatus, ContactFlow, FindingDisposition
 from tests.conftest import build_action, build_contact_flow
 
 
@@ -44,6 +49,53 @@ def _instance_with_flow(instance, flow_json, name="TestFlow"):
 
 
 # --- Task 8: cost intelligence checks ---
+
+
+def test_cost_inventory_direct_constructors_use_informational_disposition():
+    # Arrange
+    check_types = [
+        UnusedPhoneNumbersCheck,
+        PremiumFeaturesCostCheck,
+        HoursOfOperationMismatchCheck,
+    ]
+
+    # Act
+    dispositions = [check_type().disposition for check_type in check_types]
+
+    # Assert
+    assert dispositions == [FindingDisposition.INFORMATIONAL] * len(check_types)
+
+
+def test_usage_metrics_check_uses_manual_review_disposition():
+    assert UsageMetricsCheck().disposition == FindingDisposition.MANUAL_REVIEW
+
+
+@pytest.mark.parametrize(
+    "check_type, expected_operation",
+    [
+        (UsageMetricsCheck, "cloudwatch:GetMetricStatistics"),
+        (UnusedPhoneNumbersCheck, "connect:ListPhoneNumbersV2"),
+        (HoursOfOperationMismatchCheck, "connect:ListHoursOfOperations"),
+    ],
+)
+def test_cost_inventory_non_access_api_error_returns_skipped(
+    check_type, expected_operation, make_check_context, mock_aws_client_factory
+):
+    # Arrange
+    _wire(mock_aws_client_factory)
+    mock_aws_client_factory.call_api_with_resilience.side_effect = RuntimeError(
+        "transient read failure"
+    )
+
+    # Act
+    finding = check_type().execute(make_check_context())
+
+    # Assert
+    assert finding.status == CheckStatus.SKIPPED
+    assert finding.evidence["analysis_complete"] is False
+    assert finding.evidence["operation"] == expected_operation
+    assert finding.evidence["error_type"] == "RuntimeError"
+    assert finding.evidence["error_code"] is None
 
 
 class TestUsageMetricsCheck:
@@ -81,13 +133,49 @@ class TestUsageMetricsCheck:
 
 
 class TestPremiumFeaturesCostCheck:
-    def test_enabled_feature_fails(self, make_check_context, mock_aws_client_factory):
+    def test_premium_feature_enablement_inventory_passes_expected_result(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         mock_aws_client_factory.call_api_with_resilience.return_value = {
             "Attribute": {"Value": "true"}
         }
+
+        # Act
         finding = PremiumFeaturesCostCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["features_enabled"] == ["CONTACT_LENS"]
+        assert "enablement alone does not create charges" in finding.description.lower()
+
+    def test_partial_premium_feature_read_is_skipped_expected_result(
+        self, make_check_context, mock_aws_client_factory, monkeypatch
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        monkeypatch.setitem(
+            cost_intelligence_checks._PREMIUM_FEATURES,
+            "TEST_FEATURE",
+            {"label": "Test feature", "billing": "for test usage"},
+        )
+
+        def _attribute_read(client, operation, service, **kwargs):
+            if kwargs["AttributeType"] == "CONTACT_LENS":
+                return {"Attribute": {"Value": "true"}}
+            raise RuntimeError("transient read failure")
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _attribute_read
+
+        # Act
+        finding = PremiumFeaturesCostCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["features_enabled"] == ["CONTACT_LENS"]
+        assert finding.evidence["features_undetermined"] == ["TEST_FEATURE"]
+        assert finding.evidence["analysis_complete"] is False
 
     def test_no_features_passes(self, make_check_context, mock_aws_client_factory):
         _wire(mock_aws_client_factory)
@@ -303,10 +391,10 @@ def test_register_cost_containment_checks():
     register_cost_containment_checks(registry)
     ids = {c.check_id for c in registry.get_all_checks()}
     assert {
-        "cost-containment-001",
         "cost-wait-time-001",
         "cost-occupancy-001",
         "cost-fcr-001",
         "cost-acw-001",
         "cost-data-continuity-001",
     } <= ids
+    assert "cost-containment-001" not in ids

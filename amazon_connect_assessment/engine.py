@@ -27,6 +27,13 @@ from .models import (
     ConnectInstance,
     ContactFlowGraph,
     Finding,
+    FindingDisposition,
+)
+from .score_policy import (
+    FindingScoreClassification,
+    compute_scored_control_counts,
+    count_finding_classifications,
+    is_control_failure,
 )
 
 
@@ -333,6 +340,7 @@ class AssessmentEngine:
             # advertised. See _compute_journey_findings for the per-
             # instance error handling.
             all_findings.extend(self._compute_journey_findings(analyzed_instances))
+            all_findings = self._finalize_findings(all_findings, analyzed_instances)
 
             # Generate summary and metadata
             self._update_progress("Generating final results")
@@ -593,6 +601,20 @@ class AssessmentEngine:
         error building the super-graph or scoring paths for one instance
         logs a warning and moves on rather than failing the assessment.
         """
+        registry = getattr(self, "check_registry", None)
+        selected_control_ids = (
+            registry.list_selected_journey_control_ids()
+            if registry is not None
+            else [
+                "sec-flow-auth-001",
+                "cost-containment-001",
+                "journey-res-001",
+                "journey-scope-001",
+            ]
+        )
+        if not selected_control_ids:
+            return []
+
         if self.config.get("skip_flow_analysis") or self.config.get("cli", {}).get(
             "skip_flow_analysis"
         ):
@@ -602,21 +624,29 @@ class AssessmentEngine:
             return []
 
         from . import journey
+        from .journey.journey_scorer import generate_journey_findings
+        from .journey.models import JourneyMapResult
         from .parsers import ContactFlowParser
 
         parser = ContactFlowParser()
         findings: List[Finding] = []
 
         for instance in instances:
-            if not instance.contact_flows:
-                continue
-
             parsed_flows: Dict[str, Any] = {}
+            unusable_flow_ids: List[str] = []
             for flow in instance.contact_flows:
                 if not flow.content:
+                    unusable_flow_ids.append(flow.id)
                     continue
                 try:
                     graph = parser.parse(flow.content)
+                    if (
+                        not graph.actions
+                        or not graph.entry_point_id
+                        or graph.entry_point_id not in graph.actions
+                    ):
+                        unusable_flow_ids.append(flow.id)
+                        continue
                     # ContactFlowParser reads flow_id/flow_name from the
                     # parsed JSON's "Identifier"/"Name" keys, but the raw
                     # Content blob returned by DescribeContactFlow never
@@ -633,6 +663,7 @@ class AssessmentEngine:
                     graph.flow_name = flow.name
                     parsed_flows[flow.id] = graph
                 except Exception as e:  # noqa: BLE001
+                    unusable_flow_ids.append(flow.id)
                     self.logger.debug(
                         "Journey mapping: skipping unparseable flow %s (%s): %s",
                         flow.id,
@@ -641,6 +672,18 @@ class AssessmentEngine:
                     )
 
             if not parsed_flows:
+                findings.extend(
+                    generate_journey_findings(
+                        JourneyMapResult(),
+                        instance_id=instance.instance_id,
+                        selected_control_ids=selected_control_ids,
+                        evaluation_limitation=(
+                            "no contact flow content could be parsed"
+                            if instance.contact_flows
+                            else None
+                        ),
+                    )
+                )
                 continue
 
             try:
@@ -649,20 +692,190 @@ class AssessmentEngine:
                     parsed_flows=parsed_flows,
                     factory=self.aws_client_factory,
                     config=self.config,
+                    selected_control_ids=selected_control_ids,
                 )
-                findings.extend(output.findings)
+                if unusable_flow_ids:
+                    limitation = (
+                        f"{len(set(unusable_flow_ids))} discovered contact flow(s) were empty, "
+                        "unparseable, or structurally unusable"
+                    )
+                    output.result.enumeration_complete = False
+                    output.result.enumeration_limitations = list(
+                        dict.fromkeys([*output.result.enumeration_limitations, limitation])
+                    )
+                    instance_findings = generate_journey_findings(
+                        output.result,
+                        instance_id=instance.instance_id,
+                        selected_control_ids=selected_control_ids,
+                    )
+                else:
+                    instance_findings = output.findings
+                findings.extend(instance_findings)
                 self.logger.info(
                     "Journey mapping for %s: %d journey(s) enumerated, %d finding(s)",
                     instance.display_name,
                     output.result.total_journeys,
-                    len(output.findings),
+                    len(instance_findings),
                 )
             except Exception as e:  # noqa: BLE001
                 error_msg = f"Journey mapping failed for instance {instance.instance_id}: {e}"
                 self.logger.warning(error_msg)
                 self._execution_errors.append(error_msg)
+                findings.extend(
+                    generate_journey_findings(
+                        JourneyMapResult(),
+                        instance_id=instance.instance_id,
+                        selected_control_ids=selected_control_ids,
+                        evaluation_limitation="journey mapping execution failed",
+                    )
+                )
 
         return findings
+
+    def _canonical_missing_outcome(self, control_id: str, instance_id: str) -> Finding:
+        """Create a canonical ERROR outcome when an executor emitted no record."""
+        from .checks.control_registry import get_atomic_control_registry
+
+        attached_catalog = self.check_registry.get_atomic_control_registry()
+        if attached_catalog is None and control_id in self.check_registry.list_check_ids():
+            check = self.check_registry.get_check(control_id)
+            check_id = check.check_id
+            check_name = check.name
+            pillar = check.pillar
+            severity = check.severity
+            disposition = check.disposition
+            methodology = check.methodology
+        else:
+            control = (attached_catalog or get_atomic_control_registry()).get(control_id)
+            check_id = control.control_id
+            check_name = control.name
+            pillar = control.pillar
+            severity = self.check_registry.get_control_severity(control_id)
+            disposition = control.disposition
+            methodology = control.methodology
+        return Finding(
+            check_id=check_id,
+            check_name=check_name,
+            pillar=pillar,
+            severity=severity,
+            status=CheckStatus.ERROR,
+            resource_id=instance_id,
+            resource_type="ConnectInstance",
+            description="The selected control executor did not emit an outcome for this instance.",
+            remediation="Review execution errors, restore required data access, and rerun.",
+            evidence={"execution_limitation": "missing_selected_control_outcome"},
+            disposition=disposition,
+            methodology=methodology,
+            instance_id=instance_id,
+        )
+
+    def _finalize_findings(
+        self, findings: List[Finding], instances: List[ConnectInstance]
+    ) -> List[Finding]:
+        """Validate emitted outcomes and backfill every missing plan cell."""
+        instance_ids = [instance.instance_id for instance in instances]
+        if any(not instance_id for instance_id in instance_ids):
+            raise ValueError("Assessed instances must have non-empty instance IDs")
+        if len(instance_ids) != len(set(instance_ids)):
+            raise ValueError("Assessed instance IDs must be unique")
+
+        self._validate_emitted_findings(findings, expected_instance_ids=set(instance_ids))
+        emitted = {(finding.check_id, finding.instance_id) for finding in findings}
+        finalized = list(findings)
+        for control_id in self.check_registry.list_control_ids():
+            for instance_id in instance_ids:
+                if (control_id, instance_id) in emitted:
+                    continue
+                finalized.append(self._canonical_missing_outcome(control_id, instance_id))
+                error_msg = (
+                    f"Control {control_id} emitted no outcome for instance {instance_id}; "
+                    "synthesized ERROR outcome"
+                )
+                self.logger.error(error_msg)
+                self._execution_errors.append(error_msg)
+
+        self._validate_emitted_findings(
+            finalized,
+            expected_instance_ids=set(instance_ids),
+            require_complete=True,
+        )
+        return finalized
+
+    def _validate_emitted_findings(
+        self,
+        findings: List[Finding],
+        expected_instance_ids: Optional[set[str]] = None,
+        *,
+        require_complete: bool = False,
+    ) -> None:
+        """Reject non-canonical, duplicate, drifted, or incomplete outcomes."""
+        from .checks.control_registry import get_atomic_control_registry
+
+        attached_catalog = self.check_registry.get_atomic_control_registry()
+        catalog = attached_catalog or get_atomic_control_registry()
+        seen: set[tuple[str, str]] = set()
+        selected_ids = set(self.check_registry.list_control_ids())
+        for finding in findings:
+            try:
+                canonical_id = catalog.resolve_id(finding.check_id)
+            except KeyError as error:
+                if attached_catalog is not None:
+                    raise ValueError(
+                        f"Finding emitted unknown control ID '{finding.check_id}'"
+                    ) from error
+                canonical_id = finding.check_id
+            if finding.check_id != canonical_id:
+                raise ValueError(f"Finding emitted legacy alias ID '{finding.check_id}'")
+            if canonical_id not in selected_ids:
+                raise ValueError(f"Finding emitted unselected control ID '{canonical_id}'")
+            if not finding.instance_id:
+                raise ValueError(f"Finding '{canonical_id}' is missing instance_id")
+            if (
+                expected_instance_ids is not None
+                and finding.instance_id not in expected_instance_ids
+            ):
+                raise ValueError(
+                    f"Finding '{canonical_id}' has unexpected instance_id '{finding.instance_id}'"
+                )
+
+            # Without an attached catalog, standalone checks are not bound to
+            # global catalog metadata.
+            try:
+                control = catalog.get(canonical_id) if attached_catalog is not None else None
+            except KeyError:
+                control = None
+            if control is not None:
+                if finding.check_name != control.name:
+                    raise ValueError(f"Finding '{canonical_id}' has non-canonical name")
+                if finding.pillar != control.pillar:
+                    raise ValueError(f"Finding '{canonical_id}' has non-canonical pillar")
+                if (
+                    not control.dynamic_severity
+                    and finding.severity != self.check_registry.get_control_severity(canonical_id)
+                ):
+                    raise ValueError(f"Finding '{canonical_id}' has non-canonical severity")
+                if finding.disposition != control.disposition:
+                    raise ValueError(f"Finding '{canonical_id}' has non-canonical disposition")
+                if finding.methodology != control.methodology:
+                    raise ValueError(f"Finding '{canonical_id}' has non-canonical methodology")
+
+            outcome_key = (canonical_id, finding.instance_id)
+            if outcome_key in seen:
+                raise ValueError(
+                    "Duplicate control outcome for "
+                    f"control_id={canonical_id}, instance_id={finding.instance_id}"
+                )
+            seen.add(outcome_key)
+
+        if require_complete and expected_instance_ids is not None:
+            expected = {
+                (control_id, instance_id)
+                for control_id in selected_ids
+                for instance_id in expected_instance_ids
+            }
+            missing = expected - seen
+            if missing:
+                raise ValueError(f"Missing canonical control outcomes: {sorted(missing)}")
 
     def _compute_journey_map(
         self, instances: List[ConnectInstance]
@@ -1340,7 +1553,9 @@ class AssessmentEngine:
 
     def _generate_summary(self, findings: List[Finding]) -> AssessmentSummary:
         total_checks = len(findings)
-        journey_findings = sum(1 for finding in findings if finding.check_id.startswith("journey-"))
+        journey_findings = sum(
+            1 for finding in findings if self.check_registry.is_journey_control(finding.check_id)
+        )
         registered_checks = total_checks - journey_findings
         passed_checks = sum(1 for f in findings if f.status == CheckStatus.PASS)
         failed_checks = sum(1 for f in findings if f.status == CheckStatus.FAIL)
@@ -1348,12 +1563,13 @@ class AssessmentEngine:
         skipped_checks = sum(1 for f in findings if f.status == CheckStatus.SKIPPED)
         not_applicable_checks = sum(1 for f in findings if f.status == CheckStatus.NOT_APPLICABLE)
 
-        # Count findings by severity (only failed checks)
-        failed_findings = [f for f in findings if f.status == CheckStatus.FAIL]
-        critical_findings = sum(1 for f in failed_findings if f.severity.value == "critical")
-        high_findings = sum(1 for f in failed_findings if f.severity.value == "high")
-        medium_findings = sum(1 for f in failed_findings if f.severity.value == "medium")
-        low_findings = sum(1 for f in failed_findings if f.severity.value == "low")
+        classification_counts = count_finding_classifications(findings)
+        scored_control_numerator, scored_control_denominator = compute_scored_control_counts(
+            findings
+        )
+        scored_control_failures = classification_counts[FindingScoreClassification.SCORED_FAIL]
+        unevaluated_controls = classification_counts[FindingScoreClassification.UNEVALUATED_CONTROL]
+        control_failures = [finding for finding in findings if is_control_failure(finding)]
 
         return AssessmentSummary(
             total_checks=total_checks,
@@ -1361,13 +1577,34 @@ class AssessmentEngine:
             failed_checks=failed_checks,
             error_checks=error_checks,
             skipped_checks=skipped_checks,
-            critical_findings=critical_findings,
-            high_findings=high_findings,
-            medium_findings=medium_findings,
-            low_findings=low_findings,
+            critical_findings=sum(
+                finding.severity.value == "critical" for finding in control_failures
+            ),
+            high_findings=sum(finding.severity.value == "high" for finding in control_failures),
+            medium_findings=sum(finding.severity.value == "medium" for finding in control_failures),
+            low_findings=sum(finding.severity.value == "low" for finding in control_failures),
             not_applicable_checks=not_applicable_checks,
             registered_checks=registered_checks,
             journey_findings=journey_findings,
+            control_findings=sum(
+                finding.disposition == FindingDisposition.CONTROL for finding in findings
+            ),
+            manual_review_findings=sum(
+                finding.disposition == FindingDisposition.MANUAL_REVIEW for finding in findings
+            ),
+            informational_findings=sum(
+                finding.disposition == FindingDisposition.INFORMATIONAL for finding in findings
+            ),
+            scored_control_passes=scored_control_numerator,
+            scored_control_failures=scored_control_failures,
+            unevaluated_controls=unevaluated_controls,
+            not_applicable_controls=sum(
+                finding.disposition == FindingDisposition.CONTROL
+                and finding.status == CheckStatus.NOT_APPLICABLE
+                for finding in findings
+            ),
+            scored_control_numerator=scored_control_numerator,
+            scored_control_denominator=scored_control_denominator,
         )
 
     def _generate_metadata(self) -> AssessmentMetadata:
@@ -1535,10 +1772,10 @@ class AssessmentEngine:
                     "No analyzers registered - component analysis will be limited"
                 )
 
-            # Validate checks
-            if len(self.check_registry) == 0:
+            # Validate the complete control plan, including Journey-only runs.
+            if not self.check_registry.list_control_ids():
                 validation_result["warnings"].append(
-                    "No checks registered - assessment will not generate findings"
+                    "No controls selected - assessment will not generate findings"
                 )
 
             # Validate checkpoint directory

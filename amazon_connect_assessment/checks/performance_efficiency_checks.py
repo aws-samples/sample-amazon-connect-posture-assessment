@@ -36,6 +36,7 @@ _INTERACTION_TYPES = {
     "PlayPrompt",
     "ConnectToLexBot",
     "ConnectParticipantWithLexBot",
+    "ConnectParticipantWithAgenticCX",
 }
 
 

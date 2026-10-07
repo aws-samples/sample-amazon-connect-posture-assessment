@@ -200,6 +200,8 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
         [
             "arn:aws:iam::*:role/*",
             "arn:aws:iam::*:policy/*",
+            # AWS-managed policies attached to roles (read-only GetPolicy).
+            "arn:aws:iam::aws:policy/*",
         ],
     ),
     _statement(

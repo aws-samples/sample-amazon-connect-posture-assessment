@@ -12,6 +12,8 @@ from xml.etree import ElementTree as ET  # nosec B405
 from amazon_connect_assessment.journey.renderer import (
     _HARD_CAP,
     _compute_layout,
+    _edge_label_html,
+    _EdgeLabelPlacement,
     flow_to_diagram_artifacts,
     flow_to_diagram_html,
     flow_to_diagram_payload,
@@ -650,6 +652,109 @@ class TestTransitions:
         assert raw_label in {
             outcome["raw_label"] for edge in model["edges"].values() for outcome in edge["outcomes"]
         }
+
+
+class TestAgenticCXPresentation:
+    def test_agentic_cx_journey_labels_inspector_and_exports_redact_context_values(
+        self,
+    ):
+        # Arrange
+        context_value_marker = "ACXD_CONTEXT_VALUE_MARKER_DO_NOT_RENDER"
+        workspace_id = "workspace-example-001"
+        application_id = "application-example-001"
+        actions = [
+            _action(
+                "agentic",
+                "ConnectParticipantWithAgenticCX",
+                parameters={
+                    "AgentConfiguration": {
+                        "WorkspaceId": workspace_id,
+                        "ApplicationId": application_id,
+                        "Alias": "customer-service",
+                    },
+                    "ContextVariables": {"accountToken": context_value_marker},
+                    "SpeechRecognitionConfiguration": {"LanguageCode": "en-US"},
+                    "AudioFillerConfiguration": {"Enabled": True},
+                },
+            ),
+            _action("completed", "DisconnectParticipant"),
+            _action("escalated", "TransferContactToQueue"),
+            _action("idle", "MessageParticipant", parameters={"Text": "Still there?"}),
+            _action("other", "MessageParticipant", parameters={"Text": "Another option"}),
+            _action("error", "MessageParticipant", parameters={"Text": "Please hold"}),
+        ]
+        actions[0].transitions = [
+            FlowTransition("agentic", "completed", transition_type="default"),
+            FlowTransition(
+                "agentic",
+                "escalated",
+                condition="{'Operator': 'Equals', 'Operands': ['Escalation']}",
+                transition_type="condition",
+            ),
+        ]
+        actions[0].error_transitions = [
+            FlowTransition(
+                "agentic",
+                "idle",
+                condition="InputTimeLimitExceeded",
+                transition_type="error",
+            ),
+            FlowTransition(
+                "agentic",
+                "other",
+                condition="NoMatchingCondition",
+                transition_type="error",
+            ),
+            FlowTransition(
+                "agentic", "error", condition="NoMatchingError", transition_type="error"
+            ),
+        ]
+        graph = _graph(actions, entry_id="agentic")
+
+        # Act
+        html_result, model = flow_to_diagram_payload(graph)
+        svg_result = flow_to_svg_export(graph)
+        drawio_result = flow_to_drawio_export(graph)
+
+        # Assert
+        node = next(
+            detail for detail in model["nodes"].values() if detail["actions"][0]["id"] == "agentic"
+        )
+        assert node["category"] == "agentic"
+        assert node["title"] == "Agentic CX: customer-service"
+        assert node["ai"] == {
+            "technology": "Amazon Connect Agentic CX",
+            "identity": "customer-service",
+            "subtype": "Application",
+        }
+        assert any(f"Workspace: {workspace_id}" in item for item in node["scope"])
+        assert any(f"Application: {application_id}" in item for item in node["scope"])
+        assert any("accountToken" in item for item in node["scope"])
+        assert any("Values are intentionally hidden" in item for item in node["scope"])
+        assert {edge["title"] for edge in model["edges"].values()} == {
+            "Completed",
+            "Escalated to agent",
+            "Idle timeout",
+            "Other outcome",
+            "Error",
+        }
+        raw_outcomes = {
+            outcome["raw_label"] for edge in model["edges"].values() for outcome in edge["outcomes"]
+        }
+        assert "Default" in raw_outcomes
+        assert "InputTimeLimitExceeded" in raw_outcomes
+        assert "NoMatchingCondition" in raw_outcomes
+        assert "NoMatchingError" in raw_outcomes
+        assert any("Escalation" in outcome for outcome in raw_outcomes)
+        assert svg_result is not None
+        assert drawio_result is not None
+        serialized_artifacts = "\n".join([html_result, str(model), svg_result[0], drawio_result])
+        assert context_value_marker not in serialized_artifacts
+        assert workspace_id in serialized_artifacts
+        assert application_id in serialized_artifacts
+        assert "ConnectParticipantWithAgenticCX" not in html_result
+        assert "Agentic CX: customer-service" in svg_result[0]
+        assert "Escalated to agent" in drawio_result
 
 
 # ---------------------------------------------------------------------------
@@ -1322,87 +1427,11 @@ class TestPortableJourneyExports:
         assert artifacts.export_payload()["formats"] == {}
 
 
-class TestLayoutPayload:
-    """``diagram_model["layout"]`` lets the report UI draw the renderer's exact geometry."""
+def test_edge_label_html_tolerates_edge_without_outcomes():
+    from amazon_connect_assessment.journey.view_model import JourneyEdge
 
-    def test_layout_payload_covers_every_node_and_edge(self):
-        # Arrange
-        graph = _caller_focused_graph()
-        layout = _compute_layout(graph)
-
-        # Act
-        model = flow_to_diagram_artifacts(graph).diagram_model
-        payload = model["layout"]
-
-        # Assert
-        assert payload["node_size"] == {"width": 210, "height": 72}
-        assert set(payload["positions"]) == set(model["nodes"])
-        for key, (x, y) in layout.positions.items():
-            assert payload["positions"][key] == {"x": x, "y": y}
-        assert set(payload["connectors"]) == set(model["edges"])
-        assert set(payload["labels"]) == set(model["edges"])
-        assert payload["canvas"]["width"] > 0 and payload["canvas"]["height"] > 0
-
-    def test_layout_connectors_match_rendered_html_geometry(self):
-        # Arrange
-        graph = _caller_focused_graph()
-
-        # Act
-        artifacts = flow_to_diagram_artifacts(graph)
-        payload = artifacts.diagram_model["layout"]
-
-        # Assert — the UI draws the same paths the HTML/SVG renderers emit.
-        for connector in payload["connectors"].values():
-            for d in connector["paths"]:
-                assert f'd="{d}"' in artifacts.diagram_html
-            assert f'd="{connector["arrow"]}"' in artifacts.diagram_html
-        width, height = payload["canvas"]["width"], payload["canvas"]["height"]
-        assert f"width:{width}px;height:{height}px;" in artifacts.diagram_html
-
-    def test_layout_labels_are_plain_text_and_hide_raw_values(self):
-        # Arrange
-        graph = _caller_focused_graph()
-
-        # Act
-        model = flow_to_diagram_artifacts(graph).diagram_model
-
-        # Assert
-        for key, label in model["layout"]["labels"].items():
-            edge = model["edges"][key]
-            expected = "›" if edge["title"] == "Continue" else edge["title"]
-            assert label["text"] == expected or label["text"].endswith("…")
-            # Plain text: React escapes it, so it must not arrive pre-escaped.
-            assert "&amp;" not in label["tooltip"] and "&#x27;" not in label["tooltip"]
-            assert "NoMatchingError" not in label["tooltip"]
-
-    def test_empty_graph_has_no_layout_and_a_plain_text_notice(self):
-        # Act
-        model = flow_to_diagram_artifacts(_graph([], name="Empty <Flow>")).diagram_model
-
-        # Assert
-        assert model["layout"] is None
-        assert model["notice"] == "Flow 'Empty <Flow>' has no actions to display."
-
-    def test_oversized_graph_has_no_layout_and_explains_why(self):
-        # Arrange
-        actions = [_action(f"a{i}", "MessageParticipant") for i in range(_HARD_CAP + 1)]
-
-        # Act
-        model = flow_to_diagram_artifacts(_graph(actions)).diagram_model
-
-        # Assert
-        assert model["layout"] is None
-        assert f"has {_HARD_CAP + 1} actions" in model["notice"]
-
-
-def test_svg_export_uses_report_category_captions():
-    # Arrange
-    graph = _caller_focused_graph()
-
-    # Act
-    exported = flow_to_svg_export(graph)
-
-    # Assert — exported cards read like the report's diagram legend.
-    assert exported is not None
-    assert "Caller hears" in exported[0] or "Caller chooses" in exported[0]
-    assert ">Speaks<" not in exported[0]
+    edge = JourneyEdge(
+        key="e0", source="a", target="b", label="Go", route_type="normal", outcomes=[]
+    )
+    html_out = _edge_label_html(_EdgeLabelPlacement(x=10, y=40, edge=edge))
+    assert 'data-jm-edge-key="e0"' in html_out

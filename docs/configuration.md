@@ -52,6 +52,7 @@ Global settings affect the overall assessment execution:
 ```yaml
 global_settings:
   timeout: 300                    # Timeout in seconds for AWS API calls
+  retry_count: 3                  # Number of retries for failed API calls
   max_retry_attempts: 5           # Maximum retry attempts for network operations
   retry_base_delay: 1.0          # Base delay between retries in seconds
   retry_max_delay: 60.0          # Maximum delay between retries in seconds
@@ -92,7 +93,8 @@ specifies a format, HTML is generated.
 
 ### Pillar and Severity Filtering
 
-Control which assessment pillars and severity levels are included:
+Control which canonical catalog records are selected. Pillar and severity
+filters apply to both BaseCheck and Journey-backed controls:
 
 ```yaml
 # Enable specific AWS Well-Architected Framework pillars
@@ -120,8 +122,16 @@ checks:
     severity: "critical"             # Override default severity
 ```
 
-The configuration loader currently applies `enabled` and `severity`. The
-`parameters`, `remediation_template`, and `description` keys are not applied by
+The configuration loader applies `enabled` and `severity` to the unified
+selection. Config keys may use canonical IDs. The legacy keys
+`journey-sec-001` and `journey-cost-001` are also accepted and normalize to
+`sec-flow-auth-001` and `cost-containment-001`; reports never emit the aliases.
+Journey-backed controls use catalog severity, so a configured severity override
+for one is ignored with a warning. `--list-checks` shows all selected canonical
+controls, including Journey-backed controls, with disposition and effective
+severity.
+
+The `parameters`, `remediation_template`, and `description` keys are not applied by
 the current check registry and should not be used as if they changed execution.
 The sample files preserve examples of these unsupported fields under the
 top-level `future_only.check_overrides` section; that section is intentionally
@@ -235,6 +245,7 @@ enabled_severities:
 # Production settings optimized for performance
 global_settings:
   timeout: 300
+  retry_count: 5
   max_retry_attempts: 3
   parallel_execution: true
   max_workers: 16
@@ -261,19 +272,23 @@ journey_map:
 The HTML Caller Journey Map is phone-number driven: it renders every available
 contact flow targeted by an inbound number. It has no `top_n` setting. The
 `journey_map` values above control the separate journey-scoring pipeline and its
-findings.
+findings. That pipeline performs bounded static enumeration, not exhaustive
+runtime exploration: it uses depth 50 and 200 paths per phone number by default,
+with a fixed 5,000-path run cap. Cycle edges are pruned without reducing static
+structural reachability; reached caps, dynamic targets, and unresolved flow
+references mark enumeration incomplete.
 
 ## Check Configuration Options
 
 ### Required Fields
 
-- `check_id`: Unique identifier for the check (must match the check implementation)
+- `check_id`: A canonical ID from the 64-control catalog. The two documented
+  legacy aliases are accepted as input and normalized before selection.
 
 ### Optional Fields
 
 - `enabled`: Boolean to enable/disable the check (default: true)
 - `severity`: Override the default severity level ("critical", "high", "medium", "low")
-
 `parameters`, `remediation_template`, and `description` are not currently
 consumed by the check registry.
 
@@ -290,13 +305,17 @@ problem. `--validate-config` runs the same checks and exits. The following are v
 - Numeric settings: `timeout`, `max_retry_attempts`, `max_workers`, and `batch_size` must be
   positive integers; retry delays must be non-negative, with `retry_max_delay >= retry_base_delay`.
 - Pillars, severities, and output formats must be known values.
-- `--checks` / `--exclude-checks` IDs must exist (see `--list-checks`), and at least one check
+- `--checks` / `--exclude-checks` IDs must exist in the unified 64-control
+  catalog (see `--list-checks`). Canonical IDs and the two backward-compatible
+  aliases are accepted. Selection uses AND semantics, and at least one control
   must remain after `--pillars`, `--severity`, `--checks`, `--exclude-checks`,
-  `--skip-flow-analysis`, and `enabled: false` entries in the config file are applied.
+  `--skip-flow-analysis`, and `enabled: false` entries are applied.
 - The output directory must be a directory, or creatable: its nearest existing parent must
   be a writable directory.
 - The filename template may only use `{timestamp}`, `{account_id}`, `{region}`, and
-  `{assessment_id}`, and must produce a filename, not a path.
+  `{assessment_id}`, and must produce a filename, not a path. Unknown or legacy
+  placeholders fail validation before AWS is contacted; they are not rendered
+  as literal text or silently ignored.
 - `--s3-bucket` must be a valid S3 bucket name; `--diff` must be an existing JSON report;
   `--log-file` must be in an existing, writable directory.
 - `--resume-assessment` must have a checkpoint (and cannot be combined with `--no-checkpoints`).

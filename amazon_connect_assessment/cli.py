@@ -28,7 +28,13 @@ from .aws_client_factory import AWSClientFactory
 from .checks.registry import CheckRegistry
 from .engine import AssessmentEngine
 from .logging_config import configure_aws_logging, setup_logging
+from .models import CheckStatus, FindingDisposition
 from .report_generator import ReportGenerator
+from .score_policy import (
+    FindingScoreClassification,
+    compute_scored_control_counts,
+    count_finding_classifications,
+)
 
 REPORTS_DIRECTORY = "reports"
 
@@ -865,7 +871,14 @@ def check_registration_filters(config: Dict[str, Any]) -> Dict[str, Any]:
         "exclude_check_ids": (
             set(cli_opts["exclude_checks"]) if cli_opts.get("exclude_checks") else None
         ),
-        "skip_flow_analysis": cli_opts.get("skip_flow_analysis", False),
+        # The engine honours both the top-level config key and the CLI flag
+        # (see AssessmentEngine._compute_journey_findings); registration must
+        # agree, or skipped journey controls stay selected and get backfilled
+        # as synthetic ERROR outcomes.
+        "skip_flow_analysis": bool(
+            cli_opts.get("skip_flow_analysis") or config.get("skip_flow_analysis")
+        ),
+        "checks_config": config.get("checks") or None,
     }
 
 
@@ -888,7 +901,8 @@ def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) 
     IDs, and whether any check survives the registration filters. AWS-dependent checks
     (instance ID, permissions) are in AssessmentEngine.validate_configuration.
     """
-    from .checks.registration import register_all_checks
+    from .checks.control_registry import get_atomic_control_registry
+    from .checks.registration import UnknownControlSelectionError, register_all_checks
     from .report.s3_publisher import is_valid_bucket_name
     from .report_generator import validate_report_filename
 
@@ -964,14 +978,18 @@ def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) 
     previous_disable = logging.root.manager.disable
     logging.disable(logging.WARNING)
     try:
-        catalog = CheckRegistry()
-        register_all_checks(catalog)
         effective = CheckRegistry()
         register_all_checks(effective, **check_registration_filters(config))
+    except UnknownControlSelectionError:
+        # Unknown explicit IDs are reported below with their originating flag.
+        pass
     finally:
         logging.disable(previous_disable)
 
-    known = set(catalog.list_check_ids())
+    atomic_catalog = get_atomic_control_registry()
+    known = {control.control_id for control in atomic_catalog.controls} | set(
+        atomic_catalog.aliases
+    )
     unknown_ids = False
     for flag, ids in requested.items():
         unknown = sorted(set(ids) - known)
@@ -982,13 +1000,7 @@ def validate_run_inputs(config: Dict[str, Any], log_file: Optional[str] = None) 
                 "run --list-checks to see valid IDs"
             )
 
-    # Mirrors the `enabled: false` handling in CheckRegistry.load_checks_from_config.
-    disabled = {
-        check_id
-        for check_id, check_config in (config.get("checks") or {}).items()
-        if isinstance(check_config, dict) and not check_config.get("enabled", True)
-    }
-    if not unknown_ids and not set(effective.list_check_ids()) - disabled:
+    if not unknown_ids and not effective.list_control_ids():
         errors.append(
             "No checks remain after applying --pillars, --severity, --checks, "
             "--exclude-checks, --skip-flow-analysis, and checks disabled in the config file"
@@ -1036,25 +1048,17 @@ def initialize_assessment_components(config: Dict[str, Any]) -> tuple:
     filters = check_registration_filters(config)
     skip_flow = filters["skip_flow_analysis"]
 
-    # Register all checks using the central registration module.
-    try:
-        from .checks.registration import register_all_checks
+    # Register and validate the complete canonical execution plan. Catalog drift
+    # is fatal because falling back would silently omit selected controls.
+    from .checks.registration import register_all_checks
 
-        register_all_checks(check_registry, **filters)
-        logger.info(f"Registered {len(check_registry)} checks")
-    except Exception as e:
-        logger.warning(f"Failed to load checks: {str(e)}")
-        # Fallback to MVP checks only.
-        from .checks.mvp_checks import get_mvp_checks
-
-        for check in get_mvp_checks():
-            try:
-                check_registry.register_check(check)
-            except ValueError:
-                pass
-
-    # Load additional configuration for checks
-    check_registry.load_checks_from_config(config.get("checks", {}))
+    register_all_checks(check_registry, **filters)
+    logger.info(
+        "Selected %d controls (%d BaseCheck, %d Journey)",
+        len(check_registry.list_control_ids()),
+        len(check_registry.list_check_ids()),
+        len(check_registry.list_selected_journey_control_ids()),
+    )
 
     # Initialize assessment engine - use parallel engine if enabled
     parallel_enabled = global_settings.get("parallel_execution", True)
@@ -1109,41 +1113,33 @@ def initialize_assessment_components(config: Dict[str, Any]) -> tuple:
 
 
 def list_available_checks(check_registry: CheckRegistry) -> None:
-    """
-    Display all available checks organized by pillar and severity.
-
-    Args:
-        check_registry: CheckRegistry instance
-    """
+    """Display selected canonical controls with severity and disposition."""
     print("Available Checks:")
     print("=" * 50)
 
-    checks = check_registry.get_all_checks()
-    if not checks:
-        print("No checks registered.")
+    controls = check_registry.get_selected_controls()
+    if not controls:
+        print("No controls selected.")
         return
 
-    # Group checks by pillar
-    pillars = {}
-    for check in checks:
-        pillar = check.pillar.value
-        if pillar not in pillars:
-            pillars[pillar] = []
-        pillars[pillar].append(check)
+    pillars: Dict[str, List[Any]] = {}
+    for control in controls:
+        pillars.setdefault(control.pillar.value, []).append(control)
 
-    for pillar, pillar_checks in sorted(pillars.items()):
-        print(f"\n{pillar.upper()} ({len(pillar_checks)} checks):")
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    for pillar, pillar_controls in sorted(pillars.items()):
+        print(f"\n{pillar.upper()} ({len(pillar_controls)} controls):")
         print("-" * 30)
-
-        # Sort by severity (critical first)
-        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        pillar_checks.sort(key=lambda c: severity_order.get(c.severity.value, 4))
-
-        for check in pillar_checks:
-            status = "enabled" if getattr(check, "enabled", True) else "disabled"
-            print(f"  {check.check_id:<25} [{check.severity.value.upper():<8}] ({status})")
-            if hasattr(check, "description") and check.description:
-                print(f"    {check.description}")
+        pillar_controls.sort(
+            key=lambda control: severity_order.get(
+                check_registry.get_control_severity(control.control_id).value, 4
+            )
+        )
+        for control in pillar_controls:
+            severity = check_registry.get_control_severity(control.control_id).value.upper()
+            disposition = control.disposition.value.upper()
+            print(f"  {control.control_id:<25} [{severity:<8}] [{disposition}]")
+            print(f"    {control.name}")
 
 
 def show_current_config(config: Dict[str, Any], config_file_path: Optional[str]) -> None:
@@ -1415,16 +1411,59 @@ def run_assessment(
         registered_checks = getattr(result.summary, "registered_checks", None)
         if registered_checks is None:
             registered_checks = result.summary.total_checks - journey_findings
-        print(f"Total findings: {result.summary.total_checks}")
+        findings = list(getattr(result, "findings", []))
+        total_records = len(findings) if findings else result.summary.total_checks
+        if findings:
+            classification_counts = count_finding_classifications(findings)
+            scored_passes, scored_denominator = compute_scored_control_counts(findings)
+            failed_controls = scored_denominator - scored_passes
+            manual_reviews = sum(
+                finding.disposition == FindingDisposition.MANUAL_REVIEW for finding in findings
+            )
+            manual_review_candidates = sum(
+                finding.disposition == FindingDisposition.MANUAL_REVIEW
+                and finding.status == CheckStatus.FAIL
+                for finding in findings
+            )
+            informational_records = sum(
+                finding.disposition == FindingDisposition.INFORMATIONAL for finding in findings
+            )
+            unevaluated_controls = classification_counts[
+                FindingScoreClassification.UNEVALUATED_CONTROL
+            ]
+            not_applicable_records = sum(
+                finding.status == CheckStatus.NOT_APPLICABLE for finding in findings
+            )
+            execution_errors = sum(finding.status == CheckStatus.ERROR for finding in findings)
+        else:
+            scored_passes = getattr(result.summary, "scored_control_numerator", 0)
+            scored_denominator = getattr(result.summary, "scored_control_denominator", 0)
+            failed_controls = getattr(result.summary, "scored_control_failures", 0)
+            manual_reviews = getattr(result.summary, "manual_review_findings", 0)
+            manual_review_candidates = 0
+            informational_records = getattr(result.summary, "informational_findings", 0)
+            unevaluated_controls = getattr(result.summary, "unevaluated_controls", 0)
+            not_applicable_records = getattr(result.summary, "not_applicable_checks", 0)
+            execution_errors = getattr(result.summary, "error_checks", 0)
+
+        posture = (
+            f"{scored_passes}/{scored_denominator} "
+            f"({scored_passes / scored_denominator * 100:.1f}%)"
+            if scored_denominator
+            else "0/0 (Not scored)"
+        )
+        print(f"Total records: {total_records}")
         print(f"Registered checks executed: {registered_checks}")
         if journey_findings:
             print(f"Caller Journey findings: {journey_findings}")
-        print(f"Passed: {result.summary.passed_checks}")
-        print(f"Failed: {result.summary.failed_checks}")
-        if result.summary.critical_findings > 0:
-            print(f"Critical findings: {result.summary.critical_findings}")
-        if result.summary.high_findings > 0:
-            print(f"High severity findings: {result.summary.high_findings}")
+        print(f"Control posture: {posture}")
+        print(f"Failed controls: {failed_controls}")
+        print(f"Manual reviews: {manual_reviews}")
+        print(f"Manual-review candidates: {manual_review_candidates}")
+        print(f"Informational records: {informational_records}")
+        print(f"Unevaluated controls: {unevaluated_controls}")
+        print(f"Not applicable records: {not_applicable_records}")
+        print(f"Execution errors: {execution_errors}")
 
         # Show performance information
         if hasattr(engine, "get_performance_stats"):

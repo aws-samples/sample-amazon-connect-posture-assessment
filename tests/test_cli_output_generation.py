@@ -1,7 +1,15 @@
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from amazon_connect_assessment.cli import run_assessment
+from amazon_connect_assessment.models import (
+    CheckStatus,
+    Finding,
+    FindingDisposition,
+    Pillar,
+    Severity,
+)
 
 
 class _FakeEngine:
@@ -62,3 +70,77 @@ def test_run_assessment_passes_filename_template_to_report_generators(tmp_path):
         filename_template=filename_template,
     )
     assert (tmp_path / "custom-reports").is_dir()
+
+
+def _cli_finding(status, disposition=FindingDisposition.CONTROL):
+    return Finding(
+        check_id=f"cli-{disposition.value}-{status.value}",
+        check_name="CLI finding",
+        pillar=Pillar.SECURITY,
+        severity=Severity.HIGH,
+        status=status,
+        resource_id="resource-1",
+        resource_type="ConnectInstance",
+        description="Observed result",
+        remediation="Action",
+        timestamp=datetime(2026, 1, 1, 12, 0, 0),
+        disposition=disposition,
+        instance_id="instance-1",
+    )
+
+
+def test_cli_mixed_dispositions_prints_distinct_posture_and_record_totals(tmp_path, capsys):
+    # Arrange
+    result = _sample_result()
+    result.findings = [
+        _cli_finding(CheckStatus.PASS),
+        _cli_finding(CheckStatus.FAIL),
+        _cli_finding(CheckStatus.SKIPPED),
+        _cli_finding(CheckStatus.ERROR),
+        _cli_finding(CheckStatus.NOT_APPLICABLE),
+        _cli_finding(CheckStatus.FAIL, FindingDisposition.MANUAL_REVIEW),
+        _cli_finding(CheckStatus.PASS, FindingDisposition.INFORMATIONAL),
+    ]
+    result.summary.total_checks = 7
+    config = {"output": {"format": [], "directory": str(tmp_path)}, "cli": {}}
+
+    # Act
+    with patch("amazon_connect_assessment.cli.ReportGenerator", return_value=Mock()):
+        succeeded = run_assessment(_FakeEngine(result), config)
+    output = capsys.readouterr().out
+
+    # Assert
+    assert succeeded is True
+    assert "Total records: 7" in output
+    assert "Control posture: 1/2 (50.0%)" in output
+    assert "Failed controls: 1" in output
+    assert "Manual reviews: 1" in output
+    assert "Manual-review candidates: 1" in output
+    assert "Informational records: 1" in output
+    assert "Unevaluated controls: 2" in output
+    assert "Not applicable records: 1" in output
+    assert "Execution errors: 1" in output
+    assert "Passed:" not in output
+
+
+def test_cli_zero_scored_controls_prints_not_scored(tmp_path, capsys):
+    # Arrange
+    result = _sample_result()
+    result.findings = [
+        _cli_finding(CheckStatus.SKIPPED),
+        _cli_finding(CheckStatus.ERROR),
+        _cli_finding(CheckStatus.NOT_APPLICABLE),
+    ]
+    result.summary.total_checks = 3
+    config = {"output": {"format": [], "directory": str(tmp_path)}, "cli": {}}
+
+    # Act
+    with patch("amazon_connect_assessment.cli.ReportGenerator", return_value=Mock()):
+        succeeded = run_assessment(_FakeEngine(result), config)
+    output = capsys.readouterr().out
+
+    # Assert
+    assert succeeded is True
+    assert "Control posture: 0/0 (Not scored)" in output
+    assert "Unevaluated controls: 2" in output
+    assert "Not applicable records: 1" in output

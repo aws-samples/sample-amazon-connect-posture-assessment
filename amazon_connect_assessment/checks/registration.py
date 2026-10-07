@@ -1,18 +1,122 @@
-"""
-Central check registration module (Phase 7 / Task 14).
-
-Provides a single ``register_all_checks(registry)`` entry point that
-calls each module's ``register_*()`` function. Supports optional pillar
-filtering so capabilities can be toggled at runtime without modifying
-the engine or individual check modules.
-"""
+"""Central registration and canonical control selection."""
 
 import logging
-from typing import Optional, Set
+from typing import Any, Mapping, Optional, Set
 
+from ..models import Severity
+from .control_registry import ExecutionSource, get_atomic_control_registry
 from .registry import CheckRegistry
 
 logger = logging.getLogger("check_registration")
+
+
+class UnknownControlSelectionError(ValueError):
+    """Raised when an explicit control selection contains unknown IDs."""
+
+
+def _normalize_ids(
+    control_ids: Optional[Set[str]],
+) -> Optional[set[str]]:
+    """Resolve an explicit selection to canonical IDs without dropping typos."""
+    if not control_ids:
+        return None
+    normalized: set[str] = set()
+    unknown: set[str] = set()
+    catalog = get_atomic_control_registry()
+    for requested_id in control_ids:
+        try:
+            normalized.add(catalog.resolve_id(requested_id))
+        except KeyError:
+            unknown.add(requested_id)
+    if unknown:
+        raise UnknownControlSelectionError(
+            f"Unknown check ID(s): {', '.join(sorted(unknown))}; run --list-checks to see valid IDs"
+        )
+    return normalized
+
+
+def _normalize_config(
+    checks_config: Optional[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    catalog = get_atomic_control_registry()
+    normalized: dict[str, Mapping[str, Any]] = {}
+    for requested_id, value in (checks_config or {}).items():
+        if not isinstance(value, Mapping):
+            logger.warning("Config for control '%s' must be an object; ignoring it", requested_id)
+            continue
+        try:
+            canonical_id = catalog.resolve_id(requested_id)
+        except KeyError:
+            logger.warning("Config references unknown control '%s'; ignoring it", requested_id)
+            continue
+        normalized[canonical_id] = value
+    return normalized
+
+
+def apply_live_check_config(
+    registry: CheckRegistry,
+    checks_config: Optional[Mapping[str, Any]],
+) -> None:
+    """Apply compatibility overrides to an already-built live registry."""
+    if not checks_config:
+        return
+
+    normalized_config = _normalize_config(checks_config)
+    disabled_count = 0
+    severity_override_count = 0
+    catalog = registry.get_atomic_control_registry() or get_atomic_control_registry()
+
+    for control_id, control_config in normalized_config.items():
+        control = catalog.get(control_id)
+        enabled = control_config.get("enabled", True)
+        if enabled is False:
+            if control_id in registry:
+                registry.unregister_check(control_id)
+            else:
+                registry._remove_selected_control(control_id)
+            disabled_count += 1
+            continue
+        if not isinstance(enabled, bool):
+            registry.logger.warning(
+                "Ignoring non-boolean enabled override for control '%s'", control_id
+            )
+
+        severity_name = control_config.get("severity")
+        if severity_name:
+            try:
+                new_severity = Severity(str(severity_name).lower())
+            except ValueError:
+                registry.logger.warning(
+                    "Ignoring invalid severity override '%s' for control '%s'; must be one of %s",
+                    severity_name,
+                    control_id,
+                    [severity.value for severity in Severity],
+                )
+            else:
+                if control.execution_source == ExecutionSource.JOURNEY:
+                    registry.logger.warning(
+                        "Severity override for Journey control '%s' is not supported; "
+                        "using catalog severity '%s'.",
+                        control_id,
+                        control.default_severity.value,
+                    )
+                elif registry._override_base_check_severity(control_id, new_severity):
+                    severity_override_count += 1
+
+        unsupported_keys = set(control_config) - {"enabled", "severity"}
+        if unsupported_keys:
+            registry.logger.warning(
+                "Control '%s' config has unsupported override key(s) %s; only 'enabled' "
+                "and BaseCheck 'severity' are currently applied.",
+                control_id,
+                sorted(unsupported_keys),
+            )
+
+    registry.logger.info(
+        "Configuration overrides applied: %d control(s) disabled, %d severity override(s)",
+        disabled_count,
+        severity_override_count,
+    )
 
 
 def register_all_checks(
@@ -22,31 +126,15 @@ def register_all_checks(
     check_ids: Optional[Set[str]] = None,
     exclude_check_ids: Optional[Set[str]] = None,
     skip_flow_analysis: bool = False,
+    checks_config: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """
-    Register all available checks with the given registry.
+    """Register BaseChecks and store one catalog-derived canonical execution plan.
 
-    Args:
-        registry: CheckRegistry to populate.
-        pillars: If provided, only register checks whose pillar value is in
-                 this set. Pass None to register all pillars.
-        severities: If provided, only register checks whose severity value is
-                 in this set (e.g. {"critical", "high"}). Pass None for all.
-        check_ids: If provided, register only these specific check IDs
-                 (an allowlist) — applied after the pillar/severity filters.
-                 Pass None to skip this filter.
-        exclude_check_ids: If provided, remove these specific check IDs after
-                 every other filter has run. Pass None to skip this filter.
-        skip_flow_analysis: If True, skip checks that require parsing contact
-                           flow content (reduces API calls and execution time).
-
-    All filters are AND-ed together: a check must survive the pillar filter,
-    the severity filter, and the check_ids allowlist (if any of them are
-    given) to remain registered, and is then removed if it's in
-    exclude_check_ids. This is what makes ``--severity critical --checks
-    sec-toll-fraud-001`` behave as "critical AND that specific ID" rather
-    than silently ignoring one of the two filters.
+    Selection uses AND semantics in this order: flow-analysis availability,
+    pillar, effective declared severity, explicit inclusion, exclusion, and
+    config disablement. IDs and legacy aliases are normalized before filtering.
     """
+    from .acxd_checks import register_acxd_checks
     from .ai_agent_security_checks import register_ai_agent_security_checks
     from .ai_ops_maturity_checks import register_ai_ops_maturity_checks
     from .capacity_checks import register_capacity_checks
@@ -61,73 +149,111 @@ def register_all_checks(
     from .resilience_advanced_checks import register_advanced_resilience_checks
     from .security_deep_checks import register_security_deep_checks
 
-    # Always register the original MVP checks (backward compat).
     register_mvp_checks(registry)
-
-    # Instance-level checks (no flow parsing needed).
     register_security_deep_checks(registry)
     register_cost_intelligence_checks(registry)
     register_operational_excellence_checks(registry)
     register_ai_ops_maturity_checks(registry)
     register_lex_security_checks(registry)
-
-    # Service-quota headroom. Registered under Resilience (Well-Architected
-    # REL01 covers quota management) and needs no flow parsing.
     register_capacity_checks(registry)
-
-    # Resilience includes both instance-level checks and a flow-dependent
-    # Lambda call-site check. Keep the latter aligned with --skip-flow-analysis.
     register_advanced_resilience_checks(registry, include_flow_checks=not skip_flow_analysis)
+    register_cost_containment_checks(registry, include_flow_checks=not skip_flow_analysis)
+    if skip_flow_analysis and "res-hardcoded-routing-001" in registry:
+        registry.unregister_check("res-hardcoded-routing-001")
 
-    # Flow-content checks (skip if requested).
     if not skip_flow_analysis:
+        register_acxd_checks(registry)
         register_contact_flow_security_checks(registry)
         register_ai_agent_security_checks(registry)
-        register_cost_containment_checks(registry)
         register_contact_flow_behavior_checks(registry)
         register_performance_efficiency_checks(registry)
     else:
         logger.info("Skipping flow-analysis checks (--skip-flow-analysis)")
 
-    # Apply pillar filter if requested.
-    if pillars:
-        all_checks = registry.get_all_checks()
-        to_remove = [c for c in all_checks if c.pillar.value not in pillars]
-        for check in to_remove:
-            registry.unregister_check(check.check_id)
-        logger.info(f"Pillar filter applied ({pillars}); removed {len(to_remove)} checks")
+    catalog = get_atomic_control_registry()
+    catalog.hydrate_base_checks(
+        registry.get_all_checks(), include_flow_analysis=not skip_flow_analysis
+    )
+    registry.set_atomic_control_registry(catalog)
 
-    # Apply severity filter if requested (--severity).
-    if severities:
-        all_checks = registry.get_all_checks()
-        to_remove = [c for c in all_checks if c.severity.value not in severities]
-        for check in to_remove:
-            registry.unregister_check(check.check_id)
-        logger.info(f"Severity filter applied ({severities}); removed {len(to_remove)} checks")
+    included_ids = _normalize_ids(check_ids)
+    excluded_ids = _normalize_ids(exclude_check_ids) or set()
+    normalized_config = _normalize_config(checks_config)
 
-    # Apply explicit check-ID allowlist if requested (--checks).
-    if check_ids:
-        all_checks = registry.get_all_checks()
-        to_remove = [c for c in all_checks if c.check_id not in check_ids]
-        for check in to_remove:
+    effective_severities = {
+        control.control_id: control.default_severity for control in catalog.controls
+    }
+    for control_id, control_config in normalized_config.items():
+        severity_name = control_config.get("severity")
+        if severity_name:
+            try:
+                configured_severity = Severity(str(severity_name).lower())
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid severity override '%s' for control '%s'; must be one of %s",
+                    severity_name,
+                    control_id,
+                    [severity.value for severity in Severity],
+                )
+            else:
+                control = catalog.get(control_id)
+                if control.execution_source == ExecutionSource.JOURNEY:
+                    logger.warning(
+                        "Severity override for Journey control '%s' is not supported; "
+                        "using catalog severity '%s'.",
+                        control_id,
+                        control.default_severity.value,
+                    )
+                else:
+                    effective_severities[control_id] = configured_severity
+                    registry._override_base_check_severity(control_id, configured_severity)
+
+        unsupported_keys = set(control_config) - {"enabled", "severity"}
+        if unsupported_keys:
+            logger.warning(
+                "Control '%s' config has unsupported override key(s) %s; only 'enabled' "
+                "and BaseCheck 'severity' are currently applied.",
+                control_id,
+                sorted(unsupported_keys),
+            )
+
+    selected_ids: list[str] = []
+    for control in catalog.controls:
+        control_id = control.control_id
+        if skip_flow_analysis and control.requires_flow_analysis:
+            continue
+        if pillars and control.pillar.value not in pillars:
+            continue
+        if severities and effective_severities[control_id].value not in severities:
+            continue
+        if included_ids is not None and control_id not in included_ids:
+            continue
+        if control_id in excluded_ids:
+            continue
+        if not normalized_config.get(control_id, {}).get("enabled", True):
+            continue
+        selected_ids.append(control_id)
+
+    registry.set_selected_controls(selected_ids)
+    selected_base_ids = {
+        control_id
+        for control_id in selected_ids
+        if catalog.get(control_id).execution_source == ExecutionSource.BASE_CHECK
+    }
+    for check in registry.get_all_checks():
+        if check.check_id not in selected_base_ids:
             registry.unregister_check(check.check_id)
-        remaining_ids = {c.check_id for c in registry.get_all_checks()}
-        missing = check_ids - remaining_ids
+
+    if included_ids is not None:
+        missing = included_ids - set(selected_ids)
         if missing:
             logger.warning(
-                f"Requested check ID(s) not found (or excluded by an earlier "
-                f"filter): {sorted(missing)}"
+                "Requested control ID(s) not selected after all filters: %s", sorted(missing)
             )
-        logger.info(f"Check-ID allowlist applied; {len(remaining_ids)} check(s) remain")
 
-    # Apply explicit exclusion list if requested (--exclude-checks).
-    if exclude_check_ids:
-        excluded = 0
-        for check_id in exclude_check_ids:
-            if check_id in registry:
-                registry.unregister_check(check_id)
-                excluded += 1
-        logger.info(f"Excluded {excluded} check(s) by ID via --exclude-checks")
-
-    total = len(registry.get_all_checks())
-    logger.info(f"Total checks registered: {total}")
+    logger.info(
+        "Selected %d canonical controls (%d BaseCheck, %d Journey)",
+        len(registry.list_control_ids()),
+        len(registry.list_check_ids()),
+        len(registry.list_selected_journey_control_ids()),
+    )

@@ -5,7 +5,6 @@ The tool runs with parallel execution enabled by default. This page covers what 
 ## Table of Contents
 
 - [Default behaviour](#default-behaviour)
-- [How workers are used](#how-workers-are-used)
 - [Tuning flags](#tuning-flags)
   - [Speed it up](#speed-it-up)
   - [Slow it down (rate-limited accounts)](#slow-it-down-rate-limited-accounts)
@@ -17,39 +16,14 @@ The tool runs with parallel execution enabled by default. This page covers what 
 
 ## Default behaviour
 
-When you run `amazon-connect-assessment`, the parallel engine is active automatically. It uses `min(32, CPU cores × 2)` worker threads — typically 8–16 on a modern laptop. You don't need to set any flags to get parallel execution.
+When you run the module or the environment-local console entry point, the
+parallel engine is active automatically. It uses
+`min(32, CPU cores × 2)` worker threads unless configured otherwise.
 
-Expected wall-clock times:
-
-| Account size | Sequential | Parallel (default) |
-|---|---|---|
-| 1 instance, no flows | ~15 s | ~12 s |
-| 1 instance, 50 flows | ~60 s | ~30 s |
-| 3–5 instances | ~3–5 min | ~45–90 s |
-| 10+ instances | ~10+ min | ~2–4 min |
-
----
-
-## How workers are used
-
-More workers only help in the check phase, and only up to the batch size:
-
-- **Checks** run in batches of `--batch-size` (default 10). A batch must finish before the next
-  one starts, so at most `min(--max-workers, --batch-size)` checks run at once, and each batch
-  waits for its slowest check. Raise both flags together; `--max-workers 16` on its own still runs
-  10 checks at a time.
-- **Instance analysis** runs one thread per instance; the analyzers for an instance run one after
-  another. Assessing one or two instances uses one or two threads here regardless of
-  `--max-workers`.
-- **Caller Journey Mapping** runs after the checks, one instance at a time, outside the worker
-  pool.
-- **Amazon Connect API quotas** are the real ceiling. Many Connect `List*`/`Describe*` APIs allow
-  only a few requests per second per account, so past a point more concurrency just produces
-  throttling and retry backoff, which makes the run slower. Run with `--verbose` and back off if
-  you see throttling warnings.
-
-In practice the biggest savings come from doing less work (`--skip-flow-analysis`,
-`--instance-id`, `--pillars`), not from more workers.
+Run time depends on instance count, enabled controls, resource counts, flow
+size and branching, API latency, permissions, and throttling. Measure in your
+own account before changing worker or traversal limits; this guide does not
+claim portable benchmark numbers.
 
 ---
 
@@ -58,10 +32,15 @@ In practice the biggest savings come from doing less work (`--skip-flow-analysis
 ### Speed it up
 
 ```bash
-# More concurrent checks: raise both (concurrency = min of the two)
---max-workers 16 --batch-size 32
+# More workers (default: auto)
+--max-workers 16
 
-# Skip the 23 contact-flow content checks and ContactFlowAnalyzer API calls
+# Larger batch size (default: 10)
+--batch-size 20
+
+# Skip flow analysis, every flow-dependent control, and most flow-content API work
+# This excludes res-hardcoded-routing-001 (use --list-checks as the dynamic source
+# of truth)
 --skip-flow-analysis
 
 # Scope to a single instance
@@ -73,14 +52,13 @@ In practice the biggest savings come from doing less work (`--skip-flow-analysis
 
 Example — fastest possible run for a first look:
 ```bash
-amazon-connect-assessment \
+python -m amazon_connect_assessment.cli \
   --region us-east-1 \
   --instance-id <id> \
   --pillars security resilience \
   --severity critical high \
   --skip-flow-analysis \
-  --max-workers 16 \
-  --batch-size 32
+  --max-workers 16
 ```
 
 ### Slow it down (rate-limited accounts)
@@ -102,16 +80,36 @@ If you see `ThrottlingException` errors:
 
 ## Which checks take the longest
 
-Contact flow content checks (`--skip-flow-analysis` skips these) make one API call per flow to fetch the flow JSON, then parse and graph it. For an instance with 200+ flows, this is the dominant cost.
+Contact flow content checks (`--skip-flow-analysis` skips these) fetch flow
+JSON and then parse and graph it. Flow analysis can dominate a run when an
+instance has many or complex flows. The exact flow-dependent inventory can
+change; use `python -m amazon_connect_assessment.cli --list-checks` rather than
+hard-coding a count in automation.
 
-**Caller Journey Mapping** adds additional time proportional to the number of phone numbers and the branching complexity of your flows. The pipeline:
-- Calls `ListPhoneNumbersV2` (paginated, ~1 call per 50 numbers)
-- Builds a super-graph from already-parsed flows (in-memory, fast)
-- Runs bounded DFS from each phone number entry point (CPU-bound, capped at 200 paths per number and 5000 total)
+The Agentic CX Designer checks in `checks/acxd_checks.py` reuse this parsed flow
+data. They inspect only reachable Connect-side
+`ConnectParticipantWithAgenticCX` actions and do not call Agentic CX Designer
+APIs, so they add no Agentic CX service API round trips.
 
-For a typical instance with 10–50 phone numbers and moderate flow complexity, journey mapping adds 1–3 seconds. For large instances with 500+ numbers and deeply branching flows, it can add 5–10 seconds. The `--skip-flow-analysis` flag skips journey mapping entirely.
+**Caller Journey Mapping** adds work proportional to the number of phone
+numbers and the branching complexity of parsed flows. The pipeline:
 
-Instance-level checks (IAM, encryption, CloudWatch, CloudTrail, Global Resiliency) are fast — each makes 1–3 API calls regardless of instance size.
+- calls `ListPhoneNumbersV2` with pagination;
+- builds a super-graph from already parsed flows in memory; and
+- runs bounded iterative static enumeration from each phone-number entry point,
+  with maximum depth 50, 200 paths per number, and 5,000 paths for the run.
+
+Cycle edges are pruned per path, but the separate iterative structural closure
+still reaches every statically resolvable node. Enumeration is marked incomplete
+when it reaches a depth, path, or step cap or encounters a dynamic or unresolved
+cross-flow target. This means clean partial evidence is not presented as
+exhaustive proof, while a known structural defect remains reportable.
+
+`--skip-flow-analysis` skips Journey mapping and excludes every control that
+requires flow analysis, including `res-hardcoded-routing-001`. Instance-level
+checks have different API costs, so use verbose logs and measured runs to
+identify the slowest work in your environment rather than relying on fixed
+timing estimates.
 
 ---
 
@@ -156,5 +154,5 @@ journey_map:
 
 Then run:
 ```bash
-amazon-connect-assessment --config config/assessment_config.yaml
+python -m amazon_connect_assessment.cli --config config/assessment_config.yaml
 ```

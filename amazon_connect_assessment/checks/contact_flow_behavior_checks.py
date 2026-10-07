@@ -39,7 +39,6 @@ _PARSER = ContactFlowParser()
 
 # Action types that can produce an error transition.
 _ERROR_CAPABLE_TYPES = {
-    "InvokeLambdaFunction",
     "ConnectToLexBot",
     "ConnectParticipantWithLexBot",
     "TransferToQueue",
@@ -236,142 +235,149 @@ class ErrorHandlingCompletenessCheck(BaseCheck):
     def __init__(self):
         super().__init__(
             check_id="res-flow-errors-001",
-            name="Contact Flow Error Handling Completeness",
+            name="Non-Lambda Error Routing Completeness",
             pillar=Pillar.RESILIENCE,
             severity=Severity.HIGH,
             description=(
-                "Checks that error-capable actions in contact flows have "
-                "defined error transitions to prevent dead-end paths."
+                "Checks every reachable, customer-authored, non-Lambda error-capable "
+                "action for an explicit Error transition."
             ),
         )
 
     def execute(self, context: CheckContext):
         instance = context.instance
-        worst_flow = None
-        worst_ratio = 0.0
-        # Aggregate stats surface in the PASS description so readers see
-        # what was actually checked, not just "within thresholds".
-        flows_with_error_capable_actions = 0
-        flows_fully_covered = 0
-        total_error_capable = 0
-        total_missing = 0
+        customer_flows = sorted(
+            (flow for flow in instance.contact_flows if not is_default_sample_flow(flow)),
+            key=lambda flow: ((flow.name or "").casefold(), flow.id),
+        )
+        skipped_flows = []
+        flow_results = []
+        flows_analyzed = 0
+        authored_error_capable_actions = 0
+        unreachable_error_capable_actions = 0
+        reachable_error_capable_actions = 0
+        missing_error_branches = 0
 
-        for flow in instance.contact_flows:
+        for flow in customer_flows:
+            if not flow.content or not isinstance(flow.content, dict):
+                skipped_flows.append(
+                    {"flow": flow.name, "flow_id": flow.id, "reason": "flow content unavailable"}
+                )
+                continue
             graph = _parse_flow(flow)
-            if not graph:
+            if graph is None:
+                skipped_flows.append(
+                    {"flow": flow.name, "flow_id": flow.id, "reason": "flow content parse failed"}
+                )
                 continue
-            error_capable = [
-                a for a in graph.actions.values() if a.action_type in _ERROR_CAPABLE_TYPES
+            if graph.actions and graph.entry_point_id not in graph.actions:
+                skipped_flows.append(
+                    {
+                        "flow": flow.name,
+                        "flow_id": flow.id,
+                        "reason": "entry action is missing or invalid",
+                    }
+                )
+                continue
+
+            flows_analyzed += 1
+            reachable = reachable_from_entry(graph)
+            authored_actions = sorted(
+                (
+                    action
+                    for action in graph.actions.values()
+                    if action.action_type in _ERROR_CAPABLE_TYPES
+                ),
+                key=lambda action: action.action_id,
+            )
+            reachable_actions = [
+                action for action in authored_actions if action.action_id in reachable
             ]
-            if not error_capable:
-                continue
-            flows_with_error_capable_actions += 1
-            missing = [a for a in error_capable if not a.error_transitions]
-            total_error_capable += len(error_capable)
-            total_missing += len(missing)
-            ratio = len(missing) / len(error_capable)
-            if len(missing) == 0:
-                flows_fully_covered += 1
-            if ratio > worst_ratio:
-                worst_ratio = ratio
-                worst_flow = {
+            missing_actions = [
+                action for action in reachable_actions if not action.error_transitions
+            ]
+
+            authored_error_capable_actions += len(authored_actions)
+            unreachable_error_capable_actions += len(authored_actions) - len(reachable_actions)
+            reachable_error_capable_actions += len(reachable_actions)
+            missing_error_branches += len(missing_actions)
+            flow_results.append(
+                {
                     "flow": flow.name,
                     "flow_id": flow.id,
-                    "error_capable_count": len(error_capable),
-                    "missing_error_count": len(missing),
-                    "missing_action_ids": [a.action_id for a in missing[:10]],
+                    "reachable_error_capable_actions": len(reachable_actions),
+                    "missing_error_branches": len(missing_actions),
+                    "missing_actions": [
+                        {"action_id": action.action_id, "action_type": action.action_type}
+                        for action in missing_actions
+                    ],
                 }
+            )
 
+        limitations = []
+        if skipped_flows:
+            limitations.append(f"{len(skipped_flows)} flow(s) could not be analyzed")
+        failing_flows = [row for row in flow_results if row["missing_error_branches"]]
         evidence = {
-            "flows_analyzed": len(instance.contact_flows),
-            "flows_with_error_capable_actions": flows_with_error_capable_actions,
-            "flows_fully_covered": flows_fully_covered,
-            "total_error_capable_actions": total_error_capable,
-            "total_missing_error_branches": total_missing,
-            "worst_flow_missing_ratio": round(worst_ratio, 3),
-            "fail_threshold": 0.20,
+            "flows_discovered": len(instance.contact_flows),
+            "customer_flows_discovered": len(customer_flows),
+            "sample_flows_excluded": len(instance.contact_flows) - len(customer_flows),
+            "flows_analyzed": flows_analyzed,
+            "flows_skipped": len(skipped_flows),
+            "skipped_flow_details": skipped_flows,
+            "authored_non_lambda_error_capable_actions": authored_error_capable_actions,
+            "unreachable_non_lambda_error_capable_actions": unreachable_error_capable_actions,
+            "reachable_non_lambda_error_capable_actions": reachable_error_capable_actions,
+            "missing_error_branches": missing_error_branches,
+            "flow_results": flow_results,
+            "analysis_complete": not limitations,
+            "limitations": limitations,
         }
 
-        if worst_flow and worst_ratio > 0.20:
-            evidence.update(worst_flow)
-            missing_id_list = ", ".join(f"`{a}`" for a in worst_flow["missing_action_ids"][:5])
-            more_ids = (
-                f" (+ {worst_flow['missing_error_count'] - 5} more)"
-                if worst_flow["missing_error_count"] > 5
+        if missing_error_branches:
+            limitation_note = (
+                " Analysis is also incomplete because " + "; ".join(limitations) + "."
+                if limitations
                 else ""
             )
+            target_resources = [
+                f"{row['flow_id']}:{action['action_id']}"
+                for row in failing_flows
+                for action in row["missing_actions"]
+            ]
             return self.create_finding(
                 status=CheckStatus.FAIL,
                 resource_id=instance.instance_id,
                 resource_type="ContactFlow",
                 description=(
-                    f"**Flow `{worst_flow['flow']}` has "
-                    f"{worst_flow['missing_error_count']} of "
-                    f"{worst_flow['error_capable_count']} error-capable "
-                    "actions with no Error branch defined** — "
-                    f"{worst_ratio:.0%} of them, above the 20% threshold "
-                    "this check applies.\n\n"
-                    "**What an error-capable action is.** Any flow block "
-                    "that can hit a runtime problem (Invoke Lambda times "
-                    "out, Get customer input hits a Lex 5xx, Transfer to "
-                    "queue fails, Check hours of operation can't reach the "
-                    "config). The block has two exit paths in the visual "
-                    "designer: the default arrow, and a red **Error** arrow. "
-                    "When the Error arrow is left unconnected, that path "
-                    "becomes a dead end at runtime.\n\n"
-                    "**What the caller experiences.** When the block fails "
-                    "and there's no Error branch, Amazon Connect has "
-                    "nowhere to send the contact. The result is usually "
-                    "one of: (1) the caller hears silence for a few "
-                    "seconds and then the line drops; (2) the contact "
-                    "shows up as `Disconnect` in the CTR with no "
-                    "resolution; (3) the caller phones back and hits the "
-                    "same trap. None of it looks like an outage from your "
-                    "side — the flow just quietly disconnected people.\n\n"
-                    f"**Actions in `{worst_flow['flow']}` missing an "
-                    f"Error branch:** {missing_id_list}{more_ids}\n\n"
-                    "**How to fix.** For each flagged action, open the "
-                    "flow in the Connect designer, drag the **Error** "
-                    "output to somewhere useful. A minimum viable pattern "
-                    'is: Error → *Play prompt* ("Sorry, something went '
-                    'wrong on our side") → *Transfer to queue* (a '
-                    "generic support queue). A better pattern is a "
-                    "reusable **error-handling flow module** that every "
-                    "flow's Error branches point to — one place to update "
-                    "apology text, one place to change the fallback "
-                    "queue."
+                    f"**{missing_error_branches} reachable non-Lambda action(s) have no "
+                    "explicit Error transition.** Each listed action is direct structural "
+                    "evidence of an unhandled error route; no tolerance threshold is applied."
+                    f"{limitation_note}"
                 ),
                 evidence=evidence,
                 structured_remediation=Remediation(
                     summary=(
-                        f"Wire up the Error branch on {worst_flow['missing_error_count']} "
-                        f"action(s) in `{worst_flow['flow']}` so failures don't dead-end callers."
+                        "Connect every listed non-Lambda action's Error output to a "
+                        "caller-safe fallback route."
                     ),
-                    target_resources=worst_flow["missing_action_ids"][:5],
+                    target_resources=target_resources[:20],
                     steps=[
                         RemediationStep(
                             order=1,
                             instruction=(
-                                "Open the flow in the Connect designer. "
-                                "Each flagged action has an unconnected "
-                                "red Error output — connect it to a Play "
-                                "prompt block that apologizes, then to a "
-                                "Transfer to queue that routes to a "
-                                "human agent."
+                                "Open each listed action in the Connect flow designer and connect "
+                                "its Error output to a tested apology, fallback queue, alternate "
+                                "service path, or intentional disconnect outcome."
                             ),
                             console_path="Connect console -> Routing -> Flows",
                         ),
                         RemediationStep(
                             order=2,
                             instruction=(
-                                "For instances with many flows, extract "
-                                "the apology-and-transfer sequence into a "
-                                "Flow Module and point every flow's "
-                                "Error branches at that module. Saves "
-                                "duplicated logic and gives you one place "
-                                "to change the fallback behavior."
+                                "Exercise each supported service and routing failure, then confirm "
+                                "the contact reaches the intended fallback outcome."
                             ),
-                            console_path=("Connect console -> Routing -> Flow modules"),
                         ),
                     ],
                     references=[
@@ -387,38 +393,28 @@ class ErrorHandlingCompletenessCheck(BaseCheck):
                 ),
             )
 
-        # PASS description tells the reader exactly what was checked and
-        # what the numbers look like — no more vague "within thresholds".
-        if flows_with_error_capable_actions == 0:
-            description = (
-                f"No flows on this instance contain error-capable actions "
-                f"(InvokeLambdaFunction, GetUserInput, etc.), so there was "
-                f"nothing to audit for error-branch coverage. "
-                f"{len(instance.contact_flows)} flow(s) analyzed."
-            )
-        elif worst_flow is None or worst_ratio == 0.0:
-            description = (
-                f"Every error-capable action across "
-                f"{flows_with_error_capable_actions} flow(s) has an error "
-                f"branch defined ({total_error_capable} action(s) checked "
-                f"in total)."
-            )
-        else:
-            description = (
-                f"{flows_fully_covered} of {flows_with_error_capable_actions} "
-                f"flow(s) have complete error-branch coverage. "
-                f"Worst flow: '{worst_flow['flow']}' — "
-                f"{worst_flow['missing_error_count']}/"
-                f"{worst_flow['error_capable_count']} error-capable actions "
-                f"missing an error branch ({worst_ratio:.0%}, below the 20% "
-                f"threshold that would fail this check)."
+        if limitations:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ContactFlow",
+                description=(
+                    "Non-Lambda error-routing analysis was incomplete and cannot report PASS: "
+                    + "; ".join(limitations)
+                    + "."
+                ),
+                evidence=evidence,
             )
 
         return self.create_finding(
             status=CheckStatus.PASS,
             resource_id=instance.instance_id,
             resource_type="ContactFlow",
-            description=description,
+            description=(
+                f"All {reachable_error_capable_actions} reachable non-Lambda error-capable "
+                f"action(s) across {flows_analyzed} customer-authored flow(s) have explicit "
+                "Error transitions."
+            ),
             evidence=evidence,
         )
 
@@ -682,7 +678,6 @@ class UnreachableActionsCheck(BaseCheck):
 
 def register_contact_flow_behavior_checks(registry) -> None:
     """Register all contact-flow behavior checks."""
-    registry.register_check(AuthenticationPatternCheck())
     registry.register_check(PersonalizationAnalysisCheck())
     registry.register_check(ErrorHandlingCompletenessCheck())
     registry.register_check(LoopDetectionCheck())

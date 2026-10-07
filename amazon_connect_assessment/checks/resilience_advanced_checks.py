@@ -6,7 +6,7 @@ Deep-inspection checks for Connect resilience posture:
 - res-acgr-config-001         : ACGR configuration discovery (informational)
 - res-acgr-identity-001       : SAML identity required for ACGR agent failover
 - res-acgr-tdg-status-001     : Traffic distribution group in ACTIVE status
-- res-acgr-traffic-dist-001   : Active-active vs passive-only traffic split
+- res-acgr-traffic-dist-001   : ACGR traffic distribution inventory
 - res-acgr-failover-test-001  : Failover tested in the last 90 days
 - res-acgr-numbers-001        : Phone numbers claimed against the TDG
 - res-cloudwatch-001          : CloudWatch alarm coverage for critical metrics
@@ -26,6 +26,7 @@ Each check degrades to SKIPPED on AccessDenied and emits evidence-specific
 structured remediation.
 """
 
+import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,7 @@ from ..models import (
     CheckStatus,
     ContactFlow,
     ContactFlowGraph,
+    FindingDisposition,
     Pillar,
     Remediation,
     RemediationReference,
@@ -42,7 +44,7 @@ from ..models import (
     Severity,
 )
 from ..parsers import ContactFlowParser, is_default_sample_flow, reachable_from_entry
-from .base import BaseCheck, CheckContext
+from .base import BaseCheck, CheckContext, _error_code
 
 _PARSER = ContactFlowParser()
 
@@ -88,14 +90,23 @@ def _list_all_phone_numbers(factory, target_arn: str) -> List[Dict[str, Any]]:
     return all_numbers
 
 
-# Required CloudWatch alarm metrics for a well-monitored instance.
+# Required instance-level voice metrics for this alarm-coverage control.
 _REQUIRED_ALARM_METRICS = [
     "ConcurrentCalls",
-    "ConcurrentCallsPercentage",
     "ThrottledCalls",
     "MissedCalls",
     "CallsPerInterval",
 ]
+_REQUIRED_ALARM_DIMENSIONS = {
+    "InstanceId": None,
+    "MetricGroup": "VoiceCalls",
+}
+_CLOUDWATCH_ALARM_PAGE_SIZE = 100
+_MAX_CLOUDWATCH_ALARM_PAGES = 100
+
+# CloudTrail pagination stays bounded in case a service or mock repeats tokens.
+_CLOUDTRAIL_EVENT_PAGE_SIZE = 50
+_MAX_CLOUDTRAIL_EVENT_PAGES = 100
 
 # Transfer action types to check for hardcoded routing.
 _ROUTING_ACTION_TYPES = {
@@ -134,14 +145,17 @@ class _ACGRContext:
 
     tdgs: List[Dict[str, Any]] = field(default_factory=list)
     tdgs_denied: bool = False
+    tdgs_error: bool = False
     tdgs_denied_permission: str = "connect:ListTrafficDistributionGroups"
     # Per-TDG details, keyed by TDG Id.
     tdg_details: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     tdg_details_denied: bool = False
+    tdg_detail_error_ids: List[str] = field(default_factory=list)
     tdg_details_denied_permission: str = "connect:DescribeTrafficDistributionGroup"
     # Traffic distribution per TDG, keyed by TDG Id.
     traffic_distributions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     traffic_denied: bool = False
+    traffic_error_ids: List[str] = field(default_factory=list)
     traffic_denied_permission: str = "connect:GetTrafficDistribution"
     # True once every fetch step below has run to completion (successfully
     # or via a recorded denial) — distinguishes a fully-populated context
@@ -226,18 +240,31 @@ def _get_acgr_context(context: CheckContext) -> _ACGRContext:
 
         # Step 1: list TDGs.
         try:
-            resp = factory.call_api_with_resilience(
-                factory.get_connect_client(),
-                "list_traffic_distribution_groups",
-                "connect",
-                InstanceId=instance_id,
-                MaxResults=10,
-            )
-            ctx.tdgs = resp.get("TrafficDistributionGroupSummaryList", []) or []
+            next_token: Optional[str] = None
+            seen_tokens: set = set()
+            while True:
+                kwargs: Dict[str, Any] = {"MaxResults": 10}
+                if next_token:
+                    kwargs["NextToken"] = next_token
+                resp = factory.call_api_with_resilience(
+                    factory.get_connect_client(),
+                    "list_traffic_distribution_groups",
+                    "connect",
+                    InstanceId=instance_id,
+                    **kwargs,
+                )
+                ctx.tdgs.extend(resp.get("TrafficDistributionGroupSummaryList", []) or [])
+                next_token = resp.get("NextToken")
+                if not next_token:
+                    break
+                if next_token in seen_tokens:
+                    raise ValueError("ListTrafficDistributionGroups returned a repeated NextToken")
+                seen_tokens.add(next_token)
         except Exception as e:
             if factory.is_access_denied(e):
                 ctx.tdgs_denied = True
-            # If the API isn't available (older region) treat as no TDG configured.
+            else:
+                ctx.tdgs_error = True
 
         if ctx.tdgs:
             # Step 2: describe each TDG (Status field lives here).
@@ -257,6 +284,7 @@ def _get_acgr_context(context: CheckContext) -> _ACGRContext:
                     if factory.is_access_denied(e):
                         ctx.tdg_details_denied = True
                         break
+                    ctx.tdg_detail_error_ids.append(tdg_id)
 
             # Step 3: get_traffic_distribution for each TDG.
             for tdg in ctx.tdgs:
@@ -275,11 +303,27 @@ def _get_acgr_context(context: CheckContext) -> _ACGRContext:
                     if factory.is_access_denied(e):
                         ctx.traffic_denied = True
                         break
+                    ctx.traffic_error_ids.append(tdg_id)
 
         ctx.fetch_complete = True
         with _acgr_cache_lock:
             _acgr_cache[instance_id] = ctx
         return ctx
+
+
+def _tdg_discovery_incomplete(check: BaseCheck, context: CheckContext):
+    """SKIPPED finding for a failed ListTrafficDistributionGroups (never 'not configured')."""
+    return check.create_finding(
+        status=CheckStatus.SKIPPED,
+        resource_id=context.instance.instance_id,
+        resource_type="ConnectInstance",
+        description=(
+            "Skipped: traffic distribution group discovery did not complete, so "
+            "ACGR applicability cannot be determined."
+        ),
+        evidence={"evidence_complete": False, "discovery_error": True},
+        context=context,
+    )
 
 
 def _parse_flow(flow: ContactFlow) -> Optional[ContactFlowGraph]:
@@ -368,6 +412,8 @@ class ACGRConfigurationCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return _tdg_discovery_incomplete(self, context)
 
         evidence: Dict[str, Any] = {
             "traffic_distribution_groups": len(acgr.tdgs),
@@ -436,6 +482,8 @@ class ACGRIdentityManagementCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return _tdg_discovery_incomplete(self, context)
         if not acgr.tdgs:
             return self.not_applicable(
                 context,
@@ -451,6 +499,19 @@ class ACGRIdentityManagementCheck(BaseCheck):
             "identity_management_type": idm,
             "traffic_distribution_groups": len(acgr.tdgs),
         }
+
+        if not idm:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    "Skipped: the instance identity management type was not returned, "
+                    "so SAML eligibility for ACGR cannot be evaluated."
+                ),
+                evidence={**evidence, "evidence_complete": False},
+                context=context,
+            )
 
         if idm in _ACGR_ELIGIBLE_IDENTITY_TYPES:
             return self.create_finding(
@@ -537,6 +598,8 @@ class ACGRTrafficDistributionGroupStatusCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return _tdg_discovery_incomplete(self, context)
         if not acgr.tdgs:
             return self.not_applicable(
                 context,
@@ -558,11 +621,32 @@ class ACGRTrafficDistributionGroupStatusCheck(BaseCheck):
             status = (detail or {}).get("Status") or tdg.get("Status") or "UNKNOWN"
             tdg_status_map[tdg.get("Name") or tdg_id or "unnamed"] = status
 
-        non_active = {name: status for name, status in tdg_status_map.items() if status != "ACTIVE"}
+        unknown = sorted(name for name, status in tdg_status_map.items() if status == "UNKNOWN")
+        non_active = {
+            name: status
+            for name, status in tdg_status_map.items()
+            if status not in ("ACTIVE", "UNKNOWN")
+        }
         evidence = {
             "tdg_status": tdg_status_map,
             "non_active_tdgs": non_active,
+            "unknown_status_tdgs": unknown,
+            "describe_error_tdg_ids": list(acgr.tdg_detail_error_ids),
         }
+
+        if unknown and not non_active:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    f"Skipped: status could not be determined for {len(unknown)} traffic "
+                    "distribution group(s) (DescribeTrafficDistributionGroup failed or "
+                    "returned no status), so a clean result cannot be reported."
+                ),
+                evidence={**evidence, "evidence_complete": False},
+                context=context,
+            )
 
         if not non_active:
             return self.create_finding(
@@ -621,21 +705,21 @@ class ACGRTrafficDistributionGroupStatusCheck(BaseCheck):
 
 
 class ACGRTrafficDistributionCheck(BaseCheck):
-    """Verify traffic distribution is active-active, not passive-only (100/0)."""
+    """Inventory ACGR telephony traffic distribution without prescribing a policy."""
 
     def __init__(self):
         super().__init__(
             check_id="res-acgr-traffic-dist-001",
-            name="ACGR Active-Active Traffic Distribution",
+            name="ACGR Traffic Distribution Inventory",
             pillar=Pillar.RESILIENCE,
             severity=Severity.HIGH,
             description=(
-                "When ACGR is configured, verifies traffic is distributed "
-                "across regions rather than pinned 100% to one region. A "
-                "100/0 split leaves the standby region unexercised — the "
-                "first real test of the failover path becomes the incident "
-                "itself, which frequently surfaces latent issues."
+                "Inventories the configured regional telephony percentages for each ACGR "
+                "traffic distribution group. Hot-standby, single-region, and multi-region "
+                "distributions are valid architecture evidence; this informational check "
+                "does not prescribe an active-active policy."
             ),
+            disposition=FindingDisposition.INFORMATIONAL,
         )
 
     def execute(self, context: CheckContext):
@@ -644,6 +728,18 @@ class ACGRTrafficDistributionCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    "Skipped: traffic distribution group discovery did not complete, so "
+                    "ACGR applicability and distribution evidence are incomplete."
+                ),
+                evidence={"evidence_complete": False, "discovery_error": True},
+                context=context,
+            )
         if not acgr.tdgs:
             return self.not_applicable(
                 context,
@@ -653,118 +749,204 @@ class ACGRTrafficDistributionCheck(BaseCheck):
                 ),
                 evidence={"traffic_distribution_groups": 0},
             )
-        if acgr.traffic_denied and not acgr.traffic_distributions:
+        if acgr.traffic_denied:
             return self.skipped_for_access_denied(context, acgr.traffic_denied_permission)
 
-        # For each TDG, check if any region holds 100% of telephony traffic.
-        passive_tdgs: List[Dict[str, Any]] = []
         distribution_summary: Dict[str, Any] = {}
+        distribution_modes: Dict[str, str] = {}
+        incomplete_tdgs: List[Dict[str, str]] = []
 
         for tdg in acgr.tdgs:
             tdg_id = tdg.get("Id")
-            tdg_name = tdg.get("Name") or tdg_id
-            if not tdg_id:
+            tdg_name = tdg.get("Name") or tdg_id or "unknown"
+            if not isinstance(tdg_id, str) or not tdg_id.strip():
+                incomplete_tdgs.append(
+                    {"tdg_name": str(tdg_name), "reason": "missing TDG identifier"}
+                )
                 continue
+            if tdg_id in acgr.traffic_error_ids:
+                incomplete_tdgs.append(
+                    {"tdg_name": str(tdg_name), "reason": "traffic distribution read failed"}
+                )
+                continue
+
             dist = acgr.traffic_distributions.get(tdg_id)
-            if not dist:
+            telephony_config = dist.get("TelephonyConfig") if isinstance(dist, dict) else None
+            telephony = (
+                telephony_config.get("Distributions")
+                if isinstance(telephony_config, dict)
+                else None
+            )
+            if not isinstance(telephony, list) or not telephony:
+                incomplete_tdgs.append(
+                    {"tdg_name": str(tdg_name), "reason": "missing telephony distributions"}
+                )
                 continue
 
-            telephony = (dist.get("TelephonyConfig") or {}).get("Distributions") or []
-            per_region = {d.get("Region", "unknown"): d.get("Percentage", 0) for d in telephony}
-            distribution_summary[tdg_name] = per_region
+            per_region: Dict[str, float] = {}
+            valid_entries = True
+            for entry in telephony:
+                if not isinstance(entry, dict):
+                    valid_entries = False
+                    break
+                region = entry.get("Region")
+                percentage = entry.get("Percentage")
+                if (
+                    not isinstance(region, str)
+                    or not region.strip()
+                    or isinstance(percentage, bool)
+                    or not isinstance(percentage, (int, float))
+                    or percentage < 0
+                    or percentage > 100
+                    or region in per_region
+                ):
+                    valid_entries = False
+                    break
+                per_region[region] = percentage
 
-            # Passive-only: any single region at 100% (and thus every other
-            # region at 0%). Also flag the degenerate case of a single-region
-            # distribution list, which means only one region is participating.
-            if telephony and (
-                any(d.get("Percentage") == 100 for d in telephony) or len(telephony) < 2
-            ):
-                passive_tdgs.append(
+            if not valid_entries or abs(sum(per_region.values()) - 100) > 0.001:
+                incomplete_tdgs.append(
                     {
-                        "tdg_name": tdg_name,
-                        "distribution": per_region,
+                        "tdg_name": str(tdg_name),
+                        "reason": "malformed or incomplete regional percentages",
                     }
                 )
+                continue
+
+            distribution_summary[str(tdg_name)] = per_region
+            percentages = list(per_region.values())
+            if len(percentages) == 1:
+                distribution_modes[str(tdg_name)] = "single-region"
+            elif 100 in percentages and all(value in {0, 100} for value in percentages):
+                distribution_modes[str(tdg_name)] = "hot-standby"
+            else:
+                distribution_modes[str(tdg_name)] = "multi-region"
 
         evidence = {
+            "evidence_complete": not incomplete_tdgs,
+            "traffic_distribution_group_count": len(acgr.tdgs),
+            "evaluated_tdg_count": len(distribution_summary),
+            "incomplete_tdg_count": len(incomplete_tdgs),
+            "incomplete_tdgs": incomplete_tdgs,
             "distribution_by_tdg": distribution_summary,
-            "passive_only_tdg_count": len(passive_tdgs),
+            "distribution_mode_by_tdg": distribution_modes,
         }
 
-        if not passive_tdgs:
+        if incomplete_tdgs:
             return self.create_finding(
-                status=CheckStatus.PASS,
+                status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
-                resource_type="ConnectInstance",
+                resource_type="TrafficDistributionGroup",
                 description=(
-                    "Traffic is distributed across regions for every TDG — "
-                    "the standby region is actively serving traffic and the "
-                    "failover path is continuously exercised."
+                    "Skipped: complete telephony distribution evidence was not collected "
+                    f"for {len(incomplete_tdgs)} of {len(acgr.tdgs)} ACGR traffic "
+                    "distribution group(s)."
                 ),
                 evidence=evidence,
+                context=context,
             )
 
         return self.create_finding(
-            status=CheckStatus.FAIL,
+            status=CheckStatus.PASS,
             resource_id=instance.instance_id,
             resource_type="TrafficDistributionGroup",
             description=(
-                f"{len(passive_tdgs)} of {len(acgr.tdgs)} TDG(s) route 100% "
-                "of traffic to a single region. The standby region is not "
-                "exercised, so the failover path is unverified until the "
-                "next incident forces a cutover — a moment when latent "
-                "issues surface with the highest impact.\n\n"
-                "Serving traffic from the standby region is what exercises "
-                "the path, but it also requires provisioned capacity and "
-                "separately prepared dependencies. See `res-acgr-config-001` "
-                "for that cost and coverage context."
+                "Complete ACGR telephony distribution inventory was collected for every "
+                "assessed traffic distribution group. The configured percentages are "
+                "reported as architecture evidence without treating hot-standby, "
+                "single-region, or multi-region routing as a defect."
             ),
             evidence=evidence,
-            structured_remediation=Remediation(
-                summary=(
-                    "Move to an active-active split (e.g. 80/20 or 60/40) "
-                    "so both regions serve real traffic continuously."
-                ),
-                target_resources=[t["tdg_name"] for t in passive_tdgs],
-                steps=[
-                    RemediationStep(
-                        order=1,
-                        instruction=(
-                            "Update the traffic distribution to a non-100/0 "
-                            "split. Start conservatively (90/10 or 80/20) "
-                            "and adjust as you build confidence."
-                        ),
-                        console_path=(
-                            "Connect console -> Instance -> Global "
-                            "resiliency -> Traffic distribution groups -> "
-                            "<tdg> -> Edit traffic distribution"
-                        ),
-                        command=(
-                            "aws connect update-traffic-distribution "
-                            "--id <tdg-id> --telephony-config "
-                            "'Distributions=[{Region=<primary>,Percentage=80},"
-                            "{Region=<standby>,Percentage=20}]'"
-                        ),
-                    ),
-                ],
-                references=[
-                    RemediationReference(
-                        title="Amazon Connect Global Resiliency",
-                        url=_ACGR_DOCS_URL,
-                    )
-                ],
-                applies_if=(
-                    "the standby region is provisioned with capacity to serve "
-                    "its share of traffic (Lambda, Lex, and other integrations "
-                    "replicated cross-region)."
-                ),
-                placeholders=["<tdg-id>", "<primary>", "<standby>"],
-            ),
+            context=context,
         )
 
 
+def _mapping_value_case_insensitive(mapping: Any, key: str) -> Any:
+    """Read a mapping value while accepting CloudTrail JSON key-casing differences."""
+    if not isinstance(mapping, dict):
+        return None
+    expected = key.casefold()
+    for candidate_key, value in mapping.items():
+        if isinstance(candidate_key, str) and candidate_key.casefold() == expected:
+            return value
+    return None
+
+
+def _cloudtrail_event_tdg_identifiers(event: Any) -> set[str]:
+    """Extract TDG IDs or ARNs from a LookupEvents event without trusting its JSON shape."""
+    if not isinstance(event, dict):
+        return set()
+
+    identifiers: set[str] = set()
+    raw_event = _mapping_value_case_insensitive(event, "CloudTrailEvent")
+    if isinstance(raw_event, str):
+        try:
+            parsed_event = json.loads(raw_event)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_event = None
+        request_parameters = _mapping_value_case_insensitive(parsed_event, "requestParameters")
+        request_id = _mapping_value_case_insensitive(request_parameters, "id")
+        if isinstance(request_id, str) and request_id.strip():
+            identifiers.add(request_id.strip())
+
+    resources = _mapping_value_case_insensitive(event, "Resources")
+    if isinstance(resources, list):
+        for resource in resources:
+            resource_name = _mapping_value_case_insensitive(resource, "ResourceName")
+            if isinstance(resource_name, str) and resource_name.strip():
+                identifiers.add(resource_name.strip())
+
+    return identifiers
+
+
+def _cloudtrail_event_outcome(event: Any) -> dict[str, Any]:
+    """Classify a LookupEvents record without exposing its error message."""
+    raw_event = _mapping_value_case_insensitive(event, "CloudTrailEvent")
+    if not isinstance(raw_event, str):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is missing",
+        }
+    try:
+        parsed_event = json.loads(raw_event)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is malformed",
+        }
+    if not isinstance(parsed_event, dict):
+        return {
+            "outcome": "unknown",
+            "error_code": None,
+            "error_message_present": False,
+            "reason": "CloudTrailEvent payload is not an object",
+        }
+
+    raw_error_code = _mapping_value_case_insensitive(parsed_event, "errorCode")
+    raw_error_message = _mapping_value_case_insensitive(parsed_event, "errorMessage")
+    error_code_present = raw_error_code not in (None, "")
+    error_message_present = raw_error_message not in (None, "")
+    if error_code_present or error_message_present:
+        return {
+            "outcome": "failed",
+            "error_code": str(raw_error_code) if error_code_present else None,
+            "error_message_present": error_message_present,
+            "reason": "CloudTrailEvent records an API error",
+        }
+    return {
+        "outcome": "successful",
+        "error_code": None,
+        "error_message_present": False,
+        "reason": None,
+    }
+
+
 class ACGRFailoverTestCheck(BaseCheck):
-    """Verify failover has been tested via CloudTrail lookup for UpdateTrafficDistribution."""
+    """Find recent UpdateTrafficDistribution evidence scoped to an assessed TDG."""
 
     def __init__(self):
         super().__init__(
@@ -773,10 +955,10 @@ class ACGRFailoverTestCheck(BaseCheck):
             pillar=Pillar.RESILIENCE,
             severity=Severity.HIGH,
             description=(
-                "When ACGR is configured, verifies failover has been tested "
-                f"in the last {_FAILOVER_TEST_LOOKBACK_DAYS} days by looking "
-                "for UpdateTrafficDistribution CloudTrail events. An "
-                "untested failover plan is a plan on paper only."
+                "When ACGR is configured, searches the last "
+                f"{_FAILOVER_TEST_LOOKBACK_DAYS} days for "
+                "UpdateTrafficDistribution CloudTrail events whose request Id or resource "
+                "identity matches an assessed traffic distribution group."
             ),
         )
 
@@ -787,6 +969,18 @@ class ACGRFailoverTestCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    "Skipped: traffic distribution group discovery did not complete, so "
+                    "CloudTrail events cannot be scoped to the assessed deployment."
+                ),
+                evidence={"evidence_complete": False, "discovery_error": True},
+                context=context,
+            )
         if not acgr.tdgs:
             return self.not_applicable(
                 context,
@@ -797,87 +991,215 @@ class ACGRFailoverTestCheck(BaseCheck):
                 evidence={"traffic_distribution_groups": 0},
             )
 
-        start_time = datetime.now(timezone.utc) - timedelta(days=_FAILOVER_TEST_LOOKBACK_DAYS)
-        try:
-            resp = factory.call_api_with_resilience(
-                factory.get_cloudtrail_client(),
-                "lookup_events",
-                "cloudtrail",
-                LookupAttributes=[
-                    {"AttributeKey": "EventName", "AttributeValue": "UpdateTrafficDistribution"},
-                ],
-                StartTime=start_time,
-                MaxResults=50,
+        identifier_to_tdg: Dict[str, str] = {}
+        unidentifiable_tdgs: List[str] = []
+        for tdg in acgr.tdgs:
+            tdg_id = tdg.get("Id")
+            tdg_arn = tdg.get("Arn")
+            canonical_identity = tdg_id or tdg_arn
+            if not isinstance(canonical_identity, str) or not canonical_identity.strip():
+                unidentifiable_tdgs.append(str(tdg.get("Name") or "unknown"))
+                continue
+            for identifier in (tdg_id, tdg_arn):
+                if isinstance(identifier, str) and identifier.strip():
+                    identifier_to_tdg[identifier.strip()] = canonical_identity.strip()
+
+        if unidentifiable_tdgs:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="TrafficDistributionGroup",
+                description=(
+                    "Skipped: one or more assessed traffic distribution groups lacked an ID "
+                    "or ARN required to scope CloudTrail evidence."
+                ),
+                evidence={
+                    "evidence_complete": False,
+                    "unidentifiable_tdgs": unidentifiable_tdgs,
+                },
+                context=context,
             )
+
+        start_time = datetime.now(timezone.utc) - timedelta(days=_FAILOVER_TEST_LOOKBACK_DAYS)
+        events: List[Any] = []
+        next_token: Optional[str] = None
+        seen_tokens: set[str] = set()
+        pagination_complete = False
+        pages_scanned = 0
+
+        try:
+            for _ in range(_MAX_CLOUDTRAIL_EVENT_PAGES):
+                kwargs: Dict[str, Any] = {
+                    "LookupAttributes": [
+                        {
+                            "AttributeKey": "EventName",
+                            "AttributeValue": "UpdateTrafficDistribution",
+                        },
+                    ],
+                    "StartTime": start_time,
+                    "MaxResults": _CLOUDTRAIL_EVENT_PAGE_SIZE,
+                }
+                if next_token:
+                    kwargs["NextToken"] = next_token
+                resp = factory.call_api_with_resilience(
+                    factory.get_cloudtrail_client(),
+                    "lookup_events",
+                    "cloudtrail",
+                    **kwargs,
+                )
+                pages_scanned += 1
+                events.extend(resp.get("Events") or [])
+                returned_token = resp.get("NextToken")
+                if not returned_token:
+                    pagination_complete = True
+                    break
+                if not isinstance(returned_token, str) or returned_token in seen_tokens:
+                    break
+                seen_tokens.add(returned_token)
+                next_token = returned_token
         except Exception as e:
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "cloudtrail:LookupEvents")
-            # CloudTrail not queryable (unusual). Report as ERROR via safe_execute.
             raise
 
-        events = resp.get("Events", []) or []
+        matched_events: List[Dict[str, Any]] = []
+        successful_matched_events: List[Dict[str, Any]] = []
+        failed_matched_events: List[Dict[str, Any]] = []
+        malformed_matched_events: List[Dict[str, Any]] = []
+        matched_tdgs: set[str] = set()
+        successful_matched_tdgs: set[str] = set()
+        unrelated_count = 0
+        malformed_count = 0
+
+        for event in events:
+            identifiers = _cloudtrail_event_tdg_identifiers(event)
+            matching_identifiers = identifiers.intersection(identifier_to_tdg)
+            if matching_identifiers:
+                matched_events.append(event)
+                event_tdgs = {identifier_to_tdg[value] for value in matching_identifiers}
+                matched_tdgs.update(event_tdgs)
+                outcome = _cloudtrail_event_outcome(event)
+                observation = {
+                    "event_time": str(event.get("EventTime", "")),
+                    "matched_tdgs": sorted(event_tdgs),
+                    "error_code": outcome["error_code"],
+                    "error_message_present": outcome["error_message_present"],
+                }
+                if outcome["outcome"] == "successful":
+                    successful_matched_events.append(event)
+                    successful_matched_tdgs.update(event_tdgs)
+                elif outcome["outcome"] == "failed":
+                    failed_matched_events.append(observation)
+                else:
+                    malformed_matched_events.append({**observation, "reason": outcome["reason"]})
+            elif identifiers:
+                unrelated_count += 1
+            else:
+                malformed_count += 1
+
+        limitations = []
+        if not pagination_complete:
+            limitations.append(
+                "CloudTrail LookupEvents pagination did not complete within the bounded scan"
+            )
         evidence = {
+            "evidence_complete": pagination_complete,
+            "pagination_complete": pagination_complete,
+            "pages_scanned": pages_scanned,
+            "limitations": limitations,
             "lookback_days": _FAILOVER_TEST_LOOKBACK_DAYS,
+            "assessed_tdg_identifiers": sorted(identifier_to_tdg),
+            "candidate_event_count": len(events),
+            "matched_event_count": len(matched_events),
+            "successful_matched_event_count": len(successful_matched_events),
+            "failed_matched_event_count": len(failed_matched_events),
+            "malformed_matched_event_count": len(malformed_matched_events),
+            "failed_matched_events": failed_matched_events,
+            "malformed_matched_events": malformed_matched_events,
+            "unrelated_event_count": unrelated_count,
+            "malformed_event_count": malformed_count,
+            "matched_tdgs": sorted(matched_tdgs),
+            "successful_matched_tdgs": sorted(successful_matched_tdgs),
             "update_traffic_distribution_event_count": len(events),
         }
 
-        if events:
-            # Include a small sample of event timestamps for the report.
-            evidence["most_recent_event_time"] = str(events[0].get("EventTime", ""))
+        if successful_matched_events:
+            evidence["most_recent_matched_event_time"] = str(
+                successful_matched_events[0].get("EventTime", "")
+            )
+            limitation_note = (
+                " LookupEvents pagination was incomplete, but the observed successful event "
+                "is sufficient positive evidence."
+                if not pagination_complete
+                else ""
+            )
             return self.create_finding(
                 status=CheckStatus.PASS,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    f"Failover has been exercised: {len(events)} "
-                    f"UpdateTrafficDistribution event(s) in the last "
-                    f"{_FAILOVER_TEST_LOOKBACK_DAYS} days."
+                    f"Found {len(successful_matched_events)} successful "
+                    "UpdateTrafficDistribution CloudTrail event(s) scoped to "
+                    f"{len(successful_matched_tdgs)} assessed traffic distribution group(s) "
+                    f"in the last {_FAILOVER_TEST_LOOKBACK_DAYS} days. The event proves a "
+                    "configured traffic-distribution change, not successful end-to-end "
+                    f"failover.{limitation_note}"
                 ),
                 evidence=evidence,
+                context=context,
             )
 
+        if not pagination_complete:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ConnectInstance",
+                description=(
+                    "Skipped: CloudTrail LookupEvents pagination did not complete, and no "
+                    "successful scoped event was observed in the partial evidence."
+                ),
+                evidence=evidence,
+                context=context,
+            )
+
+        failed_attempt_note = (
+            f" {len(failed_matched_events)} scoped attempt(s) recorded API errors and "
+            f"{len(malformed_matched_events)} scoped observation(s) had malformed or missing "
+            "CloudTrailEvent payloads; neither is successful evidence."
+            if failed_matched_events or malformed_matched_events
+            else ""
+        )
         return self.create_finding(
             status=CheckStatus.FAIL,
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
             description=(
-                "ACGR is configured but no UpdateTrafficDistribution events "
-                f"were recorded in the last {_FAILOVER_TEST_LOOKBACK_DAYS} "
-                "days. The failover mechanism has not been tested — plans "
-                "that have never run in anger routinely fail on first use.\n\n"
-                "Use the exercise to validate dependencies that ACGR does not "
-                "prepare automatically, including Lex resiliency, matching "
-                "Lambda deployments, and region-aware resource references."
+                "ACGR is configured but no successful UpdateTrafficDistribution CloudTrail "
+                "event could be matched to an assessed traffic distribution group in the last "
+                f"{_FAILOVER_TEST_LOOKBACK_DAYS} days. Unrelated or unscopable events do not "
+                f"demonstrate that this deployment exercised traffic movement.{failed_attempt_note}"
             ),
             evidence=evidence,
             structured_remediation=Remediation(
-                summary=("Schedule a controlled failover exercise at least once per quarter."),
-                target_resources=[instance.instance_id],
+                summary="Schedule and document a controlled failover exercise at least quarterly.",
+                target_resources=sorted(set(identifier_to_tdg.values())),
                 steps=[
                     RemediationStep(
                         order=1,
                         instruction=(
-                            "Plan a controlled failover: shift 100% of "
-                            "traffic to the standby region during a low-"
-                            "volume window, verify calls route and agents "
-                            "handle them, then restore the intended "
-                            "distribution. Repeat quarterly."
+                            "Plan a controlled traffic shift for an assessed TDG, verify calls "
+                            "route and agents handle them, then restore the intended distribution."
                         ),
                         command=(
-                            "aws connect update-traffic-distribution "
-                            "--id <tdg-id> --telephony-config "
-                            "'Distributions=[{Region=<standby>,Percentage=100},"
-                            "{Region=<primary>,Percentage=0}]'"
+                            "aws connect update-traffic-distribution --id <tdg-id-or-arn> "
+                            "--telephony-config '<distribution-json>'"
                         ),
                     ),
                     RemediationStep(
                         order=2,
                         instruction=(
-                            "Verify dependencies in the standby region "
-                            "during the exercise: Lambda functions invoked "
-                            "by flows, Lex bots, Kinesis streams for CTRs, "
-                            "and S3 buckets for recordings must all be "
-                            "available cross-region."
+                            "Retain the operational test record for call routing, agent access, "
+                            "and regional dependencies; CloudTrail records only the API change."
                         ),
                     ),
                 ],
@@ -887,8 +1209,9 @@ class ACGRFailoverTestCheck(BaseCheck):
                         url=_ACGR_DOCS_URL,
                     )
                 ],
-                placeholders=["<tdg-id>", "<primary>", "<standby>"],
+                placeholders=["<tdg-id-or-arn>", "<distribution-json>"],
             ),
+            context=context,
         )
 
 
@@ -917,6 +1240,8 @@ class ACGRPhoneNumberBindingCheck(BaseCheck):
 
         if acgr.tdgs_denied:
             return self.skipped_for_access_denied(context, acgr.tdgs_denied_permission)
+        if acgr.tdgs_error:
+            return _tdg_discovery_incomplete(self, context)
         if not acgr.tdgs:
             return self.not_applicable(
                 context,
@@ -1077,7 +1402,7 @@ class ACGRPhoneNumberBindingCheck(BaseCheck):
 
 
 class CloudWatchAlarmMonitoringCheck(BaseCheck):
-    """Verify CloudWatch alarms cover critical Connect metrics (Req 2)."""
+    """Verify actionable, instance-specific alarms cover required Connect metrics."""
 
     def __init__(self):
         super().__init__(
@@ -1086,86 +1411,143 @@ class CloudWatchAlarmMonitoringCheck(BaseCheck):
             pillar=Pillar.RESILIENCE,
             severity=Severity.HIGH,
             description=(
-                "Verifies that CloudWatch alarms exist for critical Amazon "
-                "Connect operational metrics."
+                "Verifies that enabled CloudWatch metric alarms with configured actions "
+                "cover required Amazon Connect voice metrics for the assessed instance."
             ),
         )
 
     def execute(self, context: CheckContext):
         instance = context.instance
         factory = context.aws_client_factory
+        all_alarms: List[Dict[str, Any]] = []
+        composite_alarm_count = 0
+        next_token: Optional[str] = None
+        seen_tokens: set[str] = set()
+        pagination_complete = False
 
         try:
-            resp = factory.describe_alarms_resilient(
-                MaxRecords=100,
-            )
+            for _ in range(_MAX_CLOUDWATCH_ALARM_PAGES):
+                kwargs: Dict[str, Any] = {"MaxRecords": _CLOUDWATCH_ALARM_PAGE_SIZE}
+                if next_token:
+                    kwargs["NextToken"] = next_token
+                resp = factory.describe_alarms_resilient(**kwargs)
+                all_alarms.extend(resp.get("MetricAlarms") or [])
+                composite_alarm_count += len(resp.get("CompositeAlarms") or [])
+                returned_token = resp.get("NextToken")
+                if not returned_token:
+                    pagination_complete = True
+                    break
+                if not isinstance(returned_token, str) or returned_token in seen_tokens:
+                    break
+                seen_tokens.add(returned_token)
+                next_token = returned_token
         except Exception as e:
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "cloudwatch:DescribeAlarms")
             raise
 
-        all_alarms = resp.get("MetricAlarms", []) or []
-        # Filter to alarms in the AWS/Connect namespace.
-        connect_alarms = [
-            a for a in all_alarms if (a.get("Namespace") or "").startswith("AWS/Connect")
-        ]
-        covered_metrics = {a.get("MetricName") for a in connect_alarms if a.get("MetricName")}
-        missing = [m for m in _REQUIRED_ALARM_METRICS if m not in covered_metrics]
-
-        evidence = {
-            "connect_alarm_count": len(connect_alarms),
-            "covered_metrics": sorted(covered_metrics),
-            "missing_metrics": missing,
-        }
-        metric_impact = {
-            "ConcurrentCalls": "concurrent-call quota consumption",
-            "ConcurrentCallsPercentage": "quota headroom across differently sized instances",
-            "ThrottledCalls": "calls rejected because the instance was over capacity",
-            "MissedCalls": "queued calls that were not answered",
-            "CallsPerInterval": "unexpected call-volume spikes or drops",
-        }
-
-        if not connect_alarms:
-            missing_lines = "\n".join(
-                f"* **{metric}** — {metric_impact[metric]}" for metric in _REQUIRED_ALARM_METRICS
-            )
+        if not pagination_complete:
             return self.create_finding(
-                status=CheckStatus.FAIL,
+                status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    f"No CloudWatch alarms exist for {instance.display_name} "
-                    "in the AWS/Connect namespace. CloudWatch may still collect "
-                    "these metrics, but without alarms the listed conditions do "
-                    "not have an automated notification path:\n\n"
-                    f"{missing_lines}"
+                    "Skipped: CloudWatch DescribeAlarms pagination did not complete, so "
+                    "alarm coverage evidence is incomplete."
                 ),
-                evidence=evidence,
-                structured_remediation=Remediation(
-                    summary="Create CloudWatch alarms for critical Connect metrics.",
-                    target_resources=[instance.instance_id],
-                    steps=[
-                        RemediationStep(
-                            order=1,
-                            instruction=(
-                                "Create alarms for: ConcurrentCalls (>80% capacity), "
-                                "ThrottledCalls (>0), MissedCalls (threshold per queue), "
-                                "CallsPerInterval (anomaly detection)."
-                            ),
-                            console_path=(
-                                "CloudWatch console -> Alarms -> Create alarm -> "
-                                "AWS/Connect namespace"
-                            ),
-                        ),
-                    ],
-                    references=[
-                        RemediationReference(
-                            title="Monitoring Connect with CloudWatch",
-                            url="https://docs.aws.amazon.com/connect/latest/adminguide/monitoring-cloudwatch.html",  # noqa: E501
-                        )
-                    ],
-                ),
+                evidence={
+                    "evidence_complete": False,
+                    "metric_alarm_count": len(all_alarms),
+                    "composite_alarm_count": composite_alarm_count,
+                },
+                context=context,
             )
+
+        connect_alarms = [alarm for alarm in all_alarms if alarm.get("Namespace") == "AWS/Connect"]
+        required_candidates = [
+            alarm for alarm in connect_alarms if alarm.get("MetricName") in _REQUIRED_ALARM_METRICS
+        ]
+        rejection_candidates: Dict[str, List[Dict[str, str]]] = {
+            "wrong_instance": [],
+            "missing_or_wrong_dimension": [],
+            "disabled": [],
+            "no_action": [],
+        }
+        covered_metrics: set[str] = set()
+
+        for alarm in required_candidates:
+            metric_name = str(alarm.get("MetricName"))
+            candidate = {
+                "alarm_name": str(alarm.get("AlarmName") or "unnamed"),
+                "metric_name": metric_name,
+            }
+            dimensions = alarm.get("Dimensions")
+            dimension_values: Dict[str, List[Any]] = {}
+            if isinstance(dimensions, list):
+                for dimension in dimensions:
+                    if not isinstance(dimension, dict):
+                        continue
+                    name = dimension.get("Name")
+                    if isinstance(name, str):
+                        dimension_values.setdefault(name, []).append(dimension.get("Value"))
+
+            rejected = False
+            instance_values = dimension_values.get("InstanceId", [])
+            wrong_instance = bool(instance_values) and instance.instance_id not in instance_values
+            dimension_issue = instance_values != [instance.instance_id] or dimension_values.get(
+                "MetricGroup", []
+            ) != [_REQUIRED_ALARM_DIMENSIONS["MetricGroup"]]
+            if wrong_instance:
+                rejection_candidates["wrong_instance"].append(candidate)
+                rejected = True
+            elif dimension_issue:
+                rejection_candidates["missing_or_wrong_dimension"].append(candidate)
+                rejected = True
+
+            if alarm.get("ActionsEnabled") is False:
+                rejection_candidates["disabled"].append(candidate)
+                rejected = True
+
+            alarm_actions = alarm.get("AlarmActions")
+            has_action = isinstance(alarm_actions, list) and any(
+                isinstance(action, str) and action.strip() for action in alarm_actions
+            )
+            if not has_action:
+                rejection_candidates["no_action"].append(candidate)
+                rejected = True
+
+            if not rejected:
+                covered_metrics.add(metric_name)
+
+        missing = [metric for metric in _REQUIRED_ALARM_METRICS if metric not in covered_metrics]
+        evidence = {
+            "evidence_complete": True,
+            "metric_alarm_count": len(all_alarms),
+            "composite_alarm_count": composite_alarm_count,
+            "connect_alarm_count": len(connect_alarms),
+            "required_metric_candidate_count": len(required_candidates),
+            "valid_alarm_count": len(covered_metrics),
+            "covered_metrics": sorted(covered_metrics),
+            "missing_metrics": missing,
+            "wrong_instance_candidates": rejection_candidates["wrong_instance"],
+            "wrong_instance_candidate_count": len(rejection_candidates["wrong_instance"]),
+            "missing_or_wrong_dimension_candidates": rejection_candidates[
+                "missing_or_wrong_dimension"
+            ],
+            "missing_or_wrong_dimension_candidate_count": len(
+                rejection_candidates["missing_or_wrong_dimension"]
+            ),
+            "disabled_candidates": rejection_candidates["disabled"],
+            "disabled_candidate_count": len(rejection_candidates["disabled"]),
+            "no_action_candidates": rejection_candidates["no_action"],
+            "no_action_candidate_count": len(rejection_candidates["no_action"]),
+        }
+        metric_impact = {
+            "ConcurrentCalls": "concurrent-call quota consumption",
+            "ThrottledCalls": "calls rejected because call rate exceeded the supported quota",
+            "MissedCalls": "voice calls that agents did not answer",
+            "CallsPerInterval": "unexpected voice-call volume spikes or drops",
+        }
 
         if missing:
             missing_lines = "\n".join(
@@ -1176,27 +1558,37 @@ class CloudWatchAlarmMonitoringCheck(BaseCheck):
                 resource_id=instance.instance_id,
                 resource_type="ConnectInstance",
                 description=(
-                    f"CloudWatch alarms cover {len(covered_metrics)} of "
-                    f"{len(_REQUIRED_ALARM_METRICS)} recommended metrics for "
-                    f"{instance.display_name}. The missing metrics leave these "
-                    "specific conditions without an automated notification path:\n\n"
-                    f"{missing_lines}"
+                    f"Enabled, actionable AWS/Connect metric alarms cover "
+                    f"{len(covered_metrics)} of {len(_REQUIRED_ALARM_METRICS)} required voice "
+                    f"metrics for {instance.display_name}. Missing coverage:\n\n{missing_lines}\n\n"
+                    "An alarm counts only when its InstanceId matches this instance, its "
+                    "MetricGroup is VoiceCalls, actions are enabled, and at least one "
+                    "nonblank alarm action is configured."
                 ),
                 evidence=evidence,
                 structured_remediation=Remediation(
-                    summary=f"Add alarms for missing metrics: {', '.join(missing)}.",
+                    summary=f"Add valid alarms for missing metrics: {', '.join(missing)}.",
                     target_resources=[instance.instance_id] + missing,
                     steps=[
                         RemediationStep(
                             order=1,
                             instruction=(
-                                f"Create CloudWatch alarms for the following "
-                                f"uncovered metrics: {', '.join(missing)}."
+                                f"Create AWS/Connect metric alarms for {', '.join(missing)} "
+                                f"with InstanceId={instance.instance_id}, "
+                                "MetricGroup=VoiceCalls, enabled actions, and at least one "
+                                "owned notification or automation target."
                             ),
-                            console_path="CloudWatch console -> Alarms -> Create",
+                            console_path="CloudWatch console -> Alarms -> Create alarm",
                         ),
                     ],
+                    references=[
+                        RemediationReference(
+                            title="Monitoring Connect with CloudWatch",
+                            url="https://docs.aws.amazon.com/connect/latest/adminguide/monitoring-cloudwatch.html",  # noqa: E501
+                        )
+                    ],
                 ),
+                context=context,
             )
 
         return self.create_finding(
@@ -1204,11 +1596,13 @@ class CloudWatchAlarmMonitoringCheck(BaseCheck):
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
             description=(
-                f"CloudWatch alarms cover all {len(_REQUIRED_ALARM_METRICS)} "
-                "recommended Connect metrics, providing notification paths "
-                "for capacity, throttling, missed-call, and volume conditions."
+                f"Enabled AWS/Connect metric alarms with nonblank configured actions cover "
+                f"all {len(_REQUIRED_ALARM_METRICS)} required voice metrics for "
+                f"{instance.display_name}. This configuration evidence does not prove that "
+                "notifications or automated actions are delivered successfully at runtime."
             ),
             evidence=evidence,
+            context=context,
         )
 
 
@@ -1302,7 +1696,7 @@ class CarrierDiversityCheck(BaseCheck):
 
 
 class HardcodedRoutingCheck(BaseCheck):
-    """Detect hardcoded routing values in customer-authored contact flows (Req 38)."""
+    """Inventory literal routing values in customer-authored contact flows."""
 
     def __init__(self):
         super().__init__(
@@ -1323,6 +1717,7 @@ class HardcodedRoutingCheck(BaseCheck):
     def execute(self, context: CheckContext):
         instance = context.instance
         hardcoded_all = []
+        skipped_flows = []
         # AWS's built-in sample flows (see is_default_sample_flow) ship
         # with literal phone numbers and ARNs by design — they are demo
         # content, not the customer's production routing configuration.
@@ -1334,6 +1729,7 @@ class HardcodedRoutingCheck(BaseCheck):
         for flow in customer_flows:
             graph = _parse_flow(flow)
             if not graph:
+                skipped_flows.append({"flow": flow.name, "flow_id": flow.id})
                 continue
             for action in graph.actions.values():
                 if action.action_type not in _ROUTING_ACTION_TYPES:
@@ -1360,133 +1756,53 @@ class HardcodedRoutingCheck(BaseCheck):
 
         evidence = {
             "hardcoded_count": len(hardcoded_all),
-            "flows_analyzed": len(customer_flows),
+            "hardcoded_details": hardcoded_all[:10],
+            "flows_discovered": len(customer_flows),
+            "flows_analyzed": len(customer_flows) - len(skipped_flows),
+            "flows_unanalyzed": len(skipped_flows),
+            "unanalyzed_flows": skipped_flows[:10],
+            "analysis_complete": not skipped_flows,
             "sample_flows_excluded": len(instance.contact_flows) - len(customer_flows),
         }
 
-        if len(hardcoded_all) > 3:
-            evidence["hardcoded_details"] = hardcoded_all[:10]  # cap evidence size
-            detail_lines = "\n".join(
-                f"* `{item['flow']}` → `{item['action_type']}` (action `{item['action_id']}`)"
-                for item in hardcoded_all[:5]
-            )
-            more_note = (
-                f"\n\n_+ {len(hardcoded_all) - 5} more; see JSON evidence._"
-                if len(hardcoded_all) > 5
-                else ""
-            )
-            return self.create_finding(
-                status=CheckStatus.FAIL,
-                resource_id=instance.instance_id,
-                resource_type="ContactFlow",
-                description=(
-                    f"{len(hardcoded_all)} hardcoded routing destination(s) "
-                    f"found across {evidence['flows_analyzed']} customer-authored "
-                    "flow(s) (AWS's default sample flows are excluded from this "
-                    "count).\n\n"
-                    "**This is an observation, not a defect.** Hardcoding a "
-                    "phone number, queue, or flow destination directly in a "
-                    "transfer action is a normal and common pattern in "
-                    "contact center flows — plenty of routing decisions "
-                    "genuinely never change (a permanent escalation queue, a "
-                    "fixed after-hours voicemail line) and don't need "
-                    "externalized configuration. The only time this is worth "
-                    "acting on is when a specific destination changes "
-                    "**across environments** (dev/test/prod use different "
-                    "queues) or **over time** (a vendor number that gets "
-                    "renegotiated periodically) — in those cases, editing and "
-                    "republishing the flow for every change is real "
-                    "operational overhead. Each change requires editing, "
-                    "saving, publishing, and re-testing the affected flow.\n\n"
-                    "**Where it was found:**\n\n"
-                    f"{detail_lines}{more_note}"
-                ),
-                evidence=evidence,
-                structured_remediation=Remediation(
-                    summary=(
-                        "Only for destinations that actually vary by "
-                        "environment or change over time: replace the "
-                        "literal value with a contact attribute reference."
-                    ),
-                    target_resources=[h["action_id"] for h in hardcoded_all[:5]],
-                    steps=[
-                        RemediationStep(
-                            order=1,
-                            instruction=(
-                                "Review the flagged destinations and identify "
-                                "which ones actually change across environments "
-                                "or over time. Leave genuinely static ones "
-                                "(permanent fallback numbers, fixed escalation "
-                                "queues) as-is — hardcoding those is fine."
-                            ),
-                        ),
-                        RemediationStep(
-                            order=2,
-                            instruction=(
-                                "For destinations that do change, replace the "
-                                "literal value with a contact attribute "
-                                "reference ($.Attributes.destination) set "
-                                "earlier in the flow with a Set contact "
-                                "attributes block, or populated dynamically by "
-                                "an upstream Lambda if the value needs to come "
-                                "from an external source (a config store, a "
-                                "database, etc). Which of these fits depends "
-                                "on how the value needs to be sourced and "
-                                "updated — there is no single AWS-recommended "
-                                "storage backend for this."
-                            ),
-                        ),
-                    ],
-                    references=[
-                        RemediationReference(
-                            title="Best practices for flows in Amazon Connect",
-                            url="https://docs.aws.amazon.com/connect/latest/adminguide/bp-contact-flows.html",  # noqa: E501
-                        ),
-                        RemediationReference(
-                            title="Set contact attributes",
-                            url="https://docs.aws.amazon.com/connect/latest/adminguide/connect-attrib-list.html",  # noqa: E501
-                        ),
-                    ],
-                    applies_if=(
-                        "the flagged destination(s) actually change across "
-                        "environments or over time — otherwise no action is "
-                        "needed."
-                    ),
-                ),
-            )
-
-        # PASS description explains what was checked and why in plain
-        # language, since most readers won't know what "hardcoded routing
-        # destinations" means in a Connect context.
         analyzed = evidence["flows_analyzed"]
         hardcoded = len(hardcoded_all)
         sample_note = (
-            f" ({evidence['sample_flows_excluded']} AWS default sample "
-            "flow(s) were excluded from this check.)"
+            f" {evidence['sample_flows_excluded']} AWS default sample flow(s) were "
+            "excluded from this inventory."
             if evidence["sample_flows_excluded"]
             else ""
         )
+
+        if skipped_flows:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                resource_id=instance.instance_id,
+                resource_type="ContactFlow",
+                description=(
+                    f"Hardcoded routing inventory was incomplete: {len(skipped_flows)} "
+                    "customer-authored flow(s) could not be parsed. Literal destinations "
+                    f"found in the {analyzed} analyzed flow(s) remain in the evidence."
+                    f"{sample_note}"
+                ),
+                evidence=evidence,
+            )
+
         if hardcoded == 0:
             description = (
-                f"None of your {analyzed} customer-authored contact flow(s) "
-                "contain hardcoded phone numbers, queue ARNs, or flow ARNs as "
-                "transfer destinations — every transfer action uses a "
-                "contact attribute reference.{sample_note} Hardcoding is a "
-                "normal pattern for destinations that never change, so this "
-                "isn't a requirement — it just means every routing "
-                "destination in your flows happens to be externalized "
-                "already."
-            ).format(sample_note=sample_note)
+                f"No literal phone numbers, queue ARNs, or flow ARNs were observed in "
+                f"transfer actions across {analyzed} customer-authored flow(s)."
+                f"{sample_note} This is configuration inventory, not a requirement to "
+                "externalize routing destinations."
+            )
         else:
             description = (
-                f"{hardcoded} hardcoded routing destination(s) noted across "
-                f"{analyzed} customer-authored flow(s){sample_note} — below "
-                "the threshold this check uses to flag it for a closer look. "
-                "Hardcoded destinations are a normal, common pattern in "
-                "contact center flows and are not a defect by themselves; "
-                "worth externalizing only if a specific destination changes "
-                "across environments or over time."
+                f"{hardcoded} literal routing destination(s) were observed across "
+                f"{analyzed} customer-authored flow(s).{sample_note} Literal destinations "
+                "are valid configuration. Review a destination only when it needs to vary "
+                "across environments or change independently of flow publication."
             )
+
         return self.create_finding(
             status=CheckStatus.PASS,
             resource_id=instance.instance_id,
@@ -1522,17 +1838,17 @@ def _static_lambda_reference(parameters: Dict[str, Any]) -> Optional[str]:
 
 
 class LambdaDependencyRiskCheck(BaseCheck):
-    """Find reachable VPC Lambda call sites without an error fallback."""
+    """Find reachable Lambda call sites without an error fallback."""
 
     def __init__(self):
         super().__init__(
             check_id="res-lambda-dependency-001",
-            name="Lambda Dependency Network Risk",
+            name="Lambda Error Routing Completeness",
             pillar=Pillar.RESILIENCE,
             severity=Severity.MEDIUM,
             description=(
-                "Inspects each reachable Lambda call site and flags VPC-attached functions "
-                "when that specific action has no error transition."
+                "Checks every reachable, customer-authored Lambda call site for an explicit "
+                "Error transition; Lambda configuration only enriches the finding."
             ),
         )
 
@@ -1546,6 +1862,7 @@ class LambdaDependencyRiskCheck(BaseCheck):
         call_sites_by_reference: Dict[str, List[Dict[str, Any]]] = {}
         seen_call_sites: set[tuple[str, str, str]] = set()
         unresolved_call_sites: List[Dict[str, Any]] = []
+        missing_call_sites: List[Dict[str, Any]] = []
         skipped_flows: List[Dict[str, str]] = []
         flows_analyzed = 0
         authored_lambda_blocks = 0
@@ -1601,15 +1918,24 @@ class LambdaDependencyRiskCheck(BaseCheck):
                     ),
                 }
                 reference = _static_lambda_reference(action.parameters or {})
-                if reference is None:
-                    unresolved_call_sites.append(
-                        {**call_site, "reason": "Lambda reference is missing or dynamic"}
-                    )
-                    continue
-                key = (flow.id, action.action_id, reference)
+                key = (flow.id, action.action_id, reference or "<unresolved>")
                 if key in seen_call_sites:
                     continue
                 seen_call_sites.add(key)
+                if reference is None:
+                    call_site.update(
+                        {
+                            "function_reference": None,
+                            "reason": "Lambda reference is missing or dynamic",
+                        }
+                    )
+                    unresolved_call_sites.append(call_site)
+                    if not call_site["has_error_branch"]:
+                        missing_call_sites.append(call_site)
+                    continue
+                call_site["function_reference"] = reference
+                if not call_site["has_error_branch"]:
+                    missing_call_sites.append(call_site)
                 call_sites_by_reference.setdefault(reference, []).append(call_site)
 
         for call_sites in call_sites_by_reference.values():
@@ -1631,7 +1957,6 @@ class LambdaDependencyRiskCheck(BaseCheck):
         checked_functions = 0
         denied_functions: List[str] = []
         lookup_failures: List[Dict[str, str]] = []
-        risky_call_sites: List[Dict[str, Any]] = []
 
         for reference in sorted(call_sites_by_reference):
             try:
@@ -1644,7 +1969,7 @@ class LambdaDependencyRiskCheck(BaseCheck):
                         {
                             "function_reference": reference,
                             "error_type": type(error).__name__,
-                            "error": str(error),
+                            "error_code": _error_code(error),
                         }
                     )
                 continue
@@ -1655,44 +1980,41 @@ class LambdaDependencyRiskCheck(BaseCheck):
             subnet_ids = sorted(vpc_config.get("SubnetIds") or [])
             security_group_ids = sorted(vpc_config.get("SecurityGroupIds") or [])
             is_vpc_attached = bool(vpc_config.get("VpcId") or subnet_ids or security_group_ids)
-            if not is_vpc_attached:
-                continue
 
             for call_site in call_sites_by_reference[reference]:
-                if call_site["has_error_branch"]:
-                    continue
-                risky_call_sites.append(
+                call_site.update(
                     {
-                        **call_site,
-                        "function_reference": reference,
                         "function_name": configuration.get("FunctionName") or reference,
+                        "vpc_attached": is_vpc_attached,
                         "vpc_id": vpc_config.get("VpcId") or "",
                         "subnet_ids": subnet_ids,
                         "security_group_ids": security_group_ids,
                     }
                 )
 
-        risky_call_sites.sort(
+        missing_call_sites.sort(
             key=lambda row: (
                 str(row["flow"]).casefold(),
                 str(row["flow_id"]),
                 str(row["action_id"]),
-                str(row["function_reference"]),
+                str(row.get("function_reference") or ""),
             )
         )
-        limitations = []
+        analysis_limitations = []
         if skipped_flows:
-            limitations.append(f"{len(skipped_flows)} flow(s) could not be analyzed")
+            analysis_limitations.append(f"{len(skipped_flows)} flow(s) could not be analyzed")
+        enrichment_limitations = []
         if unresolved_call_sites:
-            limitations.append(
+            enrichment_limitations.append(
                 f"{len(unresolved_call_sites)} reachable call site(s) use an unresolved reference"
             )
         if denied_functions:
-            limitations.append(
+            enrichment_limitations.append(
                 f"lambda:GetFunction was denied for {len(denied_functions)} function(s)"
             )
         if lookup_failures:
-            limitations.append(f"{len(lookup_failures)} function lookup(s) failed")
+            enrichment_limitations.append(f"{len(lookup_failures)} function lookup(s) failed")
+        limitations = analysis_limitations + enrichment_limitations
 
         reachable_call_sites = sum(len(sites) for sites in call_sites_by_reference.values()) + len(
             unresolved_call_sites
@@ -1707,21 +2029,28 @@ class LambdaDependencyRiskCheck(BaseCheck):
             "authored_lambda_blocks": authored_lambda_blocks,
             "unreachable_lambda_blocks": unreachable_lambda_blocks,
             "reachable_lambda_call_sites": reachable_call_sites,
+            "lambda_call_sites_without_error_branch": len(missing_call_sites),
             "lambda_functions_invoked": len(call_sites_by_reference),
             "lambda_functions_checked": checked_functions,
             "lambda_functions_access_denied": denied_functions,
             "lambda_function_lookup_failures": lookup_failures,
             "unresolved_call_sites": unresolved_call_sites,
-            "vpc_attached_without_error_branch": len(risky_call_sites),
-            "risky_function_count": len({row["function_reference"] for row in risky_call_sites}),
-            "analysis_complete": not limitations,
+            "vpc_attached_missing_error_branches": sum(
+                row.get("vpc_attached") is True for row in missing_call_sites
+            ),
+            "analysis_complete": not analysis_limitations,
+            "enrichment_complete": not enrichment_limitations,
+            "analysis_limitations": analysis_limitations,
+            "enrichment_limitations": enrichment_limitations,
             "limitations": limitations,
         }
 
-        if risky_call_sites:
-            evidence["details"] = risky_call_sites[:20]
+        if missing_call_sites:
+            evidence["details"] = missing_call_sites[:20]
             limitation_note = (
-                " The result is additionally limited because " + "; ".join(limitations) + "."
+                " Evidence enrichment or flow coverage is also limited because "
+                + "; ".join(limitations)
+                + "."
                 if limitations
                 else ""
             )
@@ -1730,24 +2059,35 @@ class LambdaDependencyRiskCheck(BaseCheck):
                 resource_id=instance.instance_id,
                 resource_type="LambdaFunction",
                 description=(
-                    f"**{len(risky_call_sites)} reachable Lambda call site(s) invoke a "
-                    "VPC-attached function without an error transition.** Each listed action "
-                    "is reported independently; a guarded call elsewhere does not hide it."
+                    f"**{len(missing_call_sites)} reachable Lambda call site(s) have no "
+                    "explicit Error transition.** Each listed action is direct structural "
+                    "evidence of an unhandled invocation-error route; target resolution, "
+                    "GetFunction access, and VPC attachment do not determine this outcome."
                     f"{limitation_note}"
                 ),
                 evidence=evidence,
                 structured_remediation=Remediation(
-                    summary="Wire an error fallback on every listed VPC Lambda call site.",
-                    target_resources=[row["action_id"] for row in risky_call_sites[:10]],
+                    summary="Wire a caller-safe Error fallback on every listed Lambda call site.",
+                    target_resources=[
+                        f"{row['flow_id']}:{row['action_id']}" for row in missing_call_sites[:20]
+                    ],
                     steps=[
                         RemediationStep(
                             order=1,
                             instruction=(
-                                "Open each listed Lambda action and connect its red Error output "
-                                "to an apology prompt and fallback queue or disconnect path."
+                                "Open each listed Lambda action and connect its Error output to a "
+                                "tested apology, fallback queue, alternate path, or intentional "
+                                "disconnect outcome."
                             ),
                             console_path="Connect console -> Routing -> Flows",
-                        )
+                        ),
+                        RemediationStep(
+                            order=2,
+                            instruction=(
+                                "Test timeout, throttle, network, malformed-response, and function "
+                                "error cases and confirm each contact reaches the intended fallback."
+                            ),
+                        ),
                     ],
                     references=[
                         RemediationReference(
@@ -1758,16 +2098,14 @@ class LambdaDependencyRiskCheck(BaseCheck):
                 ),
             )
 
-        if limitations:
-            if denied_functions:
-                evidence["required_permission"] = "lambda:GetFunction"
+        if analysis_limitations:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 resource_id=instance.instance_id,
                 resource_type="LambdaFunction",
                 description=(
-                    "Lambda dependency analysis was incomplete and cannot report PASS: "
-                    + "; ".join(limitations)
+                    "Lambda error-routing analysis was incomplete and cannot report PASS: "
+                    + "; ".join(analysis_limitations)
                     + "."
                 ),
                 evidence=evidence,
@@ -1776,19 +2114,28 @@ class LambdaDependencyRiskCheck(BaseCheck):
         if reachable_call_sites == 0:
             return self.not_applicable(
                 context,
-                "no reachable Lambda call site was found in customer-authored contact flows",
-                resource_type="LambdaFunction",
+                reason=(
+                    "Complete flow analysis found no reachable, customer-authored Lambda "
+                    "call sites to evaluate."
+                ),
                 evidence=evidence,
             )
 
+        enrichment_note = (
+            " Lambda metadata enrichment was limited because "
+            + "; ".join(enrichment_limitations)
+            + "; this does not change the Error-transition result."
+            if enrichment_limitations
+            else ""
+        )
         return self.create_finding(
             status=CheckStatus.PASS,
             resource_id=instance.instance_id,
             resource_type="LambdaFunction",
             description=(
-                f"Checked {reachable_call_sites} reachable call site(s) for "
-                f"{checked_functions} Lambda function(s); no VPC-attached function is called "
-                "without an error transition."
+                f"All {reachable_call_sites} reachable Lambda call site(s) across "
+                f"{flows_analyzed} customer-authored flow(s) have explicit Error transitions."
+                f"{enrichment_note}"
             ),
             evidence=evidence,
         )

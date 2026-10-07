@@ -121,6 +121,31 @@ class TestInitializeComponents:
         assert not any(isinstance(analyzer, ContactFlowAnalyzer) for analyzer in engine.analyzers)
 
     @patch("amazon_connect_assessment.cli.AWSClientFactory")
+    def test_initialize_with_top_level_skip_flow_matches_engine_behavior(self, mock_factory_class):
+        # The engine honours a top-level `skip_flow_analysis` config key, so
+        # registration must honour it too — otherwise the journey controls
+        # stay selected, never execute, and are backfilled as synthetic
+        # ERROR outcomes per instance.
+        mock_factory_class.return_value = Mock()
+        config = ConfigurationManager().load_config()
+        config["skip_flow_analysis"] = True
+        config["cli"] = {
+            "checks": None,
+            "exclude_checks": None,
+            "dry_run": False,
+            "resume_assessment": None,
+            "checkpoint_dir": None,
+            "no_checkpoints": True,
+            "skip_flow_analysis": False,
+        }
+        config["global_settings"]["parallel_execution"] = False
+
+        engine, factory, registry = initialize_assessment_components(config)
+        assert "sec-prompt-inject-001" not in registry
+        assert registry.list_selected_journey_control_ids() == []
+        assert not any(isinstance(analyzer, ContactFlowAnalyzer) for analyzer in engine.analyzers)
+
+    @patch("amazon_connect_assessment.cli.AWSClientFactory")
     def test_initialize_without_skip_flow_registers_contact_flow_analyzer(self, mock_factory_class):
         mock_factory_class.return_value = Mock()
         config = ConfigurationManager().load_config()

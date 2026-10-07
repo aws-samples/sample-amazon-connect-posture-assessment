@@ -33,7 +33,6 @@ import logging
 import textwrap
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from xml.etree import ElementTree as ET
 
 from ..models import ContactFlowGraph, FlowAction
 from .view_model import (
@@ -67,6 +66,7 @@ _CATEGORY_BY_TYPE: Dict[str, str] = {
     "StoreCustomerInput": "chooses",
     "ConnectToLexBot": "chooses",
     "ConnectParticipantWithLexBot": "chooses",
+    "ConnectParticipantWithAgenticCX": "agentic",
     "TransferToQueue": "waits",
     "TransferContactToQueue": "waits",
     "CreateCallback": "waits",
@@ -94,6 +94,7 @@ _GENERIC_LABEL: Dict[str, str] = {
     "StoreCustomerInput": "Captures caller input",
     "ConnectToLexBot": "Talks to a Lex bot",
     "ConnectParticipantWithLexBot": "Talks to a Lex bot",
+    "ConnectParticipantWithAgenticCX": "Agentic CX application",
     "TransferToQueue": "Waits for an agent",
     "TransferContactToQueue": "Waits for an agent",
     "CreateCallback": "Offered a callback",
@@ -121,6 +122,10 @@ _EDGE_LABEL_MAX_CHARS = 24
 _CATEGORY_EXPLANATION: Dict[str, str] = {
     "speaks": "The caller hears something (a prompt, message, or announcement).",
     "chooses": "The caller provides input — a key press, spoken response, or conversation.",
+    "agentic": (
+        "The participant is handed to an Amazon Connect Agentic CX application for an "
+        "interactive self-service attempt."
+    ),
     "waits": "The caller is placed on hold, queued, or offered a callback.",
     "terminal": "The interaction ends here — disconnect, transfer, or handoff to another flow.",
     "processing": (
@@ -821,10 +826,10 @@ def _edge_label_html(placement: _EdgeLabelPlacement) -> str:
     estimated_width = 24 if visible_label == "›" else max(54, len(visible_label) * 7 + 16)
     left = max(0, placement.x - estimated_width / 2)
     top = max(0, placement.y - 24)
-    first_outcome = edge.outcomes[0]
+    first_outcome = edge.outcomes[0] if edge.outcomes else None
     tooltip = _edge_label_tooltip(
-        first_outcome.raw_label,
-        first_outcome.transition_type,
+        first_outcome.raw_label if first_outcome else "",
+        first_outcome.transition_type if first_outcome else "",
     )
     route_class = f" jm-edge-{edge.route_type}"
     primary_class = " jm-edge-primary" if edge.is_primary else ""
@@ -872,6 +877,7 @@ def _edge_label_explanation(raw_label: str, kind: str) -> str:
 _SVG_CATEGORY_COLORS: Dict[str, Tuple[str, str, str]] = {
     "speaks": ("#ffffff", "#688ae8", "#0f141a"),
     "chooses": ("#ffffff", "#8456ce", "#0f141a"),
+    "agentic": ("#ffffff", "#c33d69", "#0f141a"),
     "waits": ("#ffffff", "#e07941", "#0f141a"),
     "terminal": ("#ffffff", "#8c8c94", "#0f141a"),
     "processing": ("#ffffff", "#2ea597", "#0f141a"),
@@ -889,6 +895,7 @@ _SVG_FONT_FAMILY = "'Open Sans', 'Helvetica Neue', Roboto, Arial, sans-serif"
 _SVG_CATEGORY_LABELS: Dict[str, str] = {
     "speaks": "Caller hears",
     "chooses": "Caller chooses",
+    "agentic": "Agentic self-service",
     "waits": "Caller waits",
     "terminal": "Call ends",
     "processing": "System work",
@@ -973,56 +980,32 @@ def _render_drawio_export(graph: ContactFlowGraph, layout: _Layout) -> Optional[
     _paths, _labels, canvas_w, canvas_h = _build_connectors(
         layout.positions, layout.forward_edges, layout.back_edges
     )
-    mxfile = ET.Element(
-        "mxfile",
-        {
-            "host": "app.diagrams.net",
-            "type": "device",
-            "compressed": "false",
-        },
-    )
     diagram_name = "Caller Journey"
     if graph.flow_name:
         diagram_name += f" - {_xml_text(graph.flow_name)}"
-    diagram = ET.SubElement(mxfile, "diagram", {"id": "caller-journey", "name": diagram_name})
-    model = ET.SubElement(
-        diagram,
-        "mxGraphModel",
-        {
-            "dx": str(canvas_w),
-            "dy": str(canvas_h),
-            "grid": "1",
-            "gridSize": "10",
-            "guides": "1",
-            "tooltips": "1",
-            "connect": "1",
-            "arrows": "1",
-            "fold": "1",
-            "page": "0",
-            "pageScale": "1",
-            "math": "0",
-            "shadow": "0",
-        },
-    )
-    root = ET.SubElement(model, "root")
-    ET.SubElement(root, "mxCell", {"id": "0"})
-    ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
+    model_attrs = {
+        "dx": str(canvas_w),
+        "dy": str(canvas_h),
+        "grid": "1",
+        "gridSize": "10",
+        "guides": "1",
+        "tooltips": "1",
+        "connect": "1",
+        "arrows": "1",
+        "fold": "1",
+        "page": "0",
+        "pageScale": "1",
+        "math": "0",
+        "shadow": "0",
+    }
+    cells = [
+        _xml_element("mxCell", {"id": "0"}),
+        _xml_element("mxCell", {"id": "1", "parent": "0"}),
+    ]
 
     for key, node in layout.visible.items():
         x, y = layout.positions[key]
-        cell = ET.SubElement(
-            root,
-            "mxCell",
-            {
-                "id": f"node-{key}",
-                "value": _xml_text(node.label),
-                "style": _drawio_node_style(node),
-                "vertex": "1",
-                "parent": "1",
-            },
-        )
-        ET.SubElement(
-            cell,
+        geometry = _xml_element(
             "mxGeometry",
             {
                 "x": str(x),
@@ -1032,31 +1015,77 @@ def _render_drawio_export(graph: ContactFlowGraph, layout: _Layout) -> Optional[
                 "as": "geometry",
             },
         )
+        cells.append(
+            _xml_element(
+                "mxCell",
+                {
+                    "id": f"node-{key}",
+                    "value": _xml_text(node.label),
+                    "style": _drawio_node_style(node),
+                    "vertex": "1",
+                    "parent": "1",
+                },
+                [geometry],
+            )
+        )
 
     edge_points = _drawio_edge_points(layout)
     for edge in [*layout.forward_edges, *layout.back_edges]:
         value = "" if edge.label == "Continue" else _truncate(edge.label, _EDGE_LABEL_MAX_CHARS)
-        cell = ET.SubElement(
-            root,
-            "mxCell",
-            {
-                "id": f"edge-{edge.key}",
-                "value": _xml_text(value),
-                "style": _drawio_edge_style(edge),
-                "edge": "1",
-                "parent": "1",
-                "source": f"node-{edge.source}",
-                "target": f"node-{edge.target}",
-            },
-        )
-        geometry = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
         points = edge_points.get(edge.key, [])
+        geometry_children = []
         if points:
-            array = ET.SubElement(geometry, "Array", {"as": "points"})
-            for x, y in points:
-                ET.SubElement(array, "mxPoint", {"x": f"{x:g}", "y": f"{y:g}"})
+            geometry_children.append(
+                _xml_element(
+                    "Array",
+                    {"as": "points"},
+                    [_xml_element("mxPoint", {"x": f"{x:g}", "y": f"{y:g}"}) for x, y in points],
+                )
+            )
+        geometry = _xml_element(
+            "mxGeometry", {"relative": "1", "as": "geometry"}, geometry_children
+        )
+        cells.append(
+            _xml_element(
+                "mxCell",
+                {
+                    "id": f"edge-{edge.key}",
+                    "value": _xml_text(value),
+                    "style": _drawio_edge_style(edge),
+                    "edge": "1",
+                    "parent": "1",
+                    "source": f"node-{edge.source}",
+                    "target": f"node-{edge.target}",
+                },
+                [geometry],
+            )
+        )
 
-    return ET.tostring(mxfile, encoding="unicode", short_empty_elements=True)
+    model = _xml_element("mxGraphModel", model_attrs, [_xml_element("root", {}, cells)])
+    diagram = _xml_element("diagram", {"id": "caller-journey", "name": diagram_name}, [model])
+    return _xml_element(
+        "mxfile",
+        {"host": "app.diagrams.net", "type": "device", "compressed": "false"},
+        [diagram],
+    )
+
+
+def _escape_xml_attr(value: str) -> str:
+    """Escape an attribute value; keep whitespace controls as character refs."""
+    return (
+        html.escape(value, quote=True)
+        .replace("\r", "&#13;")
+        .replace("\n", "&#10;")
+        .replace("\t", "&#09;")
+    )
+
+
+def _xml_element(tag: str, attrs: Dict[str, str], children: Optional[List[str]] = None) -> str:
+    """Serialize one element; attribute values are escaped, tags are constants."""
+    rendered = "".join(f' {name}="{_escape_xml_attr(value)}"' for name, value in attrs.items())
+    if not children:
+        return f"<{tag}{rendered} />"
+    return f"<{tag}{rendered}>{''.join(children)}</{tag}>"
 
 
 def _drawio_edge_points(layout: _Layout) -> Dict[str, List[Tuple[float, float]]]:
@@ -1463,6 +1492,40 @@ def _customer_experience_scope(
             _voice_prompt_scope(params, context, opening="Opens the conversation with a prompt")
         )
         return details
+    if action_type == "ConnectParticipantWithAgenticCX":
+        configuration = _acxd_configuration(params)
+        identity = (
+            configuration.get("alias")
+            or configuration.get("application_id")
+            or "the configured Agentic CX application"
+        )
+        details = [
+            f"Hands the participant to {identity} for an Amazon Connect Agentic CX conversation."
+        ]
+        if configuration.get("workspace_id"):
+            details.append(f"Workspace: {configuration['workspace_id']}.")
+        if configuration.get("application_id"):
+            details.append(f"Application: {configuration['application_id']}.")
+        if configuration.get("alias"):
+            details.append(f"Alias: {configuration['alias']}.")
+        context_names = _acxd_context_variable_names(params.get("ContextVariables"))
+        if context_names:
+            details.append(
+                f"Provides {len(context_names)} context variable(s): "
+                + ", ".join(context_names)
+                + ". Values are intentionally hidden."
+            )
+        if "SpeechRecognitionConfiguration" in params:
+            details.append("Uses configured speech recognition.")
+        if "AudioFillerConfiguration" in params:
+            details.append("Uses configured audio filler.")
+        details.append(
+            "This Connect flow proves the handoff and authored branches only. The internal "
+            "Agentic CX application graph remains unobserved and unexpanded; application "
+            "content, builds, deployments, alias resolution, runtime containment, and "
+            "guardrails were not inspected."
+        )
+        return details
     if action_type == "UpdateFlowLoggingBehavior":
         behavior = str(params.get("FlowLoggingBehavior") or "Enabled").casefold()
         verb = "Disables" if behavior == "disabled" else "Enables"
@@ -1705,8 +1768,51 @@ def _has_outcome(action: FlowAction, token: str) -> bool:
     return any(token in str(transition.condition or "") for transition in action.all_transitions)
 
 
+def _safe_acxd_identifier(value: object) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip() or _is_dynamic_text(value):
+        return None
+    return _display_text(value.strip(), limit=120)
+
+
+def _acxd_configuration(params: Dict) -> Dict[str, str]:
+    configuration = params.get("AgentConfiguration")
+    if not isinstance(configuration, dict):
+        return {}
+    resolved = {
+        "workspace_id": _safe_acxd_identifier(configuration.get("WorkspaceId")),
+        "application_id": _safe_acxd_identifier(configuration.get("ApplicationId")),
+        "alias": _safe_acxd_identifier(configuration.get("Alias")),
+    }
+    return {key: value for key, value in resolved.items() if value}
+
+
+def _acxd_context_variable_names(value: object) -> List[str]:
+    if isinstance(value, dict):
+        return sorted({_display_text(str(name), limit=80) for name in value})
+    if isinstance(value, list):
+        names = {
+            _display_text(str(item["Name"]), limit=80)
+            for item in value
+            if isinstance(item, dict) and item.get("Name") not in (None, "")
+        }
+        return sorted(names)
+    return []
+
+
 def _ai_agent_details(action: FlowAction) -> Dict[str, str]:
     """Return verified-or-derived identity details for a conversational AI action."""
+    if action.action_type == "ConnectParticipantWithAgenticCX":
+        configuration = _acxd_configuration(action.parameters or {})
+        identity = (
+            configuration.get("alias")
+            or configuration.get("application_id")
+            or "Configured Agentic CX application"
+        )
+        return {
+            "technology": "Amazon Connect Agentic CX",
+            "identity": identity,
+            "subtype": "Application",
+        }
     if action.action_type not in ("ConnectToLexBot", "ConnectParticipantWithLexBot"):
         return {}
 
@@ -1770,6 +1876,14 @@ def _extract_rich_label(
         bot = resolved_ai.get("identity") or _lex_bot_name(params)
         if bot:
             return f"Lex bot: {bot}"
+
+    if action_type == "ConnectParticipantWithAgenticCX":
+        configuration = _acxd_configuration(params)
+        if configuration.get("alias"):
+            return f"Agentic CX: {configuration['alias']}"
+        if configuration.get("application_id"):
+            return f"Agentic CX application: {configuration['application_id']}"
+        return "Agentic CX application"
 
     if action_type in ("TransferToQueue", "TransferContactToQueue"):
         resource_details = resource_details or {}

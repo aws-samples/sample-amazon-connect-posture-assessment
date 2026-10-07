@@ -1,6 +1,10 @@
 # Spec: Same-Account IAM CloudFormation Template
 
-**Status:** Implemented, and subsequently promoted to the *only* CloudFormation template — the sibling cross-account role template (`cloudformation/AmazonConnectScanRole.yaml`) referenced throughout the "Related work" and comparison sections below was deleted in a follow-up cleanup after the cross-account workflow was scoped out. This spec is retained as a design record because the "Alternatives considered" and "Open questions" sections capture *why* we chose CloudFormation over a CLI subcommand or shell script, which is not obvious from reading the template alone.
+**Status:** Implemented. `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`
+is the only current CloudFormation template. An earlier cross-account
+`AmazonConnectScanRole.yaml` was deleted after cross-account execution was
+removed from scope. References below describe historical rationale only; they
+do not describe a current artifact or supported workflow.
 **Author:** susbhaga (drafted with agent assistance)
 **Delivered artifacts:**
 - [`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](../../../cloudformation/AmazonConnectSelfAssessmentPolicy.yaml)
@@ -22,8 +26,8 @@
 - [User workflow with the new template](#user-workflow-with-the-new-template)
 - [Alternatives considered](#alternatives-considered)
 - [Testing](#testing)
-- [Rollout](#rollout)
-- [Open questions](#open-questions)
+- [Historical rollout plan](#historical-rollout-plan)
+- [Historical open questions and resolutions](#historical-open-questions-and-resolutions)
 
 ---
 
@@ -43,21 +47,29 @@ aws iam attach-user-policy \
 
 Two AWS CLI commands with placeholders they have to substitute. If the user is a role rather than a user (e.g. federated), the second command is different (`attach-role-policy`). If they want to reuse the policy across principals, they have to remember which they attached to which. The imperative shape doesn't play well with change control — nothing about the policy state lives in version control on the user's side.
 
-The **cross-account** case avoids all this by shipping a CloudFormation template the customer deploys. `AmazonConnectScanRole.yaml` creates the role, the trust policy, the additions policy, and attaches AWS managed policies, all through one deployment step. Same-account should feel the same.
+At the time this design was drafted, an earlier **cross-account** workflow used
+a CloudFormation role template. That historical precedent showed that one
+reviewable deployment step was easier to audit than imperative IAM commands.
+The cross-account workflow was later removed, and its role template was
+deleted. The delivered same-account policy keeps the useful CloudFormation
+approach without any trust policy or role-assumption path.
 
 ## Goals
 
 1. Replace the two `aws iam …` commands with a single CloudFormation deployment.
 2. Support granting the policy to any combination of a user through a group, a role, or nothing (create the policy standalone for later attachment).
-3. Reuse `docs/iam-policy-template.json` as the source of truth for policy contents — no drift between the JSON and the same-account template.
-4. Compose cleanly with the existing cross-account template: same repo location (`cloudformation/`), same naming pattern, same drift-detection story.
-5. Documented in the README next to the existing self-assessment instructions.
+3. Keep the delivered JSON and CloudFormation policies synchronized with the
+   canonical action set in `amazon_connect_assessment/iam_permissions.py`.
+4. Follow the repository's established CloudFormation naming and drift-test
+   conventions.
+5. Document the same-account deployment in the README.
 
 ## Non-goals
 
 - Cross-region policy replication. IAM is global; one deployment covers all regions.
 - Managing the assessment-running principal itself. The template attaches to an existing user/role; it does not create one.
-- Optional `--s3-output` bucket permissions in a separate template. Those are already inline in `AmazonConnectScanRole.yaml` for cross-account and could be added here later if needed — deferred to keep this template minimal.
+- Optional `--s3-output` bucket permissions. The delivered template remains
+  read-only and intentionally excludes opt-in S3 report publishing permissions.
 
 ## Design
 
@@ -65,7 +77,9 @@ The **cross-account** case avoids all this by shipping a CloudFormation template
 
 `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`
 
-Same folder as the existing role template, so users find both in one place. The filename mirrors the `AmazonConnect...` naming pattern and clarifies scope (`SelfAssessment` vs `Scan`, and `Policy` vs `Role` — this stack creates a policy, not a role).
+This is the only current template in `cloudformation/`. The filename states
+that the stack creates a same-account assessment policy, not a role or a
+cross-account trust relationship.
 
 ### Parameters
 
@@ -84,8 +98,12 @@ Same folder as the existing role template, so users find both in one place. The 
 **`AmazonConnectReadOnlyPolicy`** — a single `AWS::IAM::ManagedPolicy`.
 
 - `ManagedPolicyName: !Ref PolicyName`
-- `Description: Read-only permissions for the Amazon Connect Customer posture assessment tool (see docs/iam-policy-template.json for the source-of-truth action set).`
-- `PolicyDocument`: **inlined verbatim** from `docs/iam-policy-template.json`. The additions policy in `AmazonConnectScanRole.yaml` uses the same approach today; a drift test asserts every canonical action is present.
+- `Description`: identifies the read-only Amazon Connect Customer posture
+  assessment permission set.
+- `PolicyDocument`: explicit actions kept equivalent to the canonical
+  `POLICY_STATEMENTS` in `amazon_connect_assessment/iam_permissions.py` by drift
+  tests. `docs/iam-policy-template.json` is generated from the same Python
+  source.
 - `Roles`: conditional list — `[!Ref AttachToRoleName]` when set, `AWS::NoValue` otherwise.
 
 **`AmazonConnectAssessmentGroup`** — conditional `AWS::IAM::Group` created when `AttachToUserName` is set.
@@ -110,14 +128,17 @@ The policy is intentionally not attached directly to an IAM user. User-based acc
 
 ### Drift with `docs/iam-policy-template.json`
 
-`tests/test_iam_policy_consistency.py` today asserts:
+`tests/test_iam_policy_consistency.py` asserts:
 
-1. `docs/iam-policy-template.json` matches what `iam_permissions.py::render_policy_json()` produces (byte-for-byte).
-2. Every canonical action is granted by `AmazonConnectScanRole.yaml` — either inline in the additions policy or by one of the managed policies (`SecurityAudit`, `ViewOnlyAccess`) via `MANAGED_POLICY_ACTIONS`.
+1. `docs/iam-policy-template.json` matches
+   `iam_permissions.py::render_policy_json()` byte-for-byte.
+2. `AmazonConnectSelfAssessmentPolicy.yaml` grants exactly the expected
+   canonical actions, with no missing or stray permissions.
 
-This new template adds a third assertion:
-
-3. Every canonical action is present in `AmazonConnectSelfAssessmentPolicy.yaml`. Since this is a same-account template with no managed-policy attachments, `MANAGED_POLICY_ACTIONS` cannot save us — every action must be explicit in the inline policy document.
+The JSON file is a generated derivative. `iam_permissions.py::POLICY_STATEMENTS`
+is the source of truth, while the CloudFormation template is hand-maintained
+because its parameters, conditions, resources, and outputs do not round-trip
+through the JSON renderer.
 
 Implementation sketch for the drift check:
 
@@ -219,26 +240,44 @@ aws cloudformation describe-stacks \
 
 ## Alternatives considered
 
-**Extend `AmazonConnectScanRole.yaml`** with a `SelfAssessment` mode via a condition. Rejected: it would tangle two mental models (cross-account trust vs same-account attachment), and the cross-account template's audience is customers who probably don't want the extra parameters cluttering the form.
+**Historical alternative: extend the deleted cross-account role template.**
+This was rejected because it would have combined cross-account trust and
+same-account attachment in one parameter-heavy template. The cross-account
+workflow was later removed, so the role template no longer exists.
 
-**Ship a helper shell script** in `scripts/setup-self-assessment.sh` that runs the two `aws iam` commands. Rejected: still imperative, still hard to keep drift-free with the canonical action set, and yet another shell-script artifact that undermines the "everything is a CloudFormation stack" narrative we already have for cross-account.
+**Ship a helper shell script** in `scripts/setup-self-assessment.sh` that runs
+the two `aws iam` commands. Rejected: still imperative and hard to keep
+synchronized with the canonical action set. It would also have weakened the
+reviewable CloudFormation deployment model selected for same-account access.
 
 **Add a CLI subcommand** `amazon-connect-assessment setup-permissions --user alice`. Rejected: bootstrapping a tool's IAM permissions from within the tool itself is a chicken-and-egg problem — the user needs some permission (at least `iam:CreatePolicy` + `iam:AttachUserPolicy`) before the tool can bootstrap its own. That's a wider grant than what the tool actually needs at runtime, which contradicts the principle of least privilege. CloudFormation avoids this by making the deployment step visible and auditable, and the deployer's permissions are a separate concern.
 
 ## Testing
 
-- **New drift test** — `tests/test_iam_policy_consistency.py` gains `test_self_assessment_policy_matches_canonical`, structure sketched above.
-- **cfn-lint** — already run in CI on every YAML in `cloudformation/`; the new file gets validated automatically. No CI config change required.
-- **Manual smoke** — deploy the template in a dev account with `AttachToUserName` set, run `amazon-connect-assessment --check-permissions`, confirm all permissions present. Repeat with `AttachToRoleName` and with neither parameter (verifying the standalone-policy path).
+- **Drift tests** — `tests/test_iam_policy_consistency.py` verifies that the
+  generated JSON and the explicit actions in the self-assessment CloudFormation
+  template match the canonical Python action set.
+- **cfn-lint** — CI validates the current YAML under `cloudformation/`.
+- **Manual smoke** — in a development account, deploy with
+  `AttachToUserName`, run
+  `python -m amazon_connect_assessment.cli --check-permissions`, and repeat with
+  `AttachToRoleName` and with neither parameter to validate the standalone
+  policy path.
 
-## Rollout
+## Historical rollout plan
 
 1. Land the template + drift test + README update as one commit.
 2. Existing self-assessment users' `aws iam …`-created policies still work; they can migrate at their own pace. Add a note in the README's Troubleshooting section that CloudFormation is now the recommended path.
 3. No breaking changes to any existing artifact.
 
-## Open questions
+## Historical open questions and resolutions
 
-1. **Policy name collision.** The default `AmazonConnectReadOnly` will collide with users who already ran the two `aws iam` commands. Options: (a) accept the collision — the stack fails, user renames or deletes the old policy; (b) name the CFN-managed policy differently by default (e.g. `AmazonConnectReadOnly-CFN`) to avoid collision. Recommend (a) with a call-out in the README migration note — collision is loud and unambiguous.
-2. **SCP interaction.** Some org accounts have SCPs that block `iam:CreatePolicy` or `iam:AttachUserPolicy`. The template will fail with a clear error; nothing this spec can do about it. Documented in the README's Troubleshooting section.
-3. **Whether to also generate this template from `iam_permissions.py`.** The cross-account template is hand-maintained today (for the reasons in that file's docstring — intrinsics, trust policy, tags, outputs that don't round-trip). This new template is much simpler; it could plausibly be generated. **Recommendation:** hand-maintain for consistency with the cross-account template and let the drift test catch mistakes. Revisit if a third template ever appears.
+1. **Policy name collision.** The default `AmazonConnectReadOnly` can collide
+   with a policy created by the earlier imperative workflow. Deployment fails
+   visibly; users can choose another `PolicyName` or migrate the old policy.
+2. **SCP interaction.** Organization SCPs can block `iam:CreatePolicy` or IAM
+   attachment operations. CloudFormation surfaces that failure to the deployer.
+3. **Template generation.** Resolved in favor of a hand-maintained
+   `AmazonConnectSelfAssessmentPolicy.yaml`. Drift tests compare its explicit
+   action set with `iam_permissions.py::POLICY_STATEMENTS`; the simpler JSON
+   policy remains generated by `render_policy_json()`.

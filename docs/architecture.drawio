@@ -1,196 +1,155 @@
-<mxfile host="Electron" agent="Claude">
+<mxfile host="Electron" agent="Kiro">
   <diagram id="connect-assessment-deployment" name="Deployment Architecture">
-    <mxGraphModel dx="1750" dy="981" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1750" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
+
         <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#232F3E;" value="Amazon Connect Customer Posture Assessment Tool — Deployment Architecture" vertex="1">
-          <mxGeometry height="40" width="1720" x="40" y="45" as="geometry" />
+          <mxGeometry height="40" width="1720" x="40" y="25" as="geometry" />
         </mxCell>
-        <mxCell id="runnerBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Assessment runner&lt;br&gt;(local workstation, AWS CloudShell, or CI runner)" vertex="1">
-          <mxGeometry height="760" width="680" x="40" y="120" as="geometry" />
+        <mxCell id="scopeNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontColor=#5F6B7A;" value="One assessment targets one AWS account and one selected Region; the report may contain multiple Amazon Connect instances in that scope." vertex="1">
+          <mxGeometry height="28" width="1720" x="40" y="63" as="geometry" />
         </mxCell>
-        <mxCell id="awsBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Target AWS account / Region" vertex="1">
-          <mxGeometry height="760" width="1000" x="760" y="120" as="geometry" />
+
+        <mxCell id="runnerBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Assessment runner and self-contained report&lt;br&gt;(local workstation, AWS CloudShell, or CI runner / browser)" vertex="1">
+          <mxGeometry height="1015" width="850" x="40" y="105" as="geometry" />
         </mxCell>
+        <mxCell id="awsBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=2;fontColor=#232F3E;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=14;" value="Target AWS account / one selected Region" vertex="1">
+          <mxGeometry height="1015" width="830" x="930" y="105" as="geometry" />
+        </mxCell>
+
         <mxCell id="cli" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="CLI&lt;br&gt;amazon-connect-assessment" vertex="1">
-          <mxGeometry height="72" width="185" x="80" y="185" as="geometry" />
+          <mxGeometry height="68" width="190" x="75" y="170" as="geometry" />
         </mxCell>
         <mxCell id="config" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=13;align=center;verticalAlign=middle;" value="Configuration&lt;br&gt;YAML / JSON" vertex="1">
-          <mxGeometry height="72" width="181" x="287" y="185" as="geometry" />
+          <mxGeometry height="68" width="190" x="285" y="170" as="geometry" />
         </mxCell>
-        <mxCell id="credentials" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="AWS credential chain&lt;br&gt;profile, environment, CloudShell, role, OIDC" vertex="1">
-          <mxGeometry height="72" width="190" x="490" y="185" as="geometry" />
+        <mxCell id="credentials" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="AWS SDK credential chain&lt;br&gt;profile, environment, CloudShell / compute role, OIDC-provided credentials" vertex="1">
+          <mxGeometry height="68" width="360" x="495" y="170" as="geometry" />
         </mxCell>
-        <mxCell id="factory" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="AWSClientFactory&lt;br&gt;clients, retries, throttling, permission checks" vertex="1">
-          <mxGeometry height="82" width="280" x="80" y="310" as="geometry" />
+
+        <mxCell id="factory" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="AWSClientFactory&lt;br&gt;boto3 clients, retries, throttling, permission checks" vertex="1">
+          <mxGeometry height="72" width="330" x="75" y="280" as="geometry" />
         </mxCell>
-        <mxCell id="engine" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="AssessmentEngine&lt;br&gt;sequential or parallel execution" vertex="1">
-          <mxGeometry height="82" width="280" x="400" y="310" as="geometry" />
+        <mxCell id="engine" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="AssessmentEngine&lt;br&gt;discover, analyze, execute, summarize&lt;br&gt;sequential or parallel execution" vertex="1">
+          <mxGeometry height="72" width="410" x="445" y="280" as="geometry" />
         </mxCell>
-        <mxCell id="analysis" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF3E7;strokeColor=#D86613;strokeWidth=2;fontColor=#7A3D0B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Analyzers + checks&lt;br&gt;instance, flows, queues, integrations, IAM, security, cost, resilience, operations, performance" vertex="1">
-          <mxGeometry height="105" width="280" x="80" y="445" as="geometry" />
+
+        <mxCell id="catalog" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF3E7;strokeColor=#D86613;strokeWidth=2;fontColor=#7A3D0B;fontSize=13;fontStyle=1;align=left;verticalAlign=top;spacingTop=12;spacingLeft=16;" value="Immutable 64-control catalog" vertex="1">
+          <mxGeometry height="205" width="780" x="75" y="395" as="geometry" />
         </mxCell>
-        <mxCell id="journey" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF3E7;strokeColor=#D86613;strokeWidth=2;fontColor=#7A3D0B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Caller Journey Mapping&lt;br&gt;topology &amp;#8594; super-graph &amp;#8594; bounded paths &amp;#8594; scoring" vertex="1">
-          <mxGeometry height="105" width="280" x="400" y="445" as="geometry" />
+        <mxCell id="baseExecutors" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D86613;strokeWidth=1.5;fontColor=#7A3D0B;fontSize=12;align=center;verticalAlign=middle;" value="60 BaseCheck executors&lt;br&gt;instance, flows, queues, integrations, IAM, security, cost, resilience, operations, performance" vertex="1">
+          <mxGeometry height="72" width="350" x="95" y="440" as="geometry" />
         </mxCell>
-        <mxCell id="report" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=2;fontColor=#5A2B6E;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Report generation&lt;br&gt;HTML, JSON, CSV, ASFF&lt;br&gt;optional --s3-output upload" vertex="1">
-          <mxGeometry height="82" width="280" x="80" y="605" as="geometry" />
+        <mxCell id="journeyExecutors" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D86613;strokeWidth=1.5;fontColor=#7A3D0B;fontSize=12;align=center;verticalAlign=middle;" value="4 Journey-backed executors&lt;br&gt;topology → super-graph → bounded paths → Journey scoring" vertex="1">
+          <mxGeometry height="72" width="370" x="465" y="440" as="geometry" />
         </mxCell>
-        <mxCell id="localOutputs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=13;align=center;verticalAlign=middle;" value="Local outputs&lt;br&gt;./reports&lt;br&gt;checkpoints under user home" vertex="1">
-          <mxGeometry height="82" width="280" x="400" y="605" as="geometry" />
+        <mxCell id="policy" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8F0;strokeColor=#D86613;strokeWidth=1.5;fontColor=#7A3D0B;fontSize=12;align=center;verticalAlign=middle;" value="Catalog-owned dispositions + shared score policy&lt;br&gt;23 Control · 25 Manual Review · 16 Informational&lt;br&gt;only scored control PASS / FAIL contributes to posture" vertex="1">
+          <mxGeometry height="64" width="740" x="95" y="525" as="geometry" />
         </mxCell>
-        <mxCell id="runnerNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#5F6B7A;whiteSpace=wrap;" value="No application backend or persistent service is deployed by this repository. The runner performs the assessment and exits." vertex="1">
-          <mxGeometry height="50" width="600" x="80" y="730" as="geometry" />
+
+        <mxCell id="acxd" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=left;verticalAlign=middle;spacingLeft=14;" value="Three flow-dependent, Connect-side ACXD checks: Agentic CX Handoff Inventory · ACXD Error Routing · ACXD Escalation Review&lt;br&gt;Evidence is limited to reachable Connect flow handoffs, authored branches, identifiers, optional feature presence, and redacted context-variable names.&lt;br&gt;No Agentic CX API calls; no inspection of application content, builds, deployments, alias resolution, runtime containment, or guardrails." vertex="1">
+          <mxGeometry height="94" width="780" x="75" y="625" as="geometry" />
         </mxCell>
-        <mxCell id="cloudformation" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudformation;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="835" y="180" as="geometry" />
+
+        <mxCell id="reportGenerator" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=2;fontColor=#5A2B6E;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Python ReportGenerator&lt;br&gt;builds report-data JSON; embeds committed report-app.js / report-app.css&lt;br&gt;into a self-contained HTML shell" vertex="1">
+          <mxGeometry height="82" width="370" x="75" y="755" as="geometry" />
         </mxCell>
-        <mxCell id="cloudformationLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="AWS CloudFormation&#xa;optional IAM policy setup" vertex="1">
-          <mxGeometry height="40" width="160" x="794" y="262" as="geometry" />
+        <mxCell id="frontend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=2;fontColor=#5A2B6E;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="frontend/ maintained source&lt;br&gt;React + Cloudscape&lt;br&gt;builds committed app assets" vertex="1">
+          <mxGeometry height="82" width="370" x="485" y="755" as="geometry" />
         </mxCell>
-        <mxCell id="policy" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="Read-only managed policy&lt;br&gt;optional role / user / group attachment" vertex="1">
-          <mxGeometry height="72" width="240" x="980" y="183" as="geometry" />
+
+        <mxCell id="browserScope" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=12;align=left;verticalAlign=middle;spacingLeft=14;" value="Browser report-wide instance scope derives one scoped assessment view&lt;br&gt;Summary / insights · charts · recommendations · findings · Journey map · assessment details · print / PDF&lt;br&gt;Clickable metrics and chart segments set exact finding-filter queries." vertex="1">
+          <mxGeometry height="88" width="780" x="75" y="865" as="geometry" />
         </mxCell>
-        <mxCell id="iam" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;html=1;fillColor=#DD344C;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1290" y="180" as="geometry" />
+        <mxCell id="evidence" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#247BA0;strokeWidth=1.5;fontColor=#164A63;fontSize=12;align=center;verticalAlign=middle;" value="Adaptive evidence&lt;br&gt;wide viewport: tables · narrow viewport: cards&lt;br&gt;full values retained for copy, detail, and print" vertex="1">
+          <mxGeometry height="72" width="370" x="75" y="975" as="geometry" />
         </mxCell>
-        <mxCell id="iamLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="AWS IAM&#xa;credentialed principal" vertex="1">
-          <mxGeometry height="40" width="160" x="1249" y="262" as="geometry" />
+        <mxCell id="localOutputs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="Local / browser outputs&lt;br&gt;HTML · ASFF · top-level JSON + CSV = full assessment / all instances&lt;br&gt;print / PDF = selected report scope" vertex="1">
+          <mxGeometry height="72" width="370" x="485" y="975" as="geometry" />
         </mxCell>
-        <mxCell id="iamNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#5F6B7A;whiteSpace=wrap;" value="Standard boto3 credentials are resolved by the runner; the tool does not perform cross-account role assumption." vertex="1">
-          <mxGeometry height="90" width="270" x="1450" y="183" as="geometry" />
+        <mxCell id="runnerNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="No application backend or persistent service is deployed. The runner performs the assessment and exits; the generated HTML runs locally in the reader's browser." vertex="1">
+          <mxGeometry height="38" width="780" x="75" y="1065" as="geometry" />
         </mxCell>
-        <mxCell id="readOnlyApis" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=1.5;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="Read-only AWS service API calls" vertex="1">
-          <mxGeometry height="44" width="940" x="790" y="350" as="geometry" />
+
+        <mxCell id="cloudformation" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=1.5;fontColor=#5A2B6E;fontSize=12;align=center;verticalAlign=middle;dashed=1;" value="AWS CloudFormation&lt;br&gt;optional operator-run IAM setup" vertex="1">
+          <mxGeometry height="68" width="205" x="970" y="170" as="geometry" />
         </mxCell>
-        <mxCell id="inspectionTargets" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C5D0D5;strokeWidth=1.5;fontColor=#5F6B7A;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;spacingLeft=16;" value="Inspection targets" vertex="1">
-          <mxGeometry height="300" width="940" x="790" y="420" as="geometry" />
+        <mxCell id="managedPolicy" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="Assessment read-only managed policy&lt;br&gt;optional role / user / group attachment" vertex="1">
+          <mxGeometry height="68" width="245" x="1210" y="170" as="geometry" />
         </mxCell>
-        <mxCell id="connect" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.connect;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="883" y="465" as="geometry" />
+        <mxCell id="iam" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#879596;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;align=center;verticalAlign=middle;" value="AWS IAM&lt;br&gt;credentialed principal" vertex="1">
+          <mxGeometry height="68" width="225" x="1490" y="170" as="geometry" />
         </mxCell>
-        <mxCell id="connectLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon Connect Customer&#xa;instances, flows, queues, routing, phone numbers" vertex="1">
-          <mxGeometry height="46" width="210" x="817" y="546" as="geometry" />
+        <mxCell id="iamNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="Standard boto3 credentials are resolved by the runner; the tool does not perform cross-account role assumption." vertex="1">
+          <mxGeometry height="42" width="745" x="970" y="250" as="geometry" />
         </mxCell>
-        <mxCell id="cloudwatch" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1108" y="465" as="geometry" />
+
+        <mxCell id="readOnlyApis" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3F8;strokeColor=#247BA0;strokeWidth=2;fontColor=#164A63;fontSize=13;fontStyle=1;align=center;verticalAlign=middle;" value="Signed read-only AWS service API requests" vertex="1">
+          <mxGeometry height="46" width="745" x="970" y="315" as="geometry" />
         </mxCell>
-        <mxCell id="cloudwatchLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon CloudWatch&#xa;metrics, alarms, logs" vertex="1">
-          <mxGeometry height="40" width="210" x="1042" y="546" as="geometry" />
+        <mxCell id="inspectionTargets" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C5D0D5;strokeWidth=1.5;fontColor=#5F6B7A;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;spacingLeft=16;" value="Preserved inspection targets" vertex="1">
+          <mxGeometry height="435" width="745" x="970" y="390" as="geometry" />
         </mxCell>
-        <mxCell id="cloudtrail" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudtrail;html=1;fillColor=#E7157B;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1333" y="465" as="geometry" />
+        <mxCell id="connect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon Connect&lt;br&gt;instances, flows, queues, routing, phone numbers" vertex="1">
+          <mxGeometry height="78" width="330" x="995" y="440" as="geometry" />
         </mxCell>
-        <mxCell id="cloudtrailLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="AWS CloudTrail&#xa;audit configuration" vertex="1">
-          <mxGeometry height="40" width="210" x="1267" y="546" as="geometry" />
+        <mxCell id="cloudwatch" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon CloudWatch&lt;br&gt;metrics, alarms, logs" vertex="1">
+          <mxGeometry height="78" width="330" x="1360" y="440" as="geometry" />
         </mxCell>
-        <mxCell id="s3source" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;html=1;fillColor=#7AA116;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1558" y="465" as="geometry" />
+        <mxCell id="cloudtrail" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS CloudTrail&lt;br&gt;audit configuration" vertex="1">
+          <mxGeometry height="78" width="330" x="995" y="535" as="geometry" />
         </mxCell>
-        <mxCell id="s3sourceLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon S3&#xa;Connect storage configuration" vertex="1">
-          <mxGeometry height="40" width="210" x="1492" y="546" as="geometry" />
+        <mxCell id="s3source" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F9E9;strokeColor=#7AA116;strokeWidth=1.5;fontColor=#40560B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon S3&lt;br&gt;Connect storage configuration" vertex="1">
+          <mxGeometry height="78" width="330" x="1360" y="535" as="geometry" />
         </mxCell>
-        <mxCell id="lambda" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;html=1;fillColor=#ED7100;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="883" y="600" as="geometry" />
+        <mxCell id="lambda" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF6EA;strokeColor=#ED7100;strokeWidth=1.5;fontColor=#7A3D0B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS Lambda&lt;br&gt;integration and usage" vertex="1">
+          <mxGeometry height="78" width="220" x="995" y="630" as="geometry" />
         </mxCell>
-        <mxCell id="lambdaLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="AWS Lambda&#xa;integration and usage" vertex="1">
-          <mxGeometry height="40" width="210" x="817" y="681" as="geometry" />
+        <mxCell id="lex" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#CD2264;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon Lex&lt;br&gt;bot integrations" vertex="1">
+          <mxGeometry height="78" width="220" x="1232" y="630" as="geometry" />
         </mxCell>
-        <mxCell id="lex" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lex;html=1;fillColor=#CD2264;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1108" y="600" as="geometry" />
+        <mxCell id="kms" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#DD344C;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="AWS KMS&lt;br&gt;encryption posture" vertex="1">
+          <mxGeometry height="78" width="220" x="1470" y="630" as="geometry" />
         </mxCell>
-        <mxCell id="lexLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="Amazon Lex&#xa;bot integrations" vertex="1">
-          <mxGeometry height="40" width="210" x="1042" y="681" as="geometry" />
+        <mxCell id="connectBoundaryNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="Connect flow JSON supplies the ACXD handoff evidence. Agentic CX application internals remain outside the assessment trust and evidence boundary." vertex="1">
+          <mxGeometry height="55" width="695" x="995" y="735" as="geometry" />
         </mxCell>
-        <mxCell id="kms" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.key_management_service;html=1;fillColor=#DD344C;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="78" width="78" x="1333" y="600" as="geometry" />
+
+        <mxCell id="publishArea" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=1.5;fontColor=#5A2B6E;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;spacingLeft=16;dashed=1;" value="Report publication — opt-in --s3-output only" vertex="1">
+          <mxGeometry height="200" width="745" x="970" y="855" as="geometry" />
         </mxCell>
-        <mxCell id="kmsLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=12;fontColor=#232F3E;" value="AWS KMS&#xa;encryption posture" vertex="1">
-          <mxGeometry height="40" width="210" x="1267" y="681" as="geometry" />
+        <mxCell id="reportBucket" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F9E9;strokeColor=#7AA116;strokeWidth=1.5;fontColor=#40560B;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Amazon S3 report bucket&lt;br&gt;Block Public Access · SSE-S3 · versioning" vertex="1">
+          <mxGeometry height="72" width="310" x="995" y="910" as="geometry" />
         </mxCell>
-        <mxCell id="publishArea" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAF7;strokeColor=#8E44AD;strokeWidth=1.5;fontColor=#5A2B6E;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;spacingLeft=16;dashed=1;" value="Report publication (opt-in --s3-output)" vertex="1">
-          <mxGeometry height="125" width="940" x="790" y="730" as="geometry" />
+        <mxCell id="securityNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#5F6B7A;whiteSpace=wrap;" value="Assessment execution otherwise reads configuration and telemetry. --s3-output is the only assessment write path. Optional IAM setup above is a separate operator-run provisioning action." vertex="1">
+          <mxGeometry height="82" width="360" x="1330" y="905" as="geometry" />
         </mxCell>
-        <mxCell id="reportBucket" parent="1" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;html=1;fillColor=#7AA116;strokeColor=#FFFFFF;" value="" vertex="1">
-          <mxGeometry height="72" width="72" x="838" y="770" as="geometry" />
+        <mxCell id="awsNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontColor=#5F6B7A;whiteSpace=wrap;" value="The account / Region boundary remains fixed for the run; choosing a browser report scope only filters instances already present in that assessment." vertex="1">
+          <mxGeometry height="45" width="745" x="970" y="1070" as="geometry" />
         </mxCell>
-        <mxCell id="reportBucketLabel" parent="1" style="text;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#232F3E;" value="Amazon S3 report bucket&#xa;Block Public Access, SSE-S3, versioning" vertex="1">
-          <mxGeometry height="60" width="320" x="925" y="776" as="geometry" />
-        </mxCell>
-        <mxCell id="securityNote" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#5F6B7A;whiteSpace=wrap;" value="The assessment reads configuration and telemetry from the target account. Report publication is the only opt-in write path." vertex="1">
-          <mxGeometry height="60" width="420" x="1270" y="776" as="geometry" />
-        </mxCell>
-        <mxCell id="e_cli_factory" edge="1" parent="1" source="cli" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" target="factory">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_config_factory" edge="1" parent="1" source="config" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="factory">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_credentials_factory" edge="1" parent="1" source="credentials" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;" target="factory">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_factory_engine" edge="1" parent="1" source="factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="engine">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_engine_analysis" edge="1" parent="1" source="engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D86613;strokeWidth=2;endArrow=block;endFill=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="analysis">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_engine_journey" edge="1" parent="1" source="engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D86613;strokeWidth=2;endArrow=block;endFill=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="journey">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_analysis_report" edge="1" parent="1" source="analysis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="report">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_journey_report" edge="1" parent="1" source="journey" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="report">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_report_local" edge="1" parent="1" source="report" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="localOutputs">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_cfn_policy" edge="1" parent="1" source="cloudformation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="policy">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_policy_iam" edge="1" parent="1" source="policy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="iam">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_engine_readonly" edge="1" parent="1" source="engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="readOnlyApis">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_readonly_targets" edge="1" parent="1" source="readOnlyApis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="inspectionTargets">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_report_bucket" edge="1" parent="1" source="report" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;fontSize=11;fontColor=#5A2B6E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="reportBucket" value="opt-in --s3-output">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="220" y="806" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="legendTitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontStyle=1;fontColor=#232F3E;" value="Legend" vertex="1">
-          <mxGeometry height="25" width="70" x="40" y="915" as="geometry" />
-        </mxCell>
-        <mxCell id="legendReadLine" edge="1" parent="1" style="endArrow=block;html=1;strokeColor=#247BA0;strokeWidth=2;endFill=1;">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="115" y="928" as="sourcePoint" />
-            <mxPoint x="155" y="928" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="legendRead" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#164A63;" value="Read-only inspection path" vertex="1">
-          <mxGeometry height="25" width="180" x="165" y="915" as="geometry" />
-        </mxCell>
-        <mxCell id="legendOptionalLine" edge="1" parent="1" style="endArrow=block;html=1;strokeColor=#8E44AD;strokeWidth=2;endFill=1;dashed=1;">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="365" y="928" as="sourcePoint" />
-            <mxPoint x="405" y="928" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="legendOptional" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#5A2B6E;" value="Optional setup / report publication" vertex="1">
-          <mxGeometry height="25" width="230" x="415" y="915" as="geometry" />
-        </mxCell>
-        <mxCell id="legendBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=1.5;fontSize=11;fontColor=#5F6B7A;align=center;verticalAlign=middle;" value="Execution or trust boundary" vertex="1">
-          <mxGeometry height="26" width="200" x="655" y="914" as="geometry" />
-        </mxCell>
+
+        <mxCell id="e_cli_factory" edge="1" parent="1" source="cli" target="factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_config_factory" edge="1" parent="1" source="config" target="factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_credentials_factory" edge="1" parent="1" source="credentials" target="factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_factory_engine" edge="1" parent="1" source="factory" target="engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_engine_catalog" edge="1" parent="1" source="engine" target="catalog" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#D86613;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_catalog_report" edge="1" parent="1" source="catalog" target="reportGenerator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;" value="findings + Journey"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_frontend_report" edge="1" parent="1" source="frontend" target="reportGenerator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;dashed=1;" value="committed build assets"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_report_browser" edge="1" parent="1" source="reportGenerator" target="browserScope" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;" value="self-contained HTML"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_browser_evidence" edge="1" parent="1" source="browserScope" target="evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_browser_outputs" edge="1" parent="1" source="browserScope" target="localOutputs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879596;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_cfn_policy" edge="1" parent="1" source="cloudformation" target="managedPolicy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_policy_iam" edge="1" parent="1" source="managedPolicy" target="iam" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=1.5;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_engine_readonly" edge="1" parent="1" source="engine" target="readOnlyApis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value="read-only inspection"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_readonly_targets" edge="1" parent="1" source="readOnlyApis" target="inspectionTargets" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#247BA0;strokeWidth=2;endArrow=block;endFill=1;" value=""><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_report_bucket" edge="1" parent="1" source="reportGenerator" target="reportBucket" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;endFill=1;fontSize=11;fontColor=#5A2B6E;" value="opt-in --s3-output"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="900" y="946" /></Array></mxGeometry></mxCell>
+
+        <mxCell id="legendTitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontStyle=1;fontColor=#232F3E;" value="Legend" vertex="1"><mxGeometry height="25" width="70" x="40" y="1150" as="geometry" /></mxCell>
+        <mxCell id="legendRead" parent="1" style="text;html=1;strokeColor=#247BA0;strokeWidth=2;fillColor=#EAF3F8;align=center;verticalAlign=middle;fontSize=11;fontColor=#164A63;" value="Read-only inspection path" vertex="1"><mxGeometry height="26" width="200" x="115" y="1149" as="geometry" /></mxCell>
+        <mxCell id="legendOptional" parent="1" style="text;html=1;strokeColor=#8E44AD;strokeWidth=2;fillColor=#F3EAF7;dashed=1;align=center;verticalAlign=middle;fontSize=11;fontColor=#5A2B6E;" value="Optional setup / S3 publication" vertex="1"><mxGeometry height="26" width="230" x="335" y="1149" as="geometry" /></mxCell>
+        <mxCell id="legendBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F8FA;strokeColor=#879596;strokeWidth=1.5;fontSize=11;fontColor=#5F6B7A;align=center;verticalAlign=middle;" value="Execution or trust boundary" vertex="1"><mxGeometry height="26" width="210" x="585" y="1149" as="geometry" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

@@ -1,5 +1,7 @@
 """Tests for phone-number masking in journey finding evidence."""
 
+import pytest
+
 from amazon_connect_assessment.journey.journey_scorer import _mask_number
 
 
@@ -42,18 +44,27 @@ class TestJourneyFindingInstance:
         )
         return JourneyMapResult(journeys=[path])
 
-    def test_per_number_findings_record_owning_instance(self):
+    def test_journey_findings_known_instance_are_aggregated_with_instance_attribution(self):
+        # Arrange
         from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
 
-        findings = generate_journey_findings(self._result(), instance_id="inst-1")
+        result = self._result()
 
-        per_number = [f for f in findings if f.resource_type == "PhoneNumberJourney"]
-        assert per_number
-        assert all(f.evidence["instance_id"] == "inst-1" for f in per_number)
+        # Act
+        findings = generate_journey_findings(result, instance_id="inst-1")
 
-    def test_instance_id_omitted_when_unknown(self):
+        # Assert
+        assert findings
+        assert all(finding.resource_type == "ConnectInstance" for finding in findings)
+        assert all(finding.resource_id == "inst-1" for finding in findings)
+        assert all(finding.instance_id == "inst-1" for finding in findings)
+
+    def test_journey_finding_missing_instance_rejects_generation_expected_result(self):
+        # Arrange
         from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
 
-        findings = generate_journey_findings(self._result())
+        result = self._result()
 
-        assert all("instance_id" not in f.evidence for f in findings)
+        # Act / Assert
+        with pytest.raises(TypeError, match="instance_id"):
+            generate_journey_findings(result)

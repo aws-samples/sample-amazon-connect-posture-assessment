@@ -3,6 +3,14 @@ Integration Analyzer for Amazon Connect Assessment Tool.
 
 This module provides functionality to analyze Amazon Connect integrations
 with external services like Lambda functions, Lex bots, and S3 buckets.
+
+Compliance note: the storage resource types enumerated here, including call recordings,
+chat transcripts, contact evaluations, screen recordings, and contact trace records, may
+contain personal, payment-card, or health data depending on how the instance is used. The
+analyzer reads configuration metadata only; it does not read stored content. Under the AWS
+shared responsibility model, customers must determine which legal, regulatory, and
+contractual obligations apply and configure encryption, retention, and access controls
+accordingly. See https://aws.amazon.com/compliance/ for guidance.
 """
 
 import logging

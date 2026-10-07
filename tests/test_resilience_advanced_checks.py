@@ -6,6 +6,8 @@ advanced checks (CloudWatch alarm coverage, carrier diversity, hardcoded
 routing).
 """
 
+import json
+
 from botocore.exceptions import ClientError
 
 from amazon_connect_assessment.aws_client_factory import AWSClientFactory
@@ -23,7 +25,12 @@ from amazon_connect_assessment.checks.resilience_advanced_checks import (
     _reset_acgr_cache,
     register_advanced_resilience_checks,
 )
-from amazon_connect_assessment.models import CheckStatus, ContactFlow, Severity
+from amazon_connect_assessment.models import (
+    CheckStatus,
+    ContactFlow,
+    FindingDisposition,
+    Severity,
+)
 from tests.conftest import build_action, build_contact_flow
 
 
@@ -127,6 +134,53 @@ def _program_acgr_apis(
         return {}
 
     factory.call_api_with_resilience.side_effect = _side_effect
+
+
+def _cloudtrail_event(
+    *, request_id=None, resource_names=None, malformed=False, error_code=None, error_message=None
+):
+    event = {
+        "EventName": "UpdateTrafficDistribution",
+        "EventTime": "2026-06-01T10:00:00Z",
+    }
+    if malformed:
+        event["CloudTrailEvent"] = "{not-json"
+    else:
+        event_payload = {}
+        if request_id is not None:
+            event_payload["RequestParameters"] = {"Id": request_id}
+        if error_code is not None:
+            event_payload["errorCode"] = error_code
+        if error_message is not None:
+            event_payload["errorMessage"] = error_message
+        event["CloudTrailEvent"] = json.dumps(event_payload)
+    if resource_names is not None:
+        event["Resources"] = [{"ResourceName": resource_name} for resource_name in resource_names]
+    return event
+
+
+def _valid_connect_alarm(metric, *, instance_id="test-instance-123", **overrides):
+    alarm = {
+        "AlarmName": f"{metric}-alarm",
+        "Namespace": "AWS/Connect",
+        "MetricName": metric,
+        "Dimensions": [
+            {"Name": "InstanceId", "Value": instance_id},
+            {"Name": "MetricGroup", "Value": "VoiceCalls"},
+        ],
+        "ActionsEnabled": True,
+        "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:connect-alerts"],
+    }
+    alarm.update(overrides)
+    return alarm
+
+
+_REQUIRED_VOICE_METRICS = (
+    "ConcurrentCalls",
+    "ThrottledCalls",
+    "MissedCalls",
+    "CallsPerInterval",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -272,18 +326,28 @@ class TestACGRTrafficDistributionGroupStatusCheck:
 
 
 # ---------------------------------------------------------------------------
-# res-acgr-traffic-dist-001 — Active-active traffic distribution
+# res-acgr-traffic-dist-001 — traffic distribution inventory
 # ---------------------------------------------------------------------------
 
 
 class TestACGRTrafficDistributionCheck:
-    def test_no_tdg_is_not_applicable(self, make_check_context, mock_aws_client_factory):
+    def test_acgr_traffic_distribution_without_tdg_is_not_applicable(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(mock_aws_client_factory, tdgs=[])
+
+        # Act
         finding = ACGRTrafficDistributionCheck().execute(make_check_context())
+
+        # Assert
         assert finding.status == CheckStatus.NOT_APPLICABLE
 
-    def test_100_0_split_fails(self, make_check_context, mock_aws_client_factory):
+    def test_acgr_traffic_distribution_100_0_inventory_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
@@ -299,11 +363,45 @@ class TestACGRTrafficDistributionCheck:
                 }
             },
         )
-        finding = ACGRTrafficDistributionCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
-        assert "100%" in finding.description or "single region" in finding.description.lower()
+        check = ACGRTrafficDistributionCheck()
 
-    def test_active_active_passes(self, make_check_context, mock_aws_client_factory):
+        # Act
+        finding = check.execute(make_check_context())
+
+        # Assert
+        assert check.disposition == FindingDisposition.INFORMATIONAL
+        assert finding.status == CheckStatus.PASS
+        assert finding.structured_remediation is None
+        assert finding.evidence["distribution_mode_by_tdg"]["prod-tdg"] == "hot-standby"
+
+    def test_acgr_traffic_distribution_single_region_inventory_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            traffic_distributions={
+                "tdg-1": {
+                    "TelephonyConfig": {
+                        "Distributions": [{"Region": "us-east-1", "Percentage": 100}],
+                    },
+                }
+            },
+        )
+
+        # Act
+        finding = ACGRTrafficDistributionCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["distribution_mode_by_tdg"]["prod-tdg"] == "single-region"
+
+    def test_acgr_traffic_distribution_multi_region_inventory_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
@@ -319,78 +417,357 @@ class TestACGRTrafficDistributionCheck:
                 }
             },
         )
-        finding = ACGRTrafficDistributionCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.PASS
 
-    def test_single_region_distribution_fails(self, make_check_context, mock_aws_client_factory):
-        # Only one region in the distribution list means no second region
-        # is participating — treat the same as a 100/0.
+        # Act
+        finding = ACGRTrafficDistributionCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["distribution_mode_by_tdg"]["prod-tdg"] == "multi-region"
+
+    def test_acgr_traffic_distribution_incomplete_evidence_is_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[
+                {"Id": "tdg-1", "Name": "complete-tdg", "Arn": "arn:...:tdg/tdg-1"},
+                {"Id": "tdg-2", "Name": "incomplete-tdg", "Arn": "arn:...:tdg/tdg-2"},
+            ],
+            traffic_distributions={
+                "tdg-1": {
+                    "TelephonyConfig": {
+                        "Distributions": [{"Region": "us-east-1", "Percentage": 100}],
+                    },
+                },
+                "tdg-2": {},
+            },
+        )
+
+        # Act
+        finding = ACGRTrafficDistributionCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["evaluated_tdg_count"] == 1
+        assert finding.evidence["incomplete_tdg_count"] == 1
+
+    def test_acgr_traffic_distribution_denied_evidence_is_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
             tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
-            traffic_distributions={
-                "tdg-1": {
-                    "TelephonyConfig": {
-                        "Distributions": [
-                            {"Region": "us-east-1", "Percentage": 100},
-                        ],
-                    },
-                }
-            },
+            access_denied_on={"get_traffic_distribution"},
         )
+
+        # Act
         finding = ACGRTrafficDistributionCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
 
 
 # ---------------------------------------------------------------------------
-# res-acgr-failover-test-001 — Tested in the last 90 days
+# res-acgr-failover-test-001 — scoped evidence in the last 90 days
 # ---------------------------------------------------------------------------
 
 
 class TestACGRFailoverTestCheck:
-    def test_no_tdg_is_not_applicable(self, make_check_context, mock_aws_client_factory):
+    def test_acgr_failover_without_tdg_is_not_applicable(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(mock_aws_client_factory, tdgs=[])
+
+        # Act
         finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
         assert finding.status == CheckStatus.NOT_APPLICABLE
 
-    def test_recent_events_pass(self, make_check_context, mock_aws_client_factory):
+    def test_acgr_failover_unrelated_tdg_event_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[_cloudtrail_event(request_id="tdg-unrelated")],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["candidate_event_count"] == 1
+        assert finding.evidence["matched_event_count"] == 0
+        assert finding.evidence["unrelated_event_count"] == 1
+
+    def test_acgr_failover_request_id_match_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[_cloudtrail_event(request_id="tdg-1")],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["matched_event_count"] == 1
+        assert finding.evidence["matched_tdgs"] == ["tdg-1"]
+
+    def test_acgr_failover_resource_arn_match_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        tdg_arn = "arn:aws:connect:us-east-1:1:traffic-distribution-group/tdg-1"
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": tdg_arn}],
+            cloudtrail_events=[_cloudtrail_event(resource_names=[tdg_arn])],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["matched_event_count"] == 1
+        assert finding.evidence["matched_tdgs"] == ["tdg-1"]
+
+    def test_acgr_failover_failed_and_malformed_matches_return_fail(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
             tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
             cloudtrail_events=[
-                {"EventName": "UpdateTrafficDistribution", "EventTime": "2026-06-01T10:00:00Z"},
-                {"EventName": "UpdateTrafficDistribution", "EventTime": "2026-05-15T10:00:00Z"},
+                _cloudtrail_event(
+                    request_id="tdg-1",
+                    error_code="AccessDeniedException",
+                    error_message="denied",
+                ),
+                _cloudtrail_event(resource_names=["tdg-1"], malformed=True),
             ],
         )
-        finding = ACGRFailoverTestCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.PASS
-        assert finding.evidence["update_traffic_distribution_event_count"] == 2
 
-    def test_no_recent_events_fails(self, make_check_context, mock_aws_client_factory):
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["matched_event_count"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 0
+        assert finding.evidence["failed_matched_event_count"] == 1
+        assert finding.evidence["malformed_matched_event_count"] == 1
+        assert finding.evidence["failed_matched_events"][0]["error_code"] == (
+            "AccessDeniedException"
+        )
+        assert finding.evidence["malformed_matched_events"][0]["reason"] == (
+            "CloudTrailEvent payload is malformed"
+        )
+
+    def test_acgr_failover_successful_match_with_failed_attempt_returns_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[
+                _cloudtrail_event(request_id="tdg-1", error_code="InternalFailure"),
+                _cloudtrail_event(request_id="tdg-1"),
+            ],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["matched_event_count"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 1
+        assert finding.evidence["failed_matched_event_count"] == 1
+
+    def test_acgr_failover_successful_match_with_incomplete_pagination_returns_pass(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+        )
+        base_side_effect = mock_aws_client_factory.call_api_with_resilience.side_effect
+
+        def _repeated_token_side_effect(client, op_name, service, **kwargs):
+            if op_name != "lookup_events":
+                return base_side_effect(client, op_name, service, **kwargs)
+            return {
+                "Events": [_cloudtrail_event(request_id="tdg-1")],
+                "NextToken": "repeated-token",
+            }
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _repeated_token_side_effect
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["evidence_complete"] is False
+        assert finding.evidence["pagination_complete"] is False
+        assert finding.evidence["pages_scanned"] == 2
+        assert finding.evidence["limitations"]
+        assert "incomplete" in finding.description.lower()
+
+    def test_acgr_failover_no_success_with_incomplete_pagination_returns_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+        )
+        base_side_effect = mock_aws_client_factory.call_api_with_resilience.side_effect
+
+        def _repeated_token_side_effect(client, op_name, service, **kwargs):
+            if op_name != "lookup_events":
+                return base_side_effect(client, op_name, service, **kwargs)
+            return {
+                "Events": [_cloudtrail_event(request_id="tdg-unrelated")],
+                "NextToken": "repeated-token",
+            }
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _repeated_token_side_effect
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["evidence_complete"] is False
+        assert finding.evidence["pagination_complete"] is False
+        assert finding.evidence["pages_scanned"] == 2
+        assert finding.evidence["successful_matched_event_count"] == 0
+
+    def test_acgr_failover_mixed_and_malformed_events_record_counts(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+            cloudtrail_events=[
+                _cloudtrail_event(request_id="tdg-1"),
+                _cloudtrail_event(resource_names=["tdg-unrelated"]),
+                _cloudtrail_event(malformed=True),
+                {"EventName": "UpdateTrafficDistribution"},
+            ],
+        )
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["candidate_event_count"] == 4
+        assert finding.evidence["matched_event_count"] == 1
+        assert finding.evidence["unrelated_event_count"] == 1
+        assert finding.evidence["malformed_event_count"] == 2
+        assert finding.evidence["matched_tdgs"] == ["tdg-1"]
+
+    def test_acgr_failover_matching_event_on_second_page_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        _program_acgr_apis(
+            mock_aws_client_factory,
+            tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
+        )
+        base_side_effect = mock_aws_client_factory.call_api_with_resilience.side_effect
+
+        def _paginated_side_effect(client, op_name, service, **kwargs):
+            if op_name != "lookup_events":
+                return base_side_effect(client, op_name, service, **kwargs)
+            if kwargs.get("NextToken") is None:
+                return {
+                    "Events": [_cloudtrail_event(request_id="tdg-unrelated")],
+                    "NextToken": "page-2",
+                }
+            return {"Events": [_cloudtrail_event(request_id="tdg-1")]}
+
+        mock_aws_client_factory.call_api_with_resilience.side_effect = _paginated_side_effect
+
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["candidate_event_count"] == 2
+        assert finding.evidence["matched_event_count"] == 1
+        lookup_calls = [
+            call
+            for call in mock_aws_client_factory.call_api_with_resilience.call_args_list
+            if call.args[1] == "lookup_events"
+        ]
+        assert len(lookup_calls) == 2
+        assert lookup_calls[1].kwargs["NextToken"] == "page-2"
+
+    def test_acgr_failover_without_scoped_events_fails(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
             tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
             cloudtrail_events=[],
         )
-        finding = ACGRFailoverTestCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
-        assert (
-            "not been tested" in finding.description.lower()
-            or "no updatetrafficdistribution" in finding.description.lower()
-        )
 
-    def test_cloudtrail_denied_skips(self, make_check_context, mock_aws_client_factory):
+        # Act
+        finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["matched_event_count"] == 0
+
+    def test_acgr_failover_cloudtrail_access_denied_is_skipped(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         _program_acgr_apis(
             mock_aws_client_factory,
             tdgs=[{"Id": "tdg-1", "Name": "prod-tdg", "Arn": "arn:...:tdg/tdg-1"}],
             access_denied_on={"lookup_events"},
         )
+
+        # Act
         finding = ACGRFailoverTestCheck().execute(make_check_context())
+
+        # Assert
         assert finding.status == CheckStatus.SKIPPED
         assert "cloudtrail:LookupEvents" in finding.evidence.get("required_permission", "")
 
@@ -500,43 +877,170 @@ class TestACGRPhoneNumberBindingCheck:
 
 
 # ---------------------------------------------------------------------------
-# CloudWatch alarm coverage (res-cloudwatch-001) — unchanged
+# CloudWatch alarm coverage (res-cloudwatch-001)
 # ---------------------------------------------------------------------------
 
 
 class TestCloudWatchAlarmMonitoringCheck:
-    def test_no_alarms_fails(self, make_check_context, mock_aws_client_factory):
+    def test_cloudwatch_alarm_inventory_without_alarms_fails(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": []}
-        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
 
-    def test_partial_coverage_fails(self, make_check_context, mock_aws_client_factory):
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["missing_metrics"] == list(_REQUIRED_VOICE_METRICS)
+
+    def test_cloudwatch_dimensionless_alarm_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        alarms[0]["Dimensions"] = []
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["missing_or_wrong_dimension_candidate_count"] == 1
+        assert "ConcurrentCalls" in finding.evidence["missing_metrics"]
+
+    def test_cloudwatch_wrong_instance_alarm_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        alarms[0] = _valid_connect_alarm("ConcurrentCalls", instance_id="other-instance")
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["wrong_instance_candidate_count"] == 1
+        assert "ConcurrentCalls" in finding.evidence["missing_metrics"]
+
+    def test_cloudwatch_wrong_metric_group_alarm_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        alarms[0]["Dimensions"][1]["Value"] = "Chats"
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["missing_or_wrong_dimension_candidate_count"] == 1
+        assert "ConcurrentCalls" in finding.evidence["missing_metrics"]
+
+    def test_cloudwatch_actionless_alarm_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        alarms[0]["AlarmActions"] = ["  "]
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["no_action_candidate_count"] == 1
+        assert "ConcurrentCalls" in finding.evidence["missing_metrics"]
+
+    def test_cloudwatch_disabled_alarm_is_rejected(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        alarms[0]["ActionsEnabled"] = False
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["disabled_candidate_count"] == 1
+        assert "ConcurrentCalls" in finding.evidence["missing_metrics"]
+
+    def test_cloudwatch_composite_alarm_without_metric_alarm_fails(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
         _wire(mock_aws_client_factory)
         mock_aws_client_factory.describe_alarms_resilient.return_value = {
-            "MetricAlarms": [
-                {"Namespace": "AWS/Connect", "MetricName": "ConcurrentCalls"},
-            ]
+            "MetricAlarms": [],
+            "CompositeAlarms": [
+                {
+                    "AlarmName": "connect-composite",
+                    "AlarmRule": 'ALARM("ConcurrentCalls-alarm")',
+                }
+            ],
         }
-        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
-        assert finding.status == CheckStatus.FAIL
-        assert "missing" in finding.description.lower()
 
-    def test_full_coverage_passes(self, make_check_context, mock_aws_client_factory):
-        _wire(mock_aws_client_factory)
-        alarms = [
-            {"Namespace": "AWS/Connect", "MetricName": m}
-            for m in (
-                "ConcurrentCalls",
-                "ConcurrentCallsPercentage",
-                "ThrottledCalls",
-                "MissedCalls",
-                "CallsPerInterval",
-            )
-        ]
-        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+        # Act
         finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["composite_alarm_count"] == 1
+        assert finding.evidence["covered_metrics"] == []
+
+    def test_cloudwatch_valid_instance_alarm_coverage_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        alarms = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS]
+        mock_aws_client_factory.describe_alarms_resilient.return_value = {"MetricAlarms": alarms}
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
         assert finding.status == CheckStatus.PASS
+        assert finding.evidence["covered_metrics"] == sorted(_REQUIRED_VOICE_METRICS)
+        assert "does not prove" in finding.description.lower()
+
+    def test_cloudwatch_valid_coverage_on_second_page_passes(
+        self, make_check_context, mock_aws_client_factory
+    ):
+        # Arrange
+        _wire(mock_aws_client_factory)
+        page_one = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS[:2]]
+        page_two = [_valid_connect_alarm(metric) for metric in _REQUIRED_VOICE_METRICS[2:]]
+        mock_aws_client_factory.describe_alarms_resilient.side_effect = [
+            {"MetricAlarms": page_one, "NextToken": "page-2"},
+            {"MetricAlarms": page_two},
+        ]
+
+        # Act
+        finding = CloudWatchAlarmMonitoringCheck().execute(make_check_context())
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert mock_aws_client_factory.describe_alarms_resilient.call_count == 2
+        second_call = mock_aws_client_factory.describe_alarms_resilient.call_args_list[1]
+        assert second_call.kwargs["NextToken"] == "page-2"
+        assert finding.evidence["covered_metrics"] == sorted(_REQUIRED_VOICE_METRICS)
 
 
 # ---------------------------------------------------------------------------
@@ -589,13 +1093,15 @@ class TestCarrierDiversityCheck:
 # Reviewer feedback: (1) AWS's built-in "Sample ..." flows ship with
 # literal phone numbers by design and shouldn't be flagged as a customer
 # defect; (2) hardcoding is a normal pattern in contact centers, so the
-# check is now LOW severity with framing as an observation, not a defect
-# to fix (status/threshold logic is unchanged).
+# check is LOW severity and always reports complete literal inventory as PASS.
 # ---------------------------------------------------------------------------
 
 
 class TestHardcodedRoutingCheck:
-    def test_many_hardcoded_destinations_fails(self, make_check_context, sample_connect_instance):
+    def test_hardcoded_literals_inventory_passes_expected_result(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Arrange
         actions = [
             build_action(
                 f"a{i}",
@@ -606,12 +1112,16 @@ class TestHardcodedRoutingCheck:
         ]
         flow = build_contact_flow(actions)
         inst = _instance_with_flow(sample_connect_instance, flow)
+
+        # Act
         finding = HardcodedRoutingCheck().execute(make_check_context(instance=inst))
-        assert finding.status == CheckStatus.FAIL
-        assert "hardcoded" in finding.description.lower()
-        # phone numbers are masked in evidence
-        for d in finding.evidence.get("hardcoded_details", []):
-            assert d["hardcoded_value"].startswith("***")
+
+        # Assert
+        assert finding.status == CheckStatus.PASS
+        assert finding.evidence["hardcoded_count"] == 5
+        assert "threshold" not in finding.description.lower()
+        for detail in finding.evidence["hardcoded_details"]:
+            assert detail["hardcoded_value"].startswith("***")
 
     def test_dynamic_references_pass(self, make_check_context, sample_connect_instance):
         flow = build_contact_flow(
@@ -639,15 +1149,14 @@ class TestHardcodedRoutingCheck:
         )
         inst = _instance_with_flow(sample_connect_instance, flow)
         finding = HardcodedRoutingCheck().execute(make_check_context(instance=inst))
-        # Threshold is >3; 1 hardcoded should pass.
+        # One observed literal is still an informational PASS.
         assert finding.status == CheckStatus.PASS
 
     def test_sample_flows_excluded_from_hardcoded_count(
         self, make_check_context, sample_connect_instance
     ):
-        # A default "Sample ..." flow with 5 hardcoded numbers would trip
-        # the >3 threshold on its own — but it's AWS's own demo content,
-        # not something the customer authored, so it must not count.
+        # A default "Sample ..." flow with literal numbers is excluded because
+        # it is AWS demo content, not customer-authored configuration.
         sample_actions = [
             build_action(
                 f"s{i}",
@@ -671,8 +1180,7 @@ class TestHardcodedRoutingCheck:
             [("Sample AB test", sample_flow), ("My Custom Flow", customer_flow)],
         )
         finding = HardcodedRoutingCheck().execute(make_check_context(instance=inst))
-        # Only the 1 hardcoded destination in the customer flow counts;
-        # the sample flow's 5 are excluded, so this stays under threshold.
+        # Only the one literal destination in the customer flow counts.
         assert finding.status == CheckStatus.PASS
         assert finding.evidence["flows_analyzed"] == 1
         assert finding.evidence["sample_flows_excluded"] == 1

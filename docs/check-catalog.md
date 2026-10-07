@@ -1,270 +1,270 @@
 # Amazon Connect Customer Posture Assessment Tool — Check Catalog
 
-59 registered checks across 5 AWS Well-Architected pillars, plus 4 Caller Journey Mapping findings produced by a separate pipeline (see the Caller Journey Mapping section below — these are not returned by `--list-checks`, which only enumerates the check-registry checks). Every check returns one of five statuses:
+The assessment has **64 canonical controls** in one catalog. The catalog contains
+60 `BaseCheck` executors and 4 Journey-backed executors. Every selected control
+produces one outcome per assessed Amazon Connect Customer instance when the
+control applies to that execution path.
 
-- **Pass** — the check evaluated the instance and did not find a problem
-- **Fail** — the check evaluated the instance and found a problem to remediate
-- **Not Applicable** — the check evaluated and determined it does not apply to this instance (for example, an ACGR audit check when ACGR is not configured). N/A findings are excluded from the pass-rate denominator and rendered with a neutral badge
-- **Skipped** — the check could not complete because a required permission, API response, discovery page, lookup, or stable resource state was unavailable. Partial evidence is retained and is never interpreted as an unqualified pass
-- **Error** — the check raised an unexpected exception; treat as a bug report
+The catalog has 23 `CONTROL`, 25 `MANUAL_REVIEW`, and 16 `INFORMATIONAL`
+records. The pillar totals are Security 19, Resilience 18, Cost Optimization 16,
+Operational Excellence 8, and Performance Efficiency 3.
 
-Run `amazon-connect-assessment --list-checks` for the live list at any time.
+Run `amazon-connect-assessment --list-checks` to see the same unified catalog.
+Journey-backed controls appear in that output and use the same filters as
+BaseCheck controls.
 
-## Table of Contents
+## Status and disposition
 
-- [Security](#security--19-checks)
-- [Resilience](#resilience--16-checks)
-- [Caller Journey Map](#caller-journey-map-report-section-not-a-check)
-- [Cost Optimization](#cost-optimization--15-checks)
-- [Operational Excellence](#operational-excellence--6-checks)
-- [Performance Efficiency](#performance-efficiency--3-checks)
-- [Caller Journey Mapping](#caller-journey-mapping--4-findings)
-  - [How the pipeline works](#how-the-pipeline-works)
-  - [Tier classification](#tier-classification)
-  - [Configuration](#configuration)
-- [Skipped findings](#skipped-findings)
-- [Permissions](#permissions)
-- [Running a subset of checks](#running-a-subset-of-checks)
+`CheckStatus` describes what happened when the executor ran:
 
----
+- **Pass**: evaluation completed and did not find the control's root condition.
+- **Fail**: evaluation completed and found the root condition.
+- **Not Applicable**: evaluation completed, but the control did not apply to the
+  instance. This result is excluded from the scored-control denominator.
+- **Skipped**: evaluation could not complete because evidence, permission, or a
+  stable resource state was unavailable. Partial evidence is retained.
+- **Error**: an unexpected execution failure occurred. Treat this as an
+  unevaluated result and investigate the error.
 
-## Security — 19 checks
+Disposition describes how to interpret that outcome. It is separate from
+`CheckStatus`:
 
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `security-iam-001` | Critical | Amazon Connect Customer service role follows least privilege — no wildcard actions, no out-of-scope services |
-| `sec-toll-fraud-001` | Critical | Contact flows that transfer to dynamically-determined phone numbers without a validation step (toll fraud vector) |
-| `sec-iam-deep-001` | High | Inline and attached policies on the Amazon Connect Customer service role — flags least-privilege violations |
-| `sec-storage-001` | High | Each storage config (recordings, transcripts, CTRs, reports) has encryption enabled, preferring CMKs |
-| `sec-origins-001` | High / Low | Approved origins allowlist is a domain allowlist for CCP embedding. FAIL at HIGH for wildcards / localhost / broad entries. FAIL at LOW when no allowlist is set — a defect only for customers embedding CCP in a custom agent app; otherwise the safe default. |
-| `sec-cloudtrail-001` | High | At least one CloudTrail trail captures Connect management events for audit completeness |
-| `sec-profile-audit-001` | High | Non-administrator security profiles don't grant admin-level capabilities |
-| `sec-prompt-inject-001` | Medium | Reviews reachable SSML prompts with non-system dynamic references and plain-text prompts in agent/other-audience flow types. A failure means the source, allowed characters, XML escaping, and Error branch need review; it is **not** proof of attacker control or a working injection. `$.Attributes.*` remains unknown until its writer is traced. Connect system attributes, `$.StoredCustomerInput` (DTMF), and `$.CustomerEndpoint.Address` are excluded; generic plain-text dynamic prompts are retained as informational evidence. The security risk exists only when arbitrary text reaches a prompt unescaped and can manipulate trusted instructions or send invalid SSML down an unsafe Error branch. The check does not test Amazon Connect or Polly at runtime and does not imply code execution or account takeover. |
-| `sec-sensitive-data-001` | High | Contact flows don't store PII or credentials in contact attributes (visible in CTRs and logs) |
-| `sec-pii-prompts-001` | High | Flows don't read back sensitive customer data (account numbers, SSN) in voice without masking |
-| `sec-excessive-agency-001` | High | Lambda functions invoked by contact flows don't have overly broad execution role permissions |
-| `ai-ops-guardrail-001` | High | Each associated Q in Connect assistant exposes at least one guardrail summary that is both ACTIVE and PUBLISHED, **and** every AI agent bound to that assistant references a guardrail in its own configuration. Attachment is read from `GetAssistant.aiAgentConfiguration` (the agents actually serving traffic) joined to each agent's `*AIGuardrailId` in `ListAIAgents`. A version-pinned or SYSTEM binding that `ListAIAgents` does not return is read individually with `GetAIAgent`; if it still cannot be read the check is **Skipped**, never Passed, because the claim it makes covers every bound agent. The three `EMAIL_*` agent types have no guardrail member in the API, so they are excluded rather than failed: an assistant bound *only* to those agent types is not failed for having no published guardrail, because the remediation ("attach it to each agent") would be impossible there. An assistant with no bound agents at all is still assessed — an empty `aiAgentConfiguration` means Q in Connect serves the caller with its default agents, which do take a guardrail. Does not prove which content, denied-topic, word, or sensitive-information filters a referenced guardrail applies. |
-| `security-data-001` | Medium | Data retention policies, access logging, and privacy controls are configured |
-| `sec-lambda-validation-001` | Medium | Contact flows that branch on Lambda return values validate the response shape before branching |
-| `sec-lex-convlogs-001` | Medium | Amazon Lex V2 conversation logging for the bots associated with the instance. FAILs when audio logging writes caller recordings to S3 with no `kmsKeyArn`, so access to the recordings is not gated by a key policy you control. Text logging is reported as inventory, not judged: `CloudWatchLogGroupLogDestination` has no KMS member, so whether the log group is encrypted is not knowable from Lex — the finding says so and points at `logs:DescribeLogGroups`. Returns Not Applicable when no Lex V2 bot is associated, naming any Lex V1 bot found. **Lex V1 conversation logs are not evaluated.** |
-| `ai-ops-encryption-001` | Medium | Associated Q in Connect assistants and knowledge bases report a customer-managed KMS key in `serverSideEncryptionConfiguration.kmsKeyId` via `wisdom:GetAssistant` and `wisdom:GetKnowledgeBase` |
-| `sec-federation-001` | Low | Reports identity management type as an informational prompt — SAML federation and Connect-managed identity paired with a third-party IdP (Okta, Entra ID) for MFA are both viable; this doesn't mandate one |
-| `sec-flow-auth-001` | Low | Contact flows routing to agent queues without an upstream authentication step — optional and depends on whether the destination queue exposes sensitive account operations; AWS's default sample flows are excluded |
-| `cx-personalization-001` | Low | Personalization patterns and transfer types per flow (CX quality signal, informational) |
+- **CONTROL**: a pass or fail can affect posture scoring.
+- **MANUAL_REVIEW**: the result identifies a review candidate. It does not prove
+  that a defect, risk, or savings opportunity exists.
+- **INFORMATIONAL**: the result is inventory or context. It does not assert a
+  required change.
 
-**Note on removed security checks:** six checks have been removed rather than left in the registry. Two emitted HIGH-severity failures without inspecting the thing they claimed to check; two duplicated a check that already measured the same condition; two could not tell a healthy configuration from a broken one.
+Only `CONTROL` records with `Pass` or `Fail` enter the score. The numerator is
+passed controls. The denominator is passed controls plus failed controls.
+Skipped controls and errors are unevaluated. Not Applicable records,
+manual-review records, and informational records do not enter the denominator.
+A report with no scored controls shows **Not scored**, not 100%.
 
-*Placeholders that shipped as findings:*
+## Canonical identity and evidence contract
 
-* `security-encryption-001` (`EncryptionConfigurationCheck`) failed HIGH for every S3 or Lambda integration with the string "requires encryption validation" — but it never fetched the buckets' encryption configuration or the functions' environment encryption. It was a placeholder that shipped as a finding. Real signal now comes from `sec-storage-001`, which actually calls `ListInstanceStorageConfigs` and checks each storage type's encryption settings.
-* `security-network-001` (`NetworkSecurityCheck`) failed HIGH for `CONNECT_MANAGED` identity ("ensure strong password policies") and for having both inbound + outbound calling enabled ("ensure proper access controls"). Neither is a network-security defect — the first is an identity choice, the second is the majority Amazon Connect Customer deployment shape. The check inspected zero actual network configuration. Identity-federation posture is now covered by `sec-federation-001`, which is honest about being an identity check and, per reviewer feedback, no longer implies SAML is the only acceptable option — Connect-managed identity paired with a third-party IdP for MFA is also viable.
+Each catalog record owns one canonical control ID and one canonical root
+condition. A root condition cannot belong to two controls. Each emitted outcome
+uses the canonical ID, even when a user selected the control through a legacy
+alias.
 
-*Duplicates of checks that already measure the condition:*
+`journey-sec-001` and `journey-cost-001` remain accepted as input aliases for
+backward compatibility:
 
-* `sec-output-handling-001` (`OutputHandlingInjectionCheck`) produced no detection that another check did not already report. Its "external data → prompt" arm duplicated the dynamic-prompt candidates now reviewed by `sec-prompt-inject-001`; its "external data → dynamic transfer" arm used the same `_is_dynamic_reference` test as `sec-toll-fraud-001`, which reports those transfers at CRITICAL. Every path it found was a second finding for a condition already on the report.
-* `sec-ai-lambda-001` (`LambdaAIPathwayCheck`) took the same input as `sec-excessive-agency-001` (Lambda ARNs harvested from flow content), concerned the same subject (execution-role privilege), and recommended the same fix (scope the role down) — but it name-matched the ARN and asked the reader to go review the role, where `sec-excessive-agency-001` resolves the role and reads its inline policies. A weaker duplicate of a check that already measures the thing.
+- `journey-sec-001` resolves to `sec-flow-auth-001`.
+- `journey-cost-001` resolves to `cost-containment-001`.
 
-*Unable to distinguish a healthy configuration from a broken one:*
+The aliases are never emitted in findings, `--list-checks`, JSON, CSV, or the
+catalog. `journey-res-001` and `journey-scope-001` are canonical IDs.
 
-* `sec-ai-lex-001` (`LexBotGuardrailCheck`) failed every Lex integration it found, unconditionally, because it could not read a bot's configuration. A deployment with correctly guarded bots received the same HIGH finding as one with none, which makes the finding unactionable. Reimplementing it requires intent and slot configuration (`lex:ListIntents`, `lex:DescribeIntent`, `lex:ListSlots`, `lex:DescribeSlot`) — read-only APIs that this policy does not currently grant. **Amazon Lex guardrail posture is therefore not currently assessed.** What *is* assessed is where a bot's conversations end up: `sec-lex-convlogs-001` reads `conversationLogSettings` at the alias level, which needs only `lex:DescribeBotAlias` — already granted.
-* `sec-ai-cascade-001` (`MultiAICascadeCheck`) asked a sound question — whether one model's output becomes the next model's input with nothing validating in between — but identified AI stages by substring-matching the Lambda ARN against hints including `"ai"` and `"ml"`. Those match unrelated function names such as `ClaimLookup`, `EmailHandler`, or `HtmlFormatter`, while any AI Lambda whose name does not advertise itself was missed entirely: both false positives and false negatives from the same heuristic. Reimplementing it means deriving AI involvement from the execution role's granted actions, the way `sec-excessive-agency-001` already resolves roles — which needs no additional permissions.
+Each outcome carries the catalog's pillar, default severity, disposition, and
+methodology. The methodology fields are:
 
----
+- **reason**: why the question is assessed;
+- **evidence source**: the API, configuration, or path evidence inspected;
+- **proof limitations**: what the evidence cannot establish;
+- **developer/admin meaning**: how to interpret the result;
+- **verification criteria**: what closes the control or review;
+- optional **responsible function** and **primary lens reference**.
 
-## Resilience — 16 checks
+This evidence contract distinguishes measured proof from review candidates and
+inventory. A `Fail` on a manual-review record remains a candidate for human
+validation. A `Pass` on an informational record means inventory completed.
 
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `res-acgr-config-001` | Low | Discovery only: reports whether [Connect Customer Global Resiliency](https://docs.aws.amazon.com/connect/latest/adminguide/get-started-connect-global-resiliency.html) (ACGR) is configured. Returns **Not Applicable** for instances without ACGR (~95% of deployments), so those reports show nothing about ACGR at all. When ACGR is present, the five `res-acgr-*` audit checks below verify each aspect. |
-| `res-acgr-identity-001` | High | When ACGR is configured, the instance uses SAML 2.0 identity management. Agents can only fail over via Global Sign-in, which requires SAML — CONNECT_MANAGED and EXISTING_DIRECTORY leave agents stranded on failover. |
-| `res-acgr-tdg-status-001` | High | When ACGR is configured, every traffic distribution group is in ACTIVE status. Non-ACTIVE TDGs (CREATION_FAILED, PENDING_DELETION, etc.) cannot serve failover traffic. |
-| `res-acgr-traffic-dist-001` | High | When ACGR is configured, traffic is distributed across regions rather than pinned 100% to one region. A 100/0 split leaves the standby region unexercised. |
-| `res-acgr-failover-test-001` | High | When ACGR is configured, CloudTrail shows at least one `UpdateTrafficDistribution` event in the last 90 days — evidence the failover path has been exercised recently. |
-| `res-acgr-numbers-001` | High | When ACGR is configured, inbound phone numbers are claimed against a TDG ARN rather than the instance ARN. Numbers bound directly to the instance do not fail over. |
-| `res-cloudwatch-001` | High | CloudWatch alarms exist for critical Connect metrics (ConcurrentCalls, ThrottledCalls, MissedCalls, CallsPerInterval) |
-| `res-quota-headroom-001` | High | Peak concurrent calls over the last 30 days against the concurrent-active-calls quota. Fails above 80% utilization and escalates to Critical above 95%. **Not Applicable** when the instance carried no call traffic in the window. |
-| `res-quota-growth-001` | Medium | Least-squares trend on weekly peak concurrent calls over 90 days, projected against the concurrent-calls quota. The trend is fitted against each week's elapsed index, so a week with no datapoint widens the span rather than counting as the next consecutive week. Weekly buckets are measured backwards from the end of the window, so the most recent bucket always covers a full seven days and the short remainder falls at the old end, where it is dropped rather than under-reporting a peak. The projection starts from the *fitted* level at the latest observed week, not that week's raw peak, so one quiet or spiky final week cannot move the runway. Fails when the ceiling is within 26 weeks (High within 13). **Not Applicable** below four weeks of data, and also when the most recent datapoint is more than 14 days old — a trend that has stopped running is history, and projecting a deadline from it states a date that may already have passed. |
-| `res-quota-config-001` | Medium | Users, queues, routing profiles, security profiles, flows, and claimed phone numbers against their per-instance quotas, resolved **per instance**: a resource-level applied quota (matched on the instance ARN or ID in `QuotaContext.ContextId`) outranks the account-level applied value, which outranks the AWS default. Two instances in one region can therefore sit under different ceilings. Fails above 80% utilization on any subject. Users are counted from `connect:ListUsers` and claimed numbers from `connect:ListPhoneNumbersV2`; the rest come from instance discovery, where an empty collection is reported as *unmeasured* rather than as 0% — a count of zero there means discovery was denied, not that the instance is empty. A paginated count that hits its page bound with pages still outstanding is also *unmeasured*, with the reason recorded: a partial count over a quota is a utilization figure that can only be too low, which is the direction that turns a breach into a PASS. If the Service Quotas listing itself is truncated the whole check is **Skipped**, because an applied value may be missing for a quota whose default was read. |
-| `res-flow-errors-001` | High | Error-capable actions in contact flows have defined error transitions (no dead-end paths) |
-| `res-carrier-diversity-001` | Medium | Phone numbers span more than one country, or a traffic distribution group is present. FAIL remediation points to Amazon Connect Global Resiliency (ACGR) rather than claiming numbers in another country, which is rarely realistic |
-| `res-flow-loops-001` | Medium | No unbounded cycle patterns in contact flows that could trap callers |
-| `res-lambda-dependency-001` | Medium | Evaluates every reachable Lambda call site independently and flags a VPC-attached function invocation that lacks an error transition. Unreachable calls are ignored; dynamic references, lookup failures, and partial analysis prevent an unqualified PASS, while a known risk remains FAIL with the limitations recorded. |
-| `res-hardcoded-routing-001` | Low | Observational note on customer-authored flows using literal phone numbers/ARNs instead of a contact attribute reference — hardcoding is a normal, common pattern in contact centers, not a defect; AWS's default sample flows are excluded from the count |
-| `ai-ops-cross-region-001` | Low | For instances with a Q assistant integration, reports system-defined Bedrock inference profiles in the account/region as planning context. The result proves availability only, not that the Q workload uses cross-region inference; without a Q assistant integration, the check is Not Applicable. |
+## Unified catalog
 
-**About the `res-acgr-*` set:** the six checks work together. When ACGR is configured, `res-acgr-config-001` returns PASS with the TDG names in the evidence, and the five audit sub-checks evaluate identity, TDG status, traffic distribution, failover testing, and phone-number binding. When ACGR is not configured, every check in the set returns **Not Applicable** — instances without ACGR see no findings, no observations, no clutter about ACGR at all. This deliberate design means the tool never nags customers who don't need ACGR, but catches half-configured ACGR — which is worse than no ACGR because the customer believes they have DR that they do not have.
+### Security — 19 controls
 
-**About the `res-quota-*` set:** these are capacity checks, and they live under Resilience rather than in a separate capacity pillar because Well-Architected already covers this ground — REL01 is "Manage Service Quotas and Constraints", and REL01-BP06 is specifically "ensure sufficient gap between quota and maximum usage". They matter because Connect's per-instance limits are hard, are invisible in the Connect console, and fail as an outage rather than as a slowdown: callers get busy signals once concurrent calls are capped, and administrators cannot create users, queues, or flows once those ceilings are reached. All three read AWS default quotas as well as applied quotas, because an instance that has never requested an increase has no applied quota at all — and that is the population most likely to be near a ceiling.
+| Control ID | Name | Severity | Disposition | Executor |
+|---|---|---|---|---|
+| `security-iam-001` | IAM Service Role Presence and ARN Format | Critical | Control | BaseCheck |
+| `security-data-001` | User Security Profile Assignment | Medium | Control | BaseCheck |
+| `sec-iam-deep-001` | IAM Service Role Policy Inspection | High | Control | BaseCheck |
+| `sec-storage-001` | Instance Storage Encryption Check | High | Control | BaseCheck |
+| `sec-origins-001` | Approved Origins / CCP Access Control Check | High | Manual Review | BaseCheck |
+| `sec-cloudtrail-001` | CloudTrail Connect Management Write-Event Coverage | High | Control | BaseCheck |
+| `sec-federation-001` | Identity Federation / MFA Check | Low | Informational | BaseCheck |
+| `sec-profile-audit-001` | Security Profile Permissions Audit | High | Manual Review | BaseCheck |
+| `ai-ops-guardrail-001` | Q in Connect AI Guardrail Coverage | High | Control | BaseCheck |
+| `ai-ops-encryption-001` | Q in Connect Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
+| `sec-lex-convlogs-001` | Lex Conversation Log Encryption | Medium | Control | BaseCheck |
+| `sec-prompt-inject-001` | Potential Unsafe Dynamic Content in Prompts | Medium | Manual Review | BaseCheck |
+| `sec-lambda-validation-001` | Lambda Branch Default Fallback Review | Medium | Manual Review | BaseCheck |
+| `sec-toll-fraud-001` | External Transfer Toll Fraud Risk | Critical | Manual Review | BaseCheck |
+| `sec-sensitive-data-001` | Sensitive Data in Contact Attributes | High | Manual Review | BaseCheck |
+| `sec-pii-prompts-001` | PII Exposure in Voice Prompts | High | Manual Review | BaseCheck |
+| `sec-excessive-agency-001` | Excessive Agency / Lambda Identity-Policy Scope | High | Control | BaseCheck |
+| `sec-flow-auth-001` | Contact Flow Authentication Pattern | Low | Manual Review | Journey |
+| `cx-personalization-001` | Personalization & Transfer Analysis | Low | Informational | BaseCheck |
 
-**Note on removed resilience checks:** three earlier checks (`resilience-multi-az-001`, `resilience-dr-001`, and `resilience-failover-001`) were removed after user feedback that they fired on trivially-true conditions and asserted things the tool cannot verify — contact-flow export cadence, multi-AZ configuration that AWS manages automatically, and routing-profile counts (having only one routing profile isn't a resilience deficiency; it's a deployment shape). Substantive resilience signal now lives in the `res-acgr-*` set and the flow-content checks in `contact_flow_behavior_checks.py`.
+`sec-storage-001` returns PASS only when every returned destination has verified encryption
+and every storage-type read completes. A failed read or a Kinesis stream destination whose
+encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
+FAIL. If no storage configuration is returned, the control is not applicable.
 
----
+### Resilience — 18 controls
 
-## Caller Journey Map (report section, not a check)
+| Control ID | Name | Severity | Disposition | Executor |
+|---|---|---|---|---|
+| `ai-ops-cross-region-001` | Bedrock Cross-Region Inference Availability | Low | Informational | BaseCheck |
+| `res-quota-config-001` | Configuration Object Quota Utilization | Medium | Control | BaseCheck |
+| `res-quota-headroom-001` | Concurrent Calls Quota Headroom | High | Control | BaseCheck |
+| `res-quota-growth-001` | Call Volume Growth Against Quota | Medium | Control | BaseCheck |
+| `res-acgr-config-001` | Amazon Connect Global Resiliency Configuration | Low | Informational | BaseCheck |
+| `res-acgr-identity-001` | ACGR Identity Management (SAML required) | High | Control | BaseCheck |
+| `res-acgr-tdg-status-001` | ACGR Traffic Distribution Group Status | High | Control | BaseCheck |
+| `res-acgr-traffic-dist-001` | ACGR Traffic Distribution Inventory | High | Informational | BaseCheck |
+| `res-acgr-failover-test-001` | ACGR Failover Testing Evidence | High | Control | BaseCheck |
+| `res-acgr-numbers-001` | ACGR Phone Number Binding | High | Manual Review | BaseCheck |
+| `res-cloudwatch-001` | CloudWatch Alarm Coverage | High | Control | BaseCheck |
+| `res-carrier-diversity-001` | Phone Number Carrier Diversity | Medium | Informational | BaseCheck |
+| `res-hardcoded-routing-001` | Hardcoded Routing Configuration | Low | Informational | BaseCheck |
+| `res-lambda-dependency-001` | Lambda Error Routing Completeness | Medium | Control | BaseCheck |
+| `res-acxd-error-routing-001` | Agentic CX Error and Idle-Timeout Routing | High | Control | BaseCheck |
+| `res-flow-errors-001` | Non-Lambda Error Routing Completeness | High | Control | BaseCheck |
+| `res-flow-loops-001` | Contact Flow Loop Detection | Medium | Control | BaseCheck |
+| `journey-res-001` | Dead-End Caller Path | High | Control | Journey |
 
-The HTML report includes an interactive **Caller Journey Map** section for contact flows callers can actually reach. This is a **phone-number-first** view: the assessment enumerates claimed numbers and resolves each number's assigned flow with `connect:ListFlowAssociations`, matching association `ResourceId` to `PhoneNumberArn` across the supported voice, SMS, and WhatsApp phone-number resource types. It does not infer the flow from `ListPhoneNumbersV2.TargetArn`; that field identifies the Connect instance or traffic distribution group that receives inbound traffic, not the flow selected in the console.
+### Cost Optimization — 16 controls
 
-Flows that are not associated with an inbound number (subflows, test flows, internal transfer targets, and AWS-provided defaults) are excluded from this report section. Numbers associated with a queue, agent, or no flow are omitted because there is no contact-flow diagram to render. Entries are sorted deterministically by instance display name and phone number. There is no metric-based ranking or top-N cap; every renderable flow-bound number is included, while a flow shared by multiple numbers is rendered once per instance and reused.
+| Control ID | Name | Severity | Disposition | Executor |
+|---|---|---|---|---|
+| `cost-unused-001` | Unused Resources Check | Low | Manual Review | BaseCheck |
+| `cost-inefficient-001` | Inefficient Resource Allocation Check | Medium | Manual Review | BaseCheck |
+| `cost-oversized-001` | Oversized Configuration Check | Low | Manual Review | BaseCheck |
+| `cost-usage-metrics-001` | CloudWatch Usage Metrics Analysis | Medium | Manual Review | BaseCheck |
+| `cost-unused-numbers-001` | Claimed Phone Number Inventory | Medium | Informational | BaseCheck |
+| `cost-premium-features-001` | Premium Feature Enablement Inventory | Low | Informational | BaseCheck |
+| `cost-hours-mismatch-001` | Hours of Operation Inventory | Low | Informational | BaseCheck |
+| `ai-ops-model-cost-001` | AI Prompt Model Cost Review | Low | Manual Review | BaseCheck |
+| `cost-containment-001` | Self-Service Containment Analysis | High | Manual Review | Journey |
+| `cost-wait-time-001` | Queue Callback Availability Review | High | Manual Review | BaseCheck |
+| `cost-occupancy-001` | Agent Occupancy Monitoring Guidance | Medium | Informational | BaseCheck |
+| `cost-fcr-001` | Returning Caller Pattern Review | Medium | Manual Review | BaseCheck |
+| `cost-acw-001` | After-Contact-Work Monitoring Guidance | Low | Informational | BaseCheck |
+| `cost-data-continuity-001` | IVR-to-Agent Data Continuity | Medium | Manual Review | BaseCheck |
+| `cost-self-service-tier-001` | Legacy DTMF-Only Self-Service | Low | Manual Review | BaseCheck |
+| `journey-scope-001` | Dormant Flows Detected | Low | Manual Review | Journey |
 
-**Server-rendered projected map.** The CLI parses the contact flow and projects implementation-level actions into a smaller caller-focused model: caller-visible steps remain explicit, connected internal setup work becomes an inspectable group, duplicate physical transitions share a connector, and technical outcomes receive reader-facing labels. Python computes the deterministic left-to-right node positions and orthogonal connectors while generating the self-contained report. Browser code does not lay out the graph; it switches among already-rendered entries, applies interaction controls, and displays the inspector.
+### Operational Excellence — 8 controls
 
-Each card's color represents the customer experience:
+| Control ID | Name | Severity | Disposition | Executor |
+|---|---|---|---|---|
+| `ops-logging-001` | Contact Flow Logging | High | Control | BaseCheck |
+| `ops-early-media-001` | Early Media for Outbound Calls | Low | Manual Review | BaseCheck |
+| `ops-auto-resolve-001` | SSML Voice Locale Fallback (`AUTO_RESOLVE_BEST_VOICES`) | Low | Informational | BaseCheck |
+| `ai-ops-kb-sync-001` | Q in Connect Knowledge Base Lifecycle and Ingestion Health | Medium | Control | BaseCheck |
+| `ai-ops-bedrock-logging-001` | Bedrock Model Invocation Logging | Medium | Control | BaseCheck |
+| `ops-acxd-handoff-001` | Agentic CX Handoff Inventory | Low | Informational | BaseCheck |
+| `ops-acxd-escalation-001` | Agentic CX Escalation Path Review | Medium | Manual Review | BaseCheck |
+| `ops-unreachable-blocks-001` | Unreachable Contact Flow Blocks | Low | Manual Review | BaseCheck |
 
-| Category | Color | Examples |
-|---|---|---|
-| **speaks** | green | `PlayPrompt`, `MessageParticipant` |
-| **chooses** | blue | `GetUserInput`, `StoreCustomerInput`, `ConnectToLexBot` |
-| **waits** | yellow | `TransferToQueue`, `CreateCallback`, `Wait` |
-| **terminal** | red | `DisconnectParticipant`, `TransferParticipantToThirdParty`, `TransferToFlow` |
-| **processing** | gray dashed | `InvokeLambdaFunction`, `SetContactAttributes`, `CheckAttribute` |
+### Performance Efficiency — 3 controls
 
-**Interactive legibility.** Diagrams retain their computed native width instead of being compressed to the report panel. Readers can pan a wide map, zoom from 20% to 300%, or use **Fit to window** without relaying out or squishing nodes. Selecting a node or connector opens an inspector with the caller-facing summary, underlying scope, outcomes, and enriched queue or AI resource identity when available. Flows over 150 authored actions use a placeholder rather than an unreadable diagram.
+| Control ID | Name | Severity | Disposition | Executor |
+|---|---|---|---|---|
+| `perf-lambda-count-001` | Lambda Usage Structure Review | Low | Informational | BaseCheck |
+| `perf-sequential-lambda-001` | Sequential Lambda Invocations | Low | Manual Review | BaseCheck |
+| `perf-flow-complexity-001` | Contact Flow Structure Review | Low | Informational | BaseCheck |
 
-**Portable exports.** Every successfully rendered map can be downloaded as self-contained SVG, browser-generated PNG, or editable diagrams.net/draw.io XML derived from the same accepted server-side layout.
+## Connect-side Agentic CX execution
 
-**Configuration.** The HTML map has no `top_n` or metric-ranking setting — it renders every available flow-bound number. The `journey_map.max_paths_per_did`, `journey_map.max_depth`, and `journey_map.max_traffic_flows` settings below apply to the separate journey-scoring pipeline, not the HTML map renderer. `--skip-flow-analysis` (CLI) / `skip_flow_analysis: true` (config) disables both.
+The three Agentic CX controls inspect reachable
+`ConnectParticipantWithAgenticCX` actions in parsed customer-authored flows.
+They exclude Amazon default sample flows and aggregate one outcome per control
+and instance. `ops-acxd-handoff-001` inventories the reachable Connect-side
+workspace, application, and alias references plus optional feature presence and
+context-variable names; values are never retained. `ops-acxd-escalation-001`
+checks whether a reachable handoff has an authored condition operand whose
+case-insensitive exact token is `Escalation`. It reports missing exact tokens as
+manual-review candidates because the token does not prove that escalation
+succeeded or reached an agent at runtime, and human escalation depends on
+workload intent.
+`res-acxd-error-routing-001` requires `InputTimeLimitExceeded` and
+`NoMatchingError` routes. `NoMatchingCondition` is reported as the readable
+**Other outcome** branch but does not substitute for either required resilience
+route.
 
-**Required IAM.** `connect:ListPhoneNumbersV2` and `connect:ListFlowAssociations` (both already in the standard IAM policy artifacts) discover numbers and their assigned flows, with the existing read permissions fetching flow content. If either operation is denied, the report shows an empty-state explanation naming the missing permission rather than a partial map.
+The evidence retains flow/action identity, configured field names, and raw route
+tokens, but never context-variable values. Optional `ContextVariables`,
+`SpeechRecognitionConfiguration`, and `AudioFillerConfiguration` are inventoried
+without becoming required. A known defect fails even if another flow is
+incomplete. A clean incomplete scan is Skipped. Not Applicable is emitted only
+when complete analysis finds no reachable Agentic CX action. These controls call
+no Agentic CX APIs and cannot prove anything about application prompts, tools,
+logic, deployment, or runtime outcomes.
 
----
+## Hardcoded routing execution
 
-## Cost Optimization — 15 checks
+`res-hardcoded-routing-001` requires parsed customer-authored flow content, so
+`--skip-flow-analysis` excludes it from the selected execution plan. When flow
+analysis is enabled, it is an informational inventory control: a complete empty
+flow inventory reports `Pass` with zero observed literals, while observed
+literals remain review context rather than a scored failure. Incomplete parsing
+reports `Skipped` with the partial inventory retained. AWS sample flows are
+excluded and phone-number values are masked.
 
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `cost-containment-001` | High | Contact flows use self-service automation (IVR, bots, lookups) before routing to agents |
-| `cost-wait-time-001` | High | Flows routing to queues offer a callback option (reduces hold-time telephony costs) |
-| `cost-inefficient-001` | Medium | Unbalanced queue distributions and suboptimal routing configuration |
-| `cost-usage-metrics-001` | Medium | CloudWatch call volume over 30 days — flags unused or under-utilized instances |
-| `cost-unused-numbers-001` | Medium | Claimed phone numbers are listed for manual traffic verification because the available Connect metrics do not provide a per-number filter; evidence gives a supported worst-case monthly exposure, not measured savings |
-| `cost-occupancy-001` | Medium | Agent occupancy metrics are available — informational flag for staffing cost review |
-| `cost-fcr-001` | Medium | Contact flows perform returning-caller detection for routing optimization and FCR tracking |
-| `cost-data-continuity-001` | Medium | IVR data (DTMF, bot slots, Lambda lookups) is stored in contact attributes before queue transfer so agents don't re-ask — a real handle-time cost, since every unsaved input means a repeated question |
-| `cost-premium-features-001` | Low | Contact Lens, Wisdom, or Cases is enabled in instance attributes but appears unconfigured |
-| `cost-unused-001` | Low | Unused security profiles, routing profiles, or queues — an administrative-clarity observation, not a cost-savings estimate; Connect doesn't charge per profile/queue |
-| `cost-oversized-001` | Low | Security-profile/routing-profile/queue ratios relative to users — administrative-clarity observation, not a cost-savings estimate. (A prior "high contact flow count" heuristic was removed: AWS recommends more, smaller modular flows, so a high flow count is the expected shape, not a defect.) |
-| `cost-hours-mismatch-001` | Low | Hours of Operation vs. CloudWatch call volume patterns — flags scheduling mismatches |
-| `cost-acw-001` | Low | ACW duration monitoring — informational flag to review excessive after-call work time |
-| `cost-self-service-tier-001` | Low | Evaluates each reachable customer-authored route to an agent queue and identifies DTMF input without Lex on that same route. Lex on another branch does not suppress the opportunity; incomplete or capped analysis is reported as a limitation rather than a clean PASS. |
-| `ai-ops-model-cost-001` | Low | Reviews assistant-scoped model IDs from `wisdom:ListAIPrompts` for premium-family hints. A match is a workload-specific cost/quality review signal, not an unconditional recommendation to change models. |
+## Journey-backed execution
 
----
+The four Journey-backed controls use phone-number and contact-flow topology, but
+they are catalog records rather than a second findings model:
 
-## Operational Excellence — 6 checks
+- `sec-flow-auth-001` evaluates authentication patterns under Security.
+- `cost-containment-001` evaluates self-service opportunities under Cost
+  Optimization.
+- `journey-res-001` evaluates structural dead ends under Resilience.
+- `journey-scope-001` inventories flows outside the phone-anchored static
+  closure under Cost Optimization.
 
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `ops-logging-001` | High | Contact flow logging is enabled for CloudWatch Logs (required for troubleshooting) |
-| `ai-ops-kb-sync-001` | Medium | Evaluates Q in Connect knowledge-base lifecycle separately from ingestion status using `wisdom:GetKnowledgeBase`. CREATE_FAILED or DELETE_FAILED lifecycle and SYNC_FAILED ingestion are failures; only lifecycle ACTIVE with ingestionStatus SYNC_SUCCESS passes, while transient, inactive, missing, or unknown states are Skipped with bounded evidence. |
-| `ai-ops-bedrock-logging-001` | Medium | For instances with a Q assistant integration, verifies that the regional Bedrock model invocation logging configuration has a CloudWatch Logs or S3 destination. It does not prove per-assistant delivery; without a Q assistant integration, the check is Not Applicable. |
-| `ops-unreachable-blocks-001` | Low | Traverses default, conditional, and error transitions from a valid entry point to find unreachable customer-authored actions. A known unreachable block remains FAIL even when other discovery is incomplete; incomplete analysis without a known issue is Skipped rather than treated as healthy. |
-| `ops-early-media-001` | Low | Early media audio enabled for outbound calls (agents hear ringing/busy signal) |
-| `ops-auto-resolve-001` | Low | Reports whether `AUTO_RESOLVE_BEST_VOICES` is enabled so Amazon Connect Customer can substitute an equivalent same-locale Polly voice when a flow's SSML `<voice>` choice is unavailable; this is unrelated to the Task channel |
+The journey pipeline resolves phone-number associations, builds an instance-wide
+flow graph, and performs bounded static path enumeration with a maximum depth of
+50, 200 paths per phone number, and 5,000 paths per run. Path-local cycle edges
+are pruned, while the separate iterative structural closure still reaches every
+statically resolvable node. A depth, path, or step cap, dynamic target, or
+unresolved flow reference marks enumeration incomplete. These limits prevent an
+exhaustive-runtime claim: a known structural defect can still fail, while clean
+but incomplete evidence is not treated as proof that every possible route is
+safe. The pipeline emits one aggregate outcome for each selected Journey-backed
+control. `--skip-flow-analysis` excludes all controls that require flow analysis,
+including these four.
 
----
+## Filter behavior
 
-## Performance Efficiency — 3 checks
+Selection uses AND semantics. The tool first applies flow-analysis availability,
+then pillar, effective severity, explicit `--checks` inclusion,
+`--exclude-checks`, and config `enabled: false` settings. A control must survive
+every active filter.
 
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `perf-lambda-count-001` | Low | Observational Lambda usage structure inventory: authored, reachable, and unreachable Lambda blocks plus the bounded maximum on one simple route. It normalizes both `FunctionArn` and `LambdaFunctionARN`, emits detailed per-action evidence, and does not apply a numerical AWS compliance threshold. |
-| `perf-flow-complexity-001` | Low | Observational flow structure inventory: total/reachable actions, longest simple route, integrations, cycles, bounded path enumeration, and module use. It does not apply a numerical AWS compliance threshold. |
-| `perf-sequential-lambda-001` | Low | Reachable routes where one Lambda reaches another before a customer-facing interaction. Evidence includes both functions, mode/timeout, intermediate path, transition type, and error branches. |
+`--checks`, `--exclude-checks`, config keys, and validation accept canonical IDs
+and the two legacy aliases described in [Canonical identity and evidence
+contract](#canonical-identity-and-evidence-contract). Inputs are normalized and
+deduplicated before selection. `--list-checks` displays the unified selected
+controls, including Journey-backed controls, with severity and disposition. It
+never displays an alias.
 
-The Lambda usage structure review follows published AWS guidance for Lambda functions in Amazon Connect Customer flows but does not invent a maximum block count: total authored blocks, reachable blocks, and the bounded maximum on one simple route are presented as distinct observational measures. Its PASS means inventory completed, not that a particular count is optimal. The flow structure review similarly follows guidance to keep flows small, modular, and reusable while acknowledging that AWS does not publish a numerical complexity cutoff. Sequential-Lambda remediation remains conditional on data dependencies and preserves timeout and error-branch semantics.
-
----
-
-## Caller Journey Mapping — 4 findings
-
-These findings are produced by a separate pipeline (`journey.run_journey_mapping()`, invoked from `AssessmentEngine._compute_journey_findings`) that analyzes the instance-wide caller path topology — they are not part of the check registry and will not appear in `--list-checks` output. They require `connect:ListPhoneNumbersV2` and `connect:ListFlowAssociations` permissions (the latter resolves which flow each number is assigned to — `ListPhoneNumbersV2`'s `TargetArn` is the instance/TDG ARN, not the flow ARN) and are skipped when `--skip-flow-analysis` is used (either the top-level `skip_flow_analysis` config key or the CLI's `--skip-flow-analysis` flag, which is stored under `cli.skip_flow_analysis`).
-
-| Check ID | Severity | What it evaluates |
-|---|---|---|
-| `journey-sec-001` | High | Caller journey reaches an agent queue without any authentication step (PIN, Lambda verify, DTMF validation). Reports per-phone-number with the count of unauthenticated paths. |
-| `journey-cost-001` | High | All enumerated paths from a phone number route to agents without any self-service automation (Lex bot, DTMF menu, Lambda lookup). Indicates zero containment opportunity. |
-| `journey-res-001` | High | Dead-end caller path — flow logic disconnects the caller without offering a callback, queue transfer, or bot resolution. Indicates a resilience gap. |
-| `journey-scope-001` | Low | More than 5 contact flows are dormant (not reachable from any phone number, zero tier-1/tier-2 traffic). Candidates for cleanup. |
-
-### How the pipeline works
-
-1. **Topology resolution** — discovers all phone numbers (DID + toll-free) associated with the instance and identifies which contact flows they route to.
-2. **Super-graph construction** — stitches individual contact flow graphs together at transfer/module boundaries into an instance-wide directed graph.
-3. **Path enumeration** — traces every possible caller journey from each phone number entry point to a terminal outcome (agent queue, disconnect, callback, external transfer) using bounded DFS.
-4. **Journey scoring** — evaluates each path for security (authentication), self-service automation, callback offerings, personalization, NLU/bot usage, and CX maturity.
-5. **Finding generation** — produces the findings above for paths that reach agent queues without authentication, have zero self-service options, or dead-end into disconnects.
-
-### Tier classification
-
-Flows are classified into three tiers to scope analysis and avoid wasted API calls:
-
-- **Tier 1** — directly reachable from a phone number (DID or toll-free) or transitively reachable via transfer edges.
-- **Tier 2** — receives traffic but not phone-anchored (future: metric-based detection).
-- **Tier 3 (dormant)** — unreachable from any entry point; candidates for cleanup.
-
-### Configuration
-
-```yaml
-journey_map:
-  max_paths_per_did: 200    # Max paths to enumerate per phone number
-  max_depth: 50             # Max DFS depth per path
-  max_traffic_flows: 10     # Reserved for tier-2 traffic classification
-```
-
----
-
-## Skipped findings
-
-A check returns **Skipped** (not Fail) when it cannot complete its evaluation. A denied API call names the missing permission; partial pagination, failed detail lookup, incomplete flow analysis, or transient/unknown resource state records a bounded limitation. Grant missing access or resolve the recorded limitation and re-run. Partial observations never become an unqualified PASS.
-
-Common permissions that cause skips if missing:
-
-| Permission | Checks affected |
-|---|---|
-| `cloudtrail:DescribeTrails` | `sec-cloudtrail-001` |
-| `cloudtrail:LookupEvents` | `res-acgr-failover-test-001` |
-| `cloudwatch:DescribeAlarms` | `res-cloudwatch-001` |
-| `servicequotas:ListServiceQuotas`, `servicequotas:ListAWSDefaultServiceQuotas` | all three `res-quota-*` checks |
-| `cloudwatch:GetMetricStatistics` | `res-quota-headroom-001`, `res-quota-growth-001`, `cost-usage-metrics-001` |
-| `connect:ListTrafficDistributionGroups` | all `res-acgr-*`, `res-carrier-diversity-001` |
-| `connect:DescribeTrafficDistributionGroup` | `res-acgr-tdg-status-001` |
-| `connect:GetTrafficDistribution` | `res-acgr-traffic-dist-001` |
-| `connect:ListPhoneNumbersV2`, `connect:ListFlowAssociations` | `journey-sec-001`, `journey-cost-001`, `journey-res-001`, `journey-scope-001` |
-| `connect:ListUsers` | `res-quota-config-001` |
-| `connect:ListIntegrationAssociations` | all six `ai-ops-*` checks |
-| `connect:ListBots`, `lex:DescribeBotAlias` | `sec-lex-convlogs-001` |
-| `iam:GetRolePolicy` | `sec-iam-deep-001`, `sec-excessive-agency-001` |
-| `lambda:GetPolicy` | `sec-excessive-agency-001` |
-| `lambda:GetFunction` | `res-lambda-dependency-001` |
-| `kms:DescribeKey` | `sec-storage-001` |
-| `wisdom:ListAIAgents`, `wisdom:ListAIGuardrails`, `wisdom:GetAIAgent` | `ai-ops-guardrail-001` |
-| `wisdom:GetAssistant` | `ai-ops-encryption-001` |
-| `wisdom:GetKnowledgeBase` | `ai-ops-encryption-001`, `ai-ops-kb-sync-001` |
-| `wisdom:ListAIPrompts` | `ai-ops-model-cost-001` |
-| `bedrock:GetModelInvocationLoggingConfiguration` | `ai-ops-bedrock-logging-001` |
-| `bedrock:ListInferenceProfiles` | `ai-ops-cross-region-001` |
-
-## Permissions
-
-[`docs/iam-policy-template.json`](iam-policy-template.json) is the generated canonical IAM policy document for assessment access. [`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](../cloudformation/AmazonConnectSelfAssessmentPolicy.yaml) deploys the same action set with attachment options. The IAM artifacts use the `wisdom:*` authorization prefix for Q in Connect control-plane calls even though boto3 exposes the service through its `qconnect` client name.
-
----
-
-## Running a subset of checks
+Examples:
 
 ```bash
-# One pillar only
-amazon-connect-assessment --pillars security --region us-east-1
+# List all 64 canonical controls without calling AWS
+amazon-connect-assessment --list-checks
 
-# Critical and high only
-amazon-connect-assessment --severity critical high --region us-east-1
+# Select one BaseCheck control and one Journey-backed control
+amazon-connect-assessment --region us-east-1 \
+  --checks sec-cloudtrail-001 journey-res-001
 
-# Specific check IDs
-amazon-connect-assessment --checks sec-toll-fraud-001 res-acgr-config-001 sec-cloudtrail-001
-
-# Exclude checks you've accepted as risk
-amazon-connect-assessment --exclude-checks cost-acw-001 ops-auto-resolve-001
-
-# Skip contact-flow content checks and their API calls (faster — skips 26 checks)
-amazon-connect-assessment --skip-flow-analysis --region us-east-1
+# Exclude flow analysis and every flow-dependent control, including
+# res-hardcoded-routing-001
+amazon-connect-assessment --region us-east-1 --skip-flow-analysis
 ```
+
+## Permissions and closure
+
+[`docs/iam-policy-template.json`](iam-policy-template.json) is the canonical
+read-permission document. The equivalent deployable template is
+[`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](../cloudformation/AmazonConnectSelfAssessmentPolicy.yaml).
+A denied or incomplete read produces `Skipped`, not an unqualified pass.
+
+Use each record's methodology in the HTML, JSON, or CSV report when validating a
+result. Control evidence can support posture closure. Manual-review evidence
+identifies what a person must verify. Informational evidence records inventory
+and planning context.

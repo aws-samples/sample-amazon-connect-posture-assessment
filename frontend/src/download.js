@@ -42,23 +42,40 @@ const CSV_COLUMNS = [
   ['check_name', 'Check Name'],
   ['pillar', 'Pillar'],
   ['severity', 'Severity'],
-  ['status', 'Status'],
+  ['status', 'Execution Status'],
+  ['disposition', 'Disposition'],
   ['resource_type', 'Resource Type'],
   ['resource_id', 'Resource ID'],
+  ['instance_id', 'Instance ID'],
   ['instance', 'Instance'],
-  ['description', 'Description'],
+  ['description', 'Observed Result'],
+  ['reason', 'Why This Is Assessed'],
+  ['evidence_source', 'Evidence Source'],
+  ['proof_limitations', 'Proof Limitations'],
+  ['developer_admin_meaning', 'Developer/Admin Meaning'],
+  ['remediation', 'Action'],
+  ['verification_criteria', 'Verification Criteria'],
+  ['responsible_function', 'Responsible Function'],
+  ['primary_lens_reference', 'Primary Lens Reference'],
 ];
 
+// Characters spreadsheet apps skip before deciding whether a cell is a formula.
+// eslint-disable-next-line no-control-regex
+const CSV_LEADING_IGNORED = /^[\u0000-\u0020\u007f-\u00a0\u200b-\u200f\u2028\u2029\ufeff]*/;
+
+export function csvCell(value) {
+  // Prefix formula-leading cells so spreadsheet apps treat them as text. Leading
+  // whitespace/control characters are ignored when testing, as Excel ignores them.
+  let text = String(value ?? '');
+  if (/^[\t\r]/.test(text) || /^[=+\-@|]/.test(text.replace(CSV_LEADING_IGNORED, ''))) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+// UTF-8 BOM so Excel detects the encoding; CRLF line endings per RFC 4180.
 export function findingsCsv(findings) {
-  // Prefix formula-leading cells so spreadsheet apps treat them as text.
-  const cell = (value) => {
-    let text = String(value ?? '');
-    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-    return `"${text.replace(/"/g, '""')}"`;
-  };
-  const header = CSV_COLUMNS.map(([, label]) => cell(label)).join(',');
-  const rows = findings.map((f) => CSV_COLUMNS.map(([key]) => cell(f[key])).join(','));
-  return [header, ...rows].join('\n');
+  const header = CSV_COLUMNS.map(([, label]) => csvCell(label)).join(',');
+  const rows = findings.map((f) => CSV_COLUMNS.map(([key]) => csvCell(f[key])).join(','));
+  return `\ufeff${[header, ...rows].join('\r\n')}`;
 }
 
 // PNG exports are rasterized from the SVG export, capped so a huge flow can't

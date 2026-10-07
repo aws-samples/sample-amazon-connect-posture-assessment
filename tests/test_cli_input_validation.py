@@ -213,3 +213,16 @@ class TestMainFailsFast:
         assert code == 1
         assert message in capsys.readouterr().out
         engine.validate_configuration.assert_not_called()
+
+
+def test_cli_preflight_non_selection_value_error_propagates_expected_result():
+    # Arrange
+    config = _merged()
+
+    # Act / Assert
+    with patch(
+        "amazon_connect_assessment.checks.registration.register_all_checks",
+        side_effect=ValueError("catalog drift"),
+    ):
+        with pytest.raises(ValueError, match="catalog drift"):
+            validate_run_inputs(config)

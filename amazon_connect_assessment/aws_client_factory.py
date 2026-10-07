@@ -434,6 +434,13 @@ class AWSClientFactory:
         client = self.get_cloudtrail_client()
         return self.call_api_with_resilience(client, "describe_trails", "cloudtrail", **kwargs)
 
+    def get_trail_status_resilient(self, trail_name: str) -> Dict[str, Any]:
+        """Get CloudTrail logging status for a trail with network resilience."""
+        client = self.get_cloudtrail_client()
+        return self.call_api_with_resilience(
+            client, "get_trail_status", "cloudtrail", Name=trail_name
+        )
+
     def get_trail_event_selectors_resilient(self, trail_name: str) -> Dict[str, Any]:
         """Get CloudTrail event selectors for a trail with network resilience."""
         client = self.get_cloudtrail_client()
@@ -446,18 +453,22 @@ class AWSClientFactory:
         client = self.get_iam_client()
         return self.call_api_with_resilience(client, "get_role", "iam", RoleName=role_name)
 
-    def list_attached_role_policies_resilient(self, role_name: str) -> Dict[str, Any]:
+    def list_attached_role_policies_resilient(self, role_name: str, **kwargs) -> Dict[str, Any]:
         """List attached managed policies for an IAM role with resilience."""
         client = self.get_iam_client()
         return self.call_api_with_resilience(
-            client, "list_attached_role_policies", "iam", RoleName=role_name
+            client,
+            "list_attached_role_policies",
+            "iam",
+            RoleName=role_name,
+            **kwargs,
         )
 
-    def list_role_policies_resilient(self, role_name: str) -> Dict[str, Any]:
+    def list_role_policies_resilient(self, role_name: str, **kwargs) -> Dict[str, Any]:
         """List inline policy names for an IAM role with resilience."""
         client = self.get_iam_client()
         return self.call_api_with_resilience(
-            client, "list_role_policies", "iam", RoleName=role_name
+            client, "list_role_policies", "iam", RoleName=role_name, **kwargs
         )
 
     def get_role_policy_resilient(self, role_name: str, policy_name: str) -> Dict[str, Any]:
@@ -470,6 +481,11 @@ class AWSClientFactory:
             RoleName=role_name,
             PolicyName=policy_name,
         )
+
+    def get_policy_resilient(self, policy_arn: str) -> Dict[str, Any]:
+        """Get managed IAM policy metadata with resilience."""
+        client = self.get_iam_client()
+        return self.call_api_with_resilience(client, "get_policy", "iam", PolicyArn=policy_arn)
 
     def get_policy_version_resilient(self, policy_arn: str, version_id: str) -> Dict[str, Any]:
         """Get a managed policy version document with resilience."""
@@ -637,7 +653,7 @@ class AWSClientFactory:
         )
 
     def list_instance_storage_configs_resilient(
-        self, instance_id: str, resource_type: str
+        self, instance_id: str, resource_type: str, **kwargs: Any
     ) -> Dict[str, Any]:
         """List Connect instance storage configs for a resource type."""
         client = self.get_connect_client()
@@ -647,6 +663,7 @@ class AWSClientFactory:
             "connect",
             InstanceId=instance_id,
             ResourceType=resource_type,
+            **kwargs,
         )
 
     def list_approved_origins_resilient(self, instance_id: str) -> Dict[str, Any]:
@@ -656,15 +673,15 @@ class AWSClientFactory:
             client, "list_approved_origins", "connect", InstanceId=instance_id
         )
 
-    def list_security_profiles_resilient(self, instance_id: str) -> Dict[str, Any]:
+    def list_security_profiles_resilient(self, instance_id: str, **kwargs: Any) -> Dict[str, Any]:
         """List security profiles for an instance."""
         client = self.get_connect_client()
         return self.call_api_with_resilience(
-            client, "list_security_profiles", "connect", InstanceId=instance_id
+            client, "list_security_profiles", "connect", InstanceId=instance_id, **kwargs
         )
 
     def list_security_profile_permissions_resilient(
-        self, instance_id: str, security_profile_id: str
+        self, instance_id: str, security_profile_id: str, **kwargs: Any
     ) -> Dict[str, Any]:
         """List granted permissions for a single security profile."""
         client = self.get_connect_client()
@@ -674,6 +691,7 @@ class AWSClientFactory:
             "connect",
             InstanceId=instance_id,
             SecurityProfileId=security_profile_id,
+            **kwargs,
         )
 
     @staticmethod

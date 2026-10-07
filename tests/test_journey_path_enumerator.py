@@ -29,6 +29,7 @@ from amazon_connect_assessment.journey.models import (
 from amazon_connect_assessment.journey.path_enumerator import (
     MAX_PATH_DEPTH,
     enumerate_journeys,
+    enumerate_journeys_with_completeness,
 )
 
 
@@ -177,3 +178,85 @@ class TestUnresolvedTransferNotMislabeledAsDeadEnd:
         j = journeys[0]
         score = scores[j.path_hash]
         assert "⚠️ Dead-end disconnect" not in score.deficiencies
+
+
+def test_journey_enumerator_cycle_with_exit_keeps_complete_result_expected_result():
+    # Arrange
+    graph = SuperGraph(
+        nodes={
+            "f1::a": _node("f1", "a", "MessageParticipant"),
+            "f1::b": _node("f1", "b", "MessageParticipant"),
+            "f1::exit": _node("f1", "exit", "DisconnectParticipant"),
+        },
+        adjacency={"f1::a": ["f1::b"], "f1::b": ["f1::a", "f1::exit"]},
+        entry_points={"f1": "f1::a"},
+    )
+
+    # Act
+    journeys, complete, limitations = enumerate_journeys_with_completeness(
+        graph, [_phone_entry("+18005551212", "f1")]
+    )
+
+    # Assert
+    assert complete is True
+    assert [journey.terminal_type for journey in journeys] == ["disconnect"]
+    assert limitations == [
+        "loop-back edges pruned: 1; cycles were present but ordinary node revisits were not "
+        "enumerated"
+    ]
+
+
+def test_journey_enumerator_cycle_with_defect_preserves_dead_end_expected_result():
+    # Arrange
+    graph = SuperGraph(
+        nodes={
+            "f1::a": _node("f1", "a", "MessageParticipant"),
+            "f1::b": _node("f1", "b", "MessageParticipant"),
+            "f1::defect": _node("f1", "defect", "SetContactAttributes"),
+        },
+        adjacency={"f1::a": ["f1::b"], "f1::b": ["f1::a", "f1::defect"]},
+        entry_points={"f1": "f1::a"},
+    )
+
+    # Act
+    journeys, complete, limitations = enumerate_journeys_with_completeness(
+        graph, [_phone_entry("+18005551212", "f1")]
+    )
+
+    # Assert
+    assert complete is True
+    assert journeys[0].terminal_type == "disconnect"
+    assert journeys[0].terminal_details["reason"] == "dead_end"
+    assert limitations[0].startswith("loop-back edges pruned: 1")
+
+
+def test_journey_enumerator_missing_entry_point_marks_incomplete_expected_result():
+    # Arrange
+    graph = SuperGraph()
+    entries = [_phone_entry("+18005551212", "missing-flow")]
+
+    # Act
+    journeys, complete, limitations = enumerate_journeys_with_completeness(graph, entries)
+
+    # Assert
+    assert journeys == []
+    assert complete is False
+    assert limitations == ["contact flow missing-flow is missing a graph entry point"]
+
+
+def test_journey_enumerator_unresolved_transfer_marks_incomplete_expected_result():
+    # Arrange
+    graph = SuperGraph(
+        nodes={"f1::a": _node("f1", "a", "TransferToFlow")},
+        entry_points={"f1": "f1::a"},
+    )
+
+    # Act
+    journeys, complete, limitations = enumerate_journeys_with_completeness(
+        graph, [_phone_entry("+18005551212", "f1")]
+    )
+
+    # Assert
+    assert journeys[0].terminal_type == "unresolved_transfer"
+    assert complete is False
+    assert limitations == ["unresolved dynamic transfer target"]

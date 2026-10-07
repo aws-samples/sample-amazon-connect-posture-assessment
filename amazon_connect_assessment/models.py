@@ -53,6 +53,27 @@ class CheckStatus(Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class FindingDisposition(Enum):
+    """Methodological role a finding plays in assessment scoring."""
+
+    CONTROL = "control"
+    MANUAL_REVIEW = "manual_review"
+    INFORMATIONAL = "informational"
+
+
+@dataclass(frozen=True)
+class FindingMethodology:
+    """Evidence and interpretation contract for an assessment finding."""
+
+    reason: str
+    evidence_source: str
+    proof_limitations: str
+    developer_admin_meaning: str
+    verification_criteria: str
+    primary_lens_reference: Optional[str] = None
+    responsible_function: Optional[str] = None
+
+
 @dataclass
 class RemediationStep:
     """A single concrete, prescriptive remediation action."""
@@ -114,6 +135,10 @@ class Finding:
     # The flat ``remediation`` string above is auto-derived from this when set,
     # so existing report rendering and exports remain backward compatible.
     structured_remediation: Optional["Remediation"] = None
+    # Additive methodology fields preserve legacy positional and keyword constructors.
+    disposition: FindingDisposition = FindingDisposition.CONTROL
+    methodology: Optional[FindingMethodology] = None
+    instance_id: Optional[str] = None
 
 
 @dataclass
@@ -256,6 +281,16 @@ class AssessmentSummary:
     # explicit: registry checks and Caller Journey findings.
     registered_checks: Optional[int] = None
     journey_findings: int = 0
+    # Disposition-aware counts are additive so legacy constructors remain valid.
+    control_findings: int = 0
+    manual_review_findings: int = 0
+    informational_findings: int = 0
+    scored_control_passes: int = 0
+    scored_control_failures: int = 0
+    unevaluated_controls: int = 0
+    not_applicable_controls: int = 0
+    scored_control_numerator: int = 0
+    scored_control_denominator: int = 0
 
 
 @dataclass

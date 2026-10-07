@@ -28,16 +28,33 @@ const MARKDOWN_CSS = `
   border-radius: ${borderRadiusItem}; padding: ${spaceScaledS}; overflow: auto; margin: 0 0 ${spaceScaledS};
 }
 .acr-markdown pre code { background: none; padding: 0; }
-table.acr-print-findings { width: 100%; border-collapse: collapse; font-family: ${fontFamilyBase}; font-size: 11px; }
-.acr-print-findings th, .acr-print-findings td {
-  border: 1px solid ${colorBorderDividerDefault}; padding: ${spaceScaledXs}; text-align: start; vertical-align: top;
+.acr-metric-link {
+  appearance: none; background: none; border: 0; color: inherit; cursor: pointer;
+  display: inline-block; font: inherit; margin: 0; padding: 0; text-align: start;
 }
-.acr-print-findings tr { break-inside: avoid; }
+.acr-metric-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.acr-metric-link:focus-visible {
+  border-radius: ${borderRadiusItem}; outline: 2px solid ${colorTextLinkDefault}; outline-offset: 2px;
+}
+.acr-evidence-value { display: inline-flex; align-items: flex-start; gap: ${spaceScaledXs}; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
+.acr-print-finding-list { font-family: ${fontFamilyBase}; font-size: 11px; }
+.acr-print-finding { border-top: 2px solid ${colorBorderDividerDefault}; padding-top: ${spaceScaledS}; margin-top: ${spaceScaledS}; break-inside: auto; }
+.acr-print-finding h3, .acr-print-finding h4 { margin: ${spaceScaledS} 0 ${spaceScaledXs}; break-after: avoid; }
+.acr-print-record { display: grid; grid-template-columns: minmax(130px, 0.28fr) minmax(0, 1fr); gap: ${spaceScaledXs} ${spaceScaledS}; margin: 0; }
+.acr-print-record dt { font-weight: bold; }
+.acr-print-record dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.acr-print-evidence { break-inside: auto; }
+.acr-print-remediation ol, .acr-print-remediation ul { margin: 0; padding-inline-start: 20px; }
+.acr-print-remediation li, .acr-print-remediation pre { break-inside: avoid; }
+.acr-print-remediation pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 @media print { .acr-no-print { display: none !important; } }
 `;
 
+// A constructed stylesheet is applied through the CSSOM, which the report's
+// hash-based style-src CSP permits (a runtime <style> element would be blocked).
 export function injectStyles() {
-  const style = document.createElement('style');
-  style.textContent = MARKDOWN_CSS;
-  document.head.appendChild(style);
+  if (typeof CSSStyleSheet === 'undefined' || !('adoptedStyleSheets' in document)) return;
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(MARKDOWN_CSS);
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 }

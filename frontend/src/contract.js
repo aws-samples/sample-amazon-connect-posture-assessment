@@ -7,24 +7,39 @@ export const REQUIRED_FIELDS = {
   report: [
     'schema_version', 'title', 'generated_at', 'assessment', 'metadata', 'summary', 'stats',
     'insights', 'recommendations', 'filters', 'pillars', 'instances', 'findings', 'journey',
-    'execution_errors', 'raw_data', 'service_icon',
+    'charts', 'posture_roadmap', 'execution_errors', 'raw_data', 'service_icon',
   ],
   assessment: ['id', 'account_id', 'region', 'timestamp'],
   metadata: ['tool_version', 'execution_time', 'execution_environment'],
   summary: [
     'total_checks', 'passed_checks', 'failed_checks', 'error_checks', 'skipped_checks',
     'not_applicable_checks', 'critical_findings', 'high_findings', 'medium_findings', 'low_findings',
+    'control_findings', 'manual_review_findings', 'informational_findings',
+    'scored_control_passes', 'scored_control_failures', 'unevaluated_controls',
+    'not_applicable_controls', 'scored_control_numerator', 'scored_control_denominator',
   ],
-  stats: ['pass_rate', 'risk_score', 'registered_checks', 'journey_findings', 'instances_assessed'],
-  filters: ['default_severity', 'default_status'],
+  stats: [
+    'pass_rate', 'risk_score', 'registered_checks', 'journey_findings', 'instances_assessed',
+    'total_records', 'control_findings', 'manual_review_findings', 'manual_review_candidates',
+    'informational_findings', 'unevaluated_controls', 'not_applicable_records',
+    'scored_control_numerator', 'scored_control_denominator', 'scored_control_pass_rate',
+  ],
+  filters: ['default_severity', 'default_status', 'default_disposition'],
   journey: ['entries', 'status'],
   pillar: ['id', 'label'],
   insight: ['type', 'message'],
   recommendation: ['priority', 'title', 'description', 'findings_count'],
   finding: [
-    'key', 'check_id', 'check_name', 'pillar', 'severity', 'status', 'resource_id', 'resource_type',
-    'resource_label', 'instance', 'timestamp', 'description', 'description_html', 'remediation_html',
-    'structured_remediation', 'evidence', 'evidence_json',
+    'key', 'check_id', 'check_name', 'pillar', 'severity', 'status', 'disposition',
+    'score_classification', 'resource_id', 'resource_type', 'resource_label', 'instance_id',
+    'instance', 'timestamp', 'description', 'description_html', 'remediation_html',
+    'action_label', 'methodology', 'structured_remediation', 'evidence',
+    'evidence_json', 'reason', 'evidence_source', 'proof_limitations', 'developer_admin_meaning',
+    'remediation', 'verification_criteria', 'responsible_function', 'primary_lens_reference',
+  ],
+  methodology: [
+    'reason', 'evidence_source', 'proof_limitations', 'developer_admin_meaning',
+    'verification_criteria', 'responsible_function', 'primary_lens_reference',
   ],
   structured_remediation: ['summary', 'steps', 'target_resources', 'references', 'applies_if'],
   remediation_step: ['order', 'instruction_html', 'command', 'console_path'],
@@ -68,6 +83,7 @@ export function contractViolations(data) {
   each(data.insights, 'insight', 'data.insights');
   each(data.recommendations, 'recommendation', 'data.recommendations');
   each(data.findings, 'finding', 'data.findings', (f, path) => {
+    if (f.methodology) check(f.methodology, 'methodology', `${path}.methodology`);
     if (f.structured_remediation) {
       check(f.structured_remediation, 'structured_remediation', `${path}.structured_remediation`);
       each(f.structured_remediation.steps, 'remediation_step', `${path}.structured_remediation.steps`);

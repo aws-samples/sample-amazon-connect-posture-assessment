@@ -51,10 +51,8 @@ SELF_SERVICE_ACTION_TYPES = {
     "StoreUserInput",
     "InvokeLambdaFunction",
     "ConnectParticipantWithLexBot",
+    "ConnectParticipantWithAgenticCX",
     "ConnectToLexBot",
-    "MessageParticipant",
-    "PlayPrompt",
-    "PlayAudio",
 }
 
 # Action types that route a contact to a human agent queue.
