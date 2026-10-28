@@ -192,7 +192,7 @@ If permissions are missing, download the least-privilege policy template. A
 ```bash
 curl --fail --location --silent --show-error \
   --output AmazonConnectSelfAssessmentPolicy.yaml \
-  https://raw.githubusercontent.com/aws-samples/sample-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
+  https://raw.githubusercontent.com/aws-samples/sample-amazon-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
 ```
 
 After the download succeeds, deploy the policy and attach it to your IAM role:
