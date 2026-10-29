@@ -65,7 +65,7 @@ screenshots = [
     # 12.3.0 (exact pin) clears the Pillow CVE-2026-* advisories (OOB writes,
     # decompression bombs, command injection). Dev-only extra used by
     # scripts/capture_screenshots.py; not a runtime dependency.
-    "pillow==12.3.0",
+    "pillow==13.0.0",
 ]
 
 [project.scripts]
