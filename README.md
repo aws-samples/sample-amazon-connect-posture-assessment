@@ -50,7 +50,7 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 | **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, performs bounded static path enumeration, and renders an interactive map you can zoom, inspect, and export. Enumeration is limited to depth 50, 200 paths per phone number, and 5,000 paths per run. Most tooling audits resources; this audits the experience. |
 | **Contact flow analysis** | Parses published flow content to find dead-end error paths, unreachable blocks, infinite loops, toll-fraud exposure, prompt-injection risk, and Lambda branching with no fallback path — issues that are invisible from the console. |
 | **64 canonical controls** | One catalog across all five Well-Architected pillars: 60 BaseCheck executors and 4 Journey-backed executors. Every record carries status, disposition, evidence, and methodology so measured controls stay distinct from review candidates and inventory. |
-| **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Amazon Q in Connect, and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](#generative-ai-coverage). |
+| **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Connect AI agents (formerly Amazon Q in Connect), and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](#generative-ai-coverage). |
 | **Quota headroom** | Concurrent-call and configuration-object utilization against your real Service Quotas ceilings, with a 90-day growth trend projecting how long the current rate leaves before you hit one. |
 | **Four output formats** | HTML, JSON, CSV, and ASFF for direct ingestion into AWS Security Hub. |
 | **Run-over-run comparison** | `--diff` against a previous JSON report shows what was resolved and what is new, so you can track remediation progress. |
@@ -350,7 +350,7 @@ knowledge base quietly failing to ingest, an unguarded model answering customers
 directly, a model invocation with no record of what was said.
 
 Nine checks cover it. Three inspect only the Amazon Connect side of an Agentic
-CX Designer handoff; the other six use existing Q in Connect and Bedrock read
+CX Designer handoff; the other six use existing Connect AI agents and Bedrock read
 APIs. They are deliberately **not** a separate pillar — an unguarded model is a
 security finding, a stalled knowledge base is an operational one, and reporting
 them anywhere else would hide them from the people who own the fix. This section
@@ -359,8 +359,8 @@ checks: every check below is counted exactly once, in its own pillar.
 
 | Check | Pillar | Severity | What it looks for |
 |---|---|---|---|
-| `ai-ops-guardrail-001` | Security | High | Amazon Q in Connect assistants serving customers with no AI guardrail attached |
-| `ai-ops-encryption-001` | Security | Medium | Q in Connect on AWS-owned keys instead of a customer-managed KMS key |
+| `ai-ops-guardrail-001` | Security | High | Connect AI agent assistants serving customers with no AI guardrail attached |
+| `ai-ops-encryption-001` | Security | Medium | Connect AI agents on AWS-owned keys instead of a customer-managed KMS key |
 | `ai-ops-kb-sync-001` | Operational Excellence | Medium | Knowledge-base ingestion health and content lifecycle — a stale base answers confidently and wrongly |
 | `ai-ops-bedrock-logging-001` | Operational Excellence | Medium | Bedrock model-invocation logging disabled, leaving no record of what was said |
 | `ai-ops-model-cost-001` | Cost Optimization | Low | Prompt model selection against the work each prompt actually does |
@@ -378,7 +378,7 @@ amazon-connect-assessment --region us-east-1 --checks \
   ops-acxd-handoff-001 ops-acxd-escalation-001 res-acxd-error-routing-001
 ```
 
-The six Q in Connect and Bedrock controls report **Not Applicable** when no
+The six Connect AI agents and Bedrock controls report **Not Applicable** when no
 relevant integration exists. The three Agentic CX controls report **Not
 Applicable** only after complete flow analysis finds no reachable
 `ConnectParticipantWithAgenticCX` action. Incomplete clean evidence is Skipped;

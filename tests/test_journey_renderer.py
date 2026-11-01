@@ -833,7 +833,7 @@ class TestProjection:
                 },
                 resource_details={
                     "q_connect_assistant": {
-                        "technology": "Amazon Q in Connect",
+                        "technology": "Connect AI agents",
                         "identity": "AnyCompany",
                         "subtype": "Agent",
                     }
@@ -863,7 +863,7 @@ class TestProjection:
                 "Copies isVip, contactName, institutionName from the Lambda response "
                 "into contact attributes."
             ),
-            "Starts an Amazon Q in Connect session with AnyCompany (assistant type: Agent).",
+            "Starts a Connect AI agent session with AnyCompany (assistant type: Agent).",
             "Updates contact data used by subsequent flow and routing steps.",
             "Sets the Amazon Polly voice used by subsequent prompts and Lex interactions.",
             "Configures which participants are captured in contact recordings.",

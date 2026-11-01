@@ -85,8 +85,8 @@ validation. A `Pass` on an informational record means inventory completed.
 | `sec-cloudtrail-001` | CloudTrail Connect Management Write-Event Coverage | High | Control | BaseCheck |
 | `sec-federation-001` | Identity Federation / MFA Check | Low | Informational | BaseCheck |
 | `sec-profile-audit-001` | Security Profile Permissions Audit | High | Manual Review | BaseCheck |
-| `ai-ops-guardrail-001` | Q in Connect AI Guardrail Coverage | High | Control | BaseCheck |
-| `ai-ops-encryption-001` | Q in Connect Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
+| `ai-ops-guardrail-001` | Connect AI Agents Guardrail Coverage | High | Control | BaseCheck |
+| `ai-ops-encryption-001` | Connect AI Agents Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
 | `sec-lex-convlogs-001` | Lex Conversation Log Encryption | Medium | Control | BaseCheck |
 | `sec-prompt-inject-001` | Potential Unsafe Dynamic Content in Prompts | Medium | Manual Review | BaseCheck |
 | `sec-lambda-validation-001` | Lambda Branch Default Fallback Review | Medium | Manual Review | BaseCheck |
@@ -153,7 +153,7 @@ FAIL. If no storage configuration is returned, the control is not applicable.
 | `ops-logging-001` | Contact Flow Logging | High | Control | BaseCheck |
 | `ops-early-media-001` | Early Media for Outbound Calls | Low | Manual Review | BaseCheck |
 | `ops-auto-resolve-001` | SSML Voice Locale Fallback (`AUTO_RESOLVE_BEST_VOICES`) | Low | Informational | BaseCheck |
-| `ai-ops-kb-sync-001` | Q in Connect Knowledge Base Lifecycle and Ingestion Health | Medium | Control | BaseCheck |
+| `ai-ops-kb-sync-001` | Connect AI Agents Knowledge Base Lifecycle and Ingestion Health | Medium | Control | BaseCheck |
 | `ai-ops-bedrock-logging-001` | Bedrock Model Invocation Logging | Medium | Control | BaseCheck |
 | `ops-acxd-handoff-001` | Agentic CX Handoff Inventory | Low | Informational | BaseCheck |
 | `ops-acxd-escalation-001` | Agentic CX Escalation Path Review | Medium | Manual Review | BaseCheck |

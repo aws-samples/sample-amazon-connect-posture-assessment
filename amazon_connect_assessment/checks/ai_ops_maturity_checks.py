@@ -1,8 +1,11 @@
-"""Evidence-bounded AI operations maturity checks for Amazon Q in Connect.
+"""Evidence-bounded AI operations maturity checks for Connect AI agents.
 
-The six instance-level checks in this module discover Q in Connect resources
+Connect AI agents was formerly named Amazon Q in Connect; its API is still
+``qconnect`` in boto3 and ``wisdom`` in IAM.
+
+The six instance-level checks in this module discover Connect AI agent resources
 through ``connect:ListIntegrationAssociations`` and then inspect the relevant
-Q in Connect or Amazon Bedrock control-plane settings. List operations are
+Connect AI agents or Amazon Bedrock control-plane settings. List operations are
 fully paginated with bounded loops. Incomplete discovery is reported as
 ``SKIPPED`` rather than being interpreted as healthy configuration.
 """
@@ -410,11 +413,11 @@ class AIGuardrailCoverageCheck(BaseCheck):
     def __init__(self) -> None:
         super().__init__(
             check_id="ai-ops-guardrail-001",
-            name="Q in Connect AI Guardrail Coverage",
+            name="Connect AI Agents Guardrail Coverage",
             pillar=Pillar.SECURITY,
             severity=Severity.HIGH,
             description=(
-                "Checks whether each Q in Connect assistant exposes an ACTIVE and PUBLISHED AI "
+                "Checks whether each Connect AI agent assistant exposes an ACTIVE and PUBLISHED AI "
                 "guardrail, and whether every AI agent bound to that assistant references a "
                 "guardrail in its own configuration. This evidence does not establish which "
                 "filter categories a referenced guardrail applies."
@@ -434,7 +437,7 @@ class AIGuardrailCoverageCheck(BaseCheck):
         if not assistant_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect assistant integration was found on the instance",
+                "no Connect AI agent assistant integration was found on the instance",
                 evidence={"assistant_count": 0},
             )
 
@@ -533,7 +536,7 @@ class AIGuardrailCoverageCheck(BaseCheck):
             # requiring an unused guardrail against future agents is not.
             #
             # An assistant with no bound agents at all is not exempt: an empty
-            # aiAgentConfiguration means Q in Connect serves the caller with its
+            # aiAgentConfiguration means Connect AI agents serve the caller with the
             # default agents, which do take a guardrail, so the coverage gap is
             # real even though no agent is named here.
             observation["guardrail_not_attachable"] = bool(bound_agents) and not (
@@ -580,7 +583,7 @@ class AIGuardrailCoverageCheck(BaseCheck):
                 resource_id=instance.instance_id,
                 resource_type="QConnectAssistant",
                 description=(
-                    f"All {assessed} of {len(assistant_arns)} Q in Connect assistant(s) with a "
+                    f"All {assessed} of {len(assistant_arns)} Connect AI agent assistant(s) with a "
                     "guardrail-capable bound agent expose at least one ACTIVE and PUBLISHED AI "
                     "guardrail, and every bound AI agent whose type supports a guardrail "
                     f"references one.{exclusion_note} {limitation}"
@@ -617,7 +620,7 @@ class AIGuardrailCoverageCheck(BaseCheck):
         if attachment_gaps:
             headline = (
                 f"{unguarded_total} AI agent(s) bound to "
-                f"{len(attachment_gaps)} of {len(assistant_arns)} Q in Connect assistant(s) "
+                f"{len(attachment_gaps)} of {len(assistant_arns)} Connect AI agent assistant(s) "
                 "serve traffic with no AI guardrail referenced in their configuration"
             )
             if uncovered:
@@ -646,7 +649,7 @@ class AIGuardrailCoverageCheck(BaseCheck):
                     flagged.append(arn)
         else:
             description = (
-                f"{len(uncovered)} of {len(assistant_arns)} Q in Connect assistant(s) do not "
+                f"{len(uncovered)} of {len(assistant_arns)} Connect AI agent assistant(s) do not "
                 "expose an AI guardrail that is both ACTIVE and PUBLISHED. Saved drafts and "
                 "guardrails that are creating, failed, deleting, or deleted do not count as "
                 f"published-active coverage. {limitation}"
@@ -680,16 +683,16 @@ class AIGuardrailCoverageCheck(BaseCheck):
 
 
 class QConnectEncryptionCheck(BaseCheck):
-    """Check Q in Connect assistant and knowledge-base customer-managed encryption."""
+    """Check Connect AI agent assistant and knowledge-base customer-managed encryption."""
 
     def __init__(self) -> None:
         super().__init__(
             check_id="ai-ops-encryption-001",
-            name="Q in Connect Customer-Managed Key Encryption",
+            name="Connect AI Agents Customer-Managed Key Encryption",
             pillar=Pillar.SECURITY,
             severity=Severity.MEDIUM,
             description=(
-                "Checks whether associated Q in Connect assistants and knowledge bases report a "
+                "Checks whether associated Connect AI agent assistants and knowledge bases report a "
                 "customer-managed KMS key in their server-side encryption configuration."
             ),
         )
@@ -708,7 +711,7 @@ class QConnectEncryptionCheck(BaseCheck):
         if not assistant_arns and not knowledge_base_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect assistant or knowledge-base integration was found",
+                "no Connect AI agent assistant or knowledge-base integration was found",
                 evidence={"assistant_count": 0, "knowledge_base_count": 0},
             )
 
@@ -769,7 +772,7 @@ class QConnectEncryptionCheck(BaseCheck):
                 resource_id=instance.instance_id,
                 resource_type="QConnectResource",
                 description=(
-                    f"All {checked} associated Q in Connect resource(s) report a customer-managed "
+                    f"All {checked} associated Connect AI agent resource(s) report a customer-managed "
                     "KMS key."
                 ),
                 evidence={"resources_checked": checked},
@@ -780,19 +783,19 @@ class QConnectEncryptionCheck(BaseCheck):
             resource_id=instance.instance_id,
             resource_type="QConnectResource",
             description=(
-                f"{len(unencrypted)} of {checked} associated Q in Connect resource(s) do not "
+                f"{len(unencrypted)} of {checked} associated Connect AI agent resource(s) do not "
                 "report a customer-managed KMS key and rely on AWS-owned encryption instead."
             ),
             evidence={"resources_checked": checked, "unencrypted_resources": unencrypted},
             structured_remediation=Remediation(
-                summary="Recreate flagged Q in Connect resources with a customer-managed KMS key.",
+                summary="Recreate flagged Connect AI agent resources with a customer-managed KMS key.",
                 target_resources=[item["resource_arn"] for item in unencrypted],
                 steps=[
                     RemediationStep(
                         order=1,
                         instruction=(
                             "Choose a customer-managed KMS key with a policy that permits the "
-                            "required Q in Connect use."
+                            "required Connect AI agent use."
                         ),
                         console_path="AWS KMS console -> Customer managed keys",
                     ),
@@ -810,12 +813,12 @@ class QConnectEncryptionCheck(BaseCheck):
 
 
 class KnowledgeBaseSyncHealthCheck(BaseCheck):
-    """Evaluate Q in Connect knowledge-base lifecycle and ingestion independently."""
+    """Evaluate Connect AI agent knowledge-base lifecycle and ingestion independently."""
 
     def __init__(self) -> None:
         super().__init__(
             check_id="ai-ops-kb-sync-001",
-            name="Q in Connect Knowledge Base Lifecycle and Ingestion Health",
+            name="Connect AI Agents Knowledge Base Lifecycle and Ingestion Health",
             pillar=Pillar.OPERATIONAL_EXCELLENCE,
             severity=Severity.MEDIUM,
             description=(
@@ -838,7 +841,7 @@ class KnowledgeBaseSyncHealthCheck(BaseCheck):
         if not knowledge_base_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect knowledge-base integration was found",
+                "no Connect AI agent knowledge-base integration was found",
                 evidence={"knowledge_base_count": 0},
             )
 
@@ -990,7 +993,7 @@ class AIPromptModelCostCheck(BaseCheck):
         if not assistant_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect assistant integration was found",
+                "no Connect AI agent assistant integration was found",
                 evidence={"assistant_count": 0},
             )
 
@@ -1019,7 +1022,7 @@ class AIPromptModelCostCheck(BaseCheck):
         if not prompts:
             return self.not_applicable(
                 context,
-                "no AI prompts were returned for the associated Q in Connect assistant(s)",
+                "no AI prompts were returned for the associated Connect AI agent assistant(s)",
                 resource_type="QConnectAssistant",
                 evidence={"assistants_checked": len(assistant_arns), "prompt_count": 0},
             )
@@ -1102,7 +1105,7 @@ class BedrockInvocationLoggingCheck(BaseCheck):
         if not assistant_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect assistant integration was found; Bedrock settings were not read",
+                "no Connect AI agent assistant integration was found; Bedrock settings were not read",
                 evidence={"assistant_count": 0, "bedrock_api_called": False},
             )
 
@@ -1127,8 +1130,8 @@ class BedrockInvocationLoggingCheck(BaseCheck):
             "has_s3_destination": has_s3,
             "text_data_delivery_enabled": bool(logging_config.get("textDataDeliveryEnabled")),
             "evidence_limitation": (
-                "The API reports an account/region setting; it does not prove that every Q in "
-                "Connect invocation is delivered to the destination."
+                "The API reports an account/region setting; it does not prove that every "
+                "Connect AI agent invocation is delivered to the destination."
             ),
         }
         if has_cloudwatch or has_s3:
@@ -1148,7 +1151,7 @@ class BedrockInvocationLoggingCheck(BaseCheck):
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
             description=(
-                "A Q in Connect assistant integration exists, but the regional Bedrock model "
+                "A Connect AI agent assistant integration exists, but the regional Bedrock model "
                 "invocation logging configuration has no CloudWatch Logs or S3 destination."
             ),
             evidence=evidence,
@@ -1201,7 +1204,7 @@ class CrossRegionInferenceAvailabilityCheck(BaseCheck):
         if not assistant_arns:
             return self.not_applicable(
                 context,
-                "no Q in Connect assistant integration was found; Bedrock settings were not read",
+                "no Connect AI agent assistant integration was found; Bedrock settings were not read",
                 evidence={"assistant_count": 0, "bedrock_api_called": False},
             )
 
@@ -1227,14 +1230,14 @@ class CrossRegionInferenceAvailabilityCheck(BaseCheck):
             description=(
                 f"Found {len(profiles)} system-defined Bedrock inference profile(s) in the "
                 "account/region. This is availability context only and does not prove that the "
-                "associated Q in Connect workload uses cross-region inference."
+                "associated Connect AI agent workload uses cross-region inference."
             ),
             evidence={
                 "assistant_count": len(assistant_arns),
                 "cross_region_profile_count": len(profiles),
                 "inference_profile_ids": profile_ids,
                 "evidence_limitation": (
-                    "ListInferenceProfiles reports regional availability, not Q in Connect usage."
+                    "ListInferenceProfiles reports regional availability, not Connect AI agent usage."
                 ),
             },
         )

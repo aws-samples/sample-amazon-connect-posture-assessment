@@ -594,12 +594,12 @@ _CONTROLS = (
     _control(
         "ai-ops-guardrail-001",
         "qconnect.serving_agent.guardrail_attachment_missing",
-        "Q in Connect AI Guardrail Coverage",
+        "Connect AI Agents Guardrail Coverage",
         _S,
         Severity.HIGH,
         _C,
         _methodology(
-            "Guardrail-capable Q in Connect agents serving traffic should reference an active published guardrail.",
+            "Guardrail-capable Connect AI agents serving traffic should reference an active published guardrail.",
             "Connect ListIntegrationAssociations plus Q GetAssistant, ListAIGuardrails, ListAIAgents, and GetAIAgent join serving bindings to guardrail IDs and states.",
             "Attachment and publication do not prove filter contents, denied topics, sensitive-information policy, version suitability, or runtime behavior.",
             "A pass confirms bounded attachment/status coverage for discovered guardrail-capable agents, excluding API variants that cannot express a guardrail.",
@@ -611,7 +611,7 @@ _CONTROLS = (
     _control(
         "ai-ops-encryption-001",
         "qconnect.resource.customer_managed_key_policy_review",
-        "Q in Connect Customer-Managed Key Encryption",
+        "Connect AI Agents Customer-Managed Key Encryption",
         _S,
         Severity.MEDIUM,
         _M,
@@ -628,7 +628,7 @@ _CONTROLS = (
     _control(
         "ai-ops-kb-sync-001",
         "qconnect.knowledge_base.lifecycle_or_ingestion_unhealthy",
-        "Q in Connect Knowledge Base Lifecycle and Ingestion Health",
+        "Connect AI Agents Knowledge Base Lifecycle and Ingestion Health",
         _O,
         Severity.MEDIUM,
         _C,

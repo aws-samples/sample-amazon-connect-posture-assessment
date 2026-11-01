@@ -255,8 +255,8 @@ class UnusedPhoneNumbersCheck(BaseCheck):
 # actually accepted by Connect's DescribeInstanceAttribute API.
 #
 # IMPORTANT: only CONTACT_LENS is a valid AttributeType. There is no
-# WISDOM or CASES value in the DescribeInstanceAttribute enum — Amazon Q
-# in Connect (Wisdom) and Cases are not instance attributes at all; they
+# WISDOM or CASES value in the DescribeInstanceAttribute enum — Connect AI
+# agents (formerly Amazon Q in Connect / Wisdom) and Cases are not instance attributes at all; they
 # don't have an on/off flag exposed through this API. Earlier versions of
 # this check probed "WISDOM" and "CASES" as AttributeType values, which
 # always raised (invalid enum member), got swallowed by a bare

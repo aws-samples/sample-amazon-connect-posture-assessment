@@ -122,7 +122,7 @@
   <rect x="1470" y="630" width="220" height="78" fill="#FFF1F2" stroke="#DD344C" stroke-width="1.5" rx="10"/><text x="1580" y="661" class="box-title center" fill="#7A173F">AWS KMS</text><text x="1580" y="683" class="body center">encryption posture</text>
   <rect x="995" y="720" width="165" height="66" class="pink"/><text x="1077" y="746" class="box-title center" fill="#7A173F">Service Quotas</text><text x="1077" y="768" class="body center">Connect limits</text>
   <rect x="1172" y="720" width="165" height="66" class="pink"/><text x="1254" y="746" class="box-title center" fill="#7A173F">AWS IAM</text><text x="1254" y="768" class="body center">roles and policies</text>
-  <rect x="1349" y="720" width="165" height="66" class="pink"/><text x="1431" y="746" class="box-title center" fill="#7A173F">Amazon Q in Connect</text><text x="1431" y="768" class="body center">AI configuration</text>
+  <rect x="1349" y="720" width="165" height="66" class="pink"/><text x="1431" y="746" class="box-title center" fill="#7A173F">Connect AI agents</text><text x="1431" y="768" class="body center">AI configuration</text>
   <rect x="1526" y="720" width="164" height="66" class="pink"/><text x="1608" y="746" class="box-title center" fill="#7A173F">Amazon Bedrock</text><text x="1608" y="768" class="body center">logging and profiles</text>
   <text x="995" y="810" class="small">Connect flow JSON supplies ACXD handoff evidence; Agentic CX application internals are not inspected.</text>
 

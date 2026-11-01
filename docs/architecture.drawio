@@ -119,7 +119,7 @@
         <mxCell id="iamInspection" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="AWS IAM&lt;br&gt;roles and policies" vertex="1">
           <mxGeometry height="66" width="165" x="1172" y="720" as="geometry" />
         </mxCell>
-        <mxCell id="qConnect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Amazon Q in Connect&lt;br&gt;AI configuration" vertex="1">
+        <mxCell id="qConnect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Connect AI agents&lt;br&gt;AI configuration" vertex="1">
           <mxGeometry height="66" width="165" x="1349" y="720" as="geometry" />
         </mxCell>
         <mxCell id="bedrock" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7FA;strokeColor=#C2185B;strokeWidth=1.5;fontColor=#7A173F;fontSize=12;align=center;verticalAlign=middle;" value="Amazon Bedrock&lt;br&gt;logging and profiles" vertex="1">

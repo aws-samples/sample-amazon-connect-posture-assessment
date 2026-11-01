@@ -1580,15 +1580,14 @@ def _customer_experience_scope(
         subtype = assistant.get("subtype")
         if identity and identity != "Configured assistant" and subtype:
             return [
-                f"Starts an Amazon Q in Connect session with {identity} "
-                f"(assistant type: {subtype})."
+                f"Starts a Connect AI agent session with {identity} (assistant type: {subtype})."
             ]
         if identity and identity != "Configured assistant":
-            return [f"Starts an Amazon Q in Connect session with {identity}."]
-        return ["Starts an Amazon Q in Connect session with the configured assistant."]
+            return [f"Starts a Connect AI agent session with {identity}."]
+        return ["Starts a Connect AI agent session with the configured assistant."]
     if action_type == "UpdateContactData":
         if params.get("WisdomSessionArn"):
-            return ["Associates the active Amazon Q in Connect session with the contact."]
+            return ["Associates the active Connect AI agent session with the contact."]
         fields = [str(key) for key in params if not str(key).endswith("Arn")]
         if fields:
             return [f"Updates contact data fields: {', '.join(fields[:6])}."]

@@ -256,7 +256,7 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             # claimed to, not the flow it's assigned to in the console —
             # ListFlowAssociations is the API that reflects that field.
             "connect:ListFlowAssociations",
-            # Discovers Q in Connect assistant and knowledge-base integrations
+            # Discovers Connect AI agent assistant and knowledge-base integrations
             # for the instance-level AI operations maturity checks.
             "connect:ListIntegrationAssociations",
         ],
@@ -279,7 +279,7 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             "wisdom:ListAIGuardrails",
             "wisdom:ListAIPrompts",
         ],
-        # "*": these Q in Connect reads are called with assistant or knowledge-
+        # "*": these Connect AI agent reads are called with assistant or knowledge-
         # base IDs discovered at runtime. The boto3 service name is qconnect,
         # while the IAM service prefix is wisdom.
         "*",

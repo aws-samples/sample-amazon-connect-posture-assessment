@@ -1277,13 +1277,13 @@ class AssessmentEngine:
         params: Dict[str, Any],
         assistant_cache: Dict[str, Optional[Dict[str, Any]]],
     ) -> Dict[str, str]:
-        """Resolve the Amazon Q in Connect assistant used by a Wisdom session."""
+        """Resolve the Connect AI agent assistant used by a Wisdom session."""
         arn = params.get("WisdomAssistantArn") if isinstance(params, dict) else None
         if not isinstance(arn, str) or not arn.strip():
-            return {"technology": "Amazon Q in Connect"}
+            return {"technology": "Connect AI agents"}
         assistant_id = arn.rsplit("/", 1)[-1]
         details = {
-            "technology": "Amazon Q in Connect",
+            "technology": "Connect AI agents",
             "identity": "Configured assistant",
         }
         if assistant_id not in assistant_cache:
@@ -1294,7 +1294,7 @@ class AssessmentEngine:
             except Exception as exc:  # noqa: BLE001
                 assistant_cache[assistant_id] = None
                 self.logger.debug(
-                    "Amazon Q in Connect assistant lookup failed for %s: %s",
+                    "Connect AI agent assistant lookup failed for %s: %s",
                     assistant_id,
                     exc,
                 )

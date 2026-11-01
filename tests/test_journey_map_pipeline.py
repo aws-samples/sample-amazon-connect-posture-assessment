@@ -340,7 +340,7 @@ class TestPhoneToFlowMapping:
             "alias": "TestBotAlias",
         }
         assert setup_node["scope"] == [
-            "Starts an Amazon Q in Connect session with AnyCompany (assistant type: Agent).",
+            "Starts a Connect AI agent session with AnyCompany (assistant type: Agent).",
             "Updates contact data used by subsequent flow and routing steps.",
         ]
         factory.describe_lex_v2_bot_resilient.assert_called_once_with("ALGAULUNIR")

@@ -278,7 +278,7 @@ Resources:
               # to, for the Caller Journey Map. ListPhoneNumbersV2's
               # TargetArn is the instance/TDG ARN, not the flow ARN.
               - connect:ListFlowAssociations
-              # Discovers the Q in Connect resources associated with the
+              # Discovers the Connect AI agent resources associated with the
               # instance for the AI operations maturity checks.
               - connect:ListIntegrationAssociations
             # '*': account-wide Connect discovery (same rationale as
