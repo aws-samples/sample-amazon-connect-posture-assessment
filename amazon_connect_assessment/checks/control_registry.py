@@ -633,7 +633,7 @@ _CONTROLS = (
         Severity.MEDIUM,
         _C,
         _methodology(
-            "A Q knowledge base must be active and have successful ingestion before it can reliably supply current content.",
+            "A Connect AI agents knowledge base must be active and have successful ingestion before it can reliably supply current content.",
             "Paginated Connect integration discovery and Q GetKnowledgeBase return lifecycle status, ingestion status, and bounded failure reasons.",
             "This point-in-time state does not prove source completeness, freshness between syncs, retrieval quality, answer quality, or assistant usage.",
             "A failure proves a terminal lifecycle or ingestion state; transient or incomplete evidence is skipped rather than passed.",

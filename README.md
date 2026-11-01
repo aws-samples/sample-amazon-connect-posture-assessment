@@ -288,7 +288,7 @@ findings set.
 | Security | 19 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
 | Resilience | 18 | Global Resiliency posture, quota headroom and growth, CloudWatch alarms, Agentic CX error/idle-timeout routing, flow error handling, loop detection, Lambda dependencies, and structural journey dead ends |
 | Cost Optimization | 16 | Claimed-number inventory, self-service containment, callback and data-continuity review, idle configuration, operating hours, premium features, model cost, and phone-reachability scope |
-| Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Q knowledge-base health, and Bedrock invocation logging |
+| Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Connect AI agents knowledge-base health, and Bedrock invocation logging |
 | Performance Efficiency | 3 | Route-aware Lambda inventory, sequential Lambda review, and flow-structure inventory |
 
 The catalog assigns one of three dispositions to every record: 23 `CONTROL`, 25
@@ -394,7 +394,7 @@ Amazon Lex guardrail posture is **not** covered. The check that claimed to cover
 it could not read a bot's configuration, so it failed every Lex integration it
 found regardless of how that bot was actually configured; it was removed rather
 than left in the report. See the
-[Check Catalog](docs/check-catalog.md#security--19-checks) for what
+[Check Catalog](docs/check-catalog.md#security--19-controls) for what
 reimplementing it requires.
 
 What *is* covered for Lex is where a bot's conversations end up:

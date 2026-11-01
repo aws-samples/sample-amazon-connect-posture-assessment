@@ -66,6 +66,7 @@ Key modules:
 2. Add it to that module's `register_*()` function, which is already wired into `registration.py`.
 3. Set `pillar` so `--pillars` filtering works. If the check requires parsed contact flow content, wire it behind `skip_flow_analysis` in `registration.py` or make it safe when no flow content exists. Most flow-content checks are skipped by `--skip-flow-analysis`, but `HardcodedRoutingCheck` remains registered and handles empty flow data. Note: the report's Caller Journey Map has a separate skip check in `AssessmentEngine._compute_journey_map()`; keep CLI/config plumbing aligned if you change that behavior.
 4. Add a test under `tests/` (suite uses `moto` to mock AWS).
+5. After adding or updating a check (including its name, description, or finding text), regenerate the sample report with `python scripts/generate_sample_report.py`, then refresh the documentation screenshots with `python scripts/capture_screenshots.py` (needs `pip install -e ".[screenshots]"` and `playwright install chromium`). Commit the updated `examples/sample_assessment_report.html` and `docs/images/*.png` with the check change.
 
 ## Code conventions
 
