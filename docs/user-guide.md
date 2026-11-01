@@ -10,6 +10,7 @@ operations, and CI/CD usage. For configuration keys, see
 ## Table of Contents
 
 - [Installation](#installation)
+  - [pipx (recommended)](#pipx-recommended)
   - [Repository workspace](#repository-workspace)
   - [AWS CloudShell](#aws-cloudshell)
   - [Contributor dependencies](#contributor-dependencies)
@@ -21,10 +22,60 @@ operations, and CI/CD usage. For configuration keys, see
 
 ## Installation
 
-Use a virtual environment in the repository workspace. A global `pipx` or
+To run the tool, install it with `pipx`. To inspect or modify the source, use a
+virtual environment in a repository workspace instead. When you work from a
+checkout, run the module from the activated environment: a global `pipx` or
 system installation can remain on `PATH` after the repository changes and run
-older controls or report code. Use Python 3.12 or later for the environment;
-replace `python3.12` below with a newer installed interpreter if needed.
+older controls or report code. Use Python 3.12 or later; replace `python3.12`
+below with a newer installed interpreter if needed.
+
+### pipx (recommended)
+
+[pipx](https://pipx.pypa.io/) keeps the tool in its own isolated environment and
+puts the command on your `PATH`. Check whether it is already installed. Run only
+the command inside the code block; do not copy the `bash` label or the triple
+backticks:
+
+```bash
+pipx --version
+```
+
+If the command prints a version, skip to installing the tool. If it reports
+`command not found`, install `pipx` for your operating system, then open a new
+terminal and run `pipx --version` again.
+
+**macOS:**
+
+```bash
+brew install pipx
+pipx ensurepath
+```
+
+**Linux:**
+
+```bash
+python3 -m pip install --user pipx
+python3 -m pipx ensurepath
+```
+
+Install the assessment tool. You do not need to clone the repository:
+
+```bash
+pipx install git+https://github.com/aws-samples/sample-amazon-connect-posture-assessment
+```
+
+Confirm that your shell can find the CLI and display the installed release:
+
+```bash
+amazon-connect-assessment --version
+```
+
+Include this output when reporting an installation problem. This guide
+intentionally does not name an expected version, so these instructions remain
+correct when a new release is published.
+
+To install a local checkout with `pipx` instead, run `pipx install .` from the
+repository root.
 
 ### Repository workspace
 
@@ -101,7 +152,19 @@ aws connect list-instances --region us-east-1
 AWS documents this command under the
 [`connect list-instances` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/connect/list-instances.html).
 
-If access is denied, deploy the self-assessment policy:
+If access is denied, deploy the self-assessment policy. The commands below use
+the repository path `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`. A
+`pipx` installation does not place repository files in your current directory,
+so download the template first and pass the downloaded file to
+`--template-file`:
+
+```bash
+curl --fail --location --silent --show-error \
+  --output AmazonConnectSelfAssessmentPolicy.yaml \
+  https://raw.githubusercontent.com/aws-samples/sample-amazon-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
+```
+
+To attach the policy to an IAM user:
 
 ```bash
 aws cloudformation deploy \
@@ -141,8 +204,9 @@ aws cloudformation describe-stacks \
 The canonical read-permission source is
 `amazon_connect_assessment/iam_permissions.py`. It generates
 [iam-policy-template.json](iam-policy-template.json), and drift tests keep the
-CloudFormation template action-equivalent. The template does not grant the
-additional S3 write permissions required by `--s3-output`.
+CloudFormation template action-equivalent. Use the JSON template to fold the
+exact action list into an existing role or permission set. The template does
+not grant the additional S3 write permissions required by `--s3-output`.
 
 ### Profiles, SSO, and environment variables
 
@@ -263,7 +327,35 @@ records enter the scored-control denominator.
 
 Each finding includes methodology explaining why it is assessed, the evidence
 source, proof limitations, developer/admin meaning, and verification criteria.
-The Caller Journey Map renders contact flows targeted by inbound phone numbers.
+
+### Caller Journey Map
+
+Most assessment tooling inspects resources. The Caller Journey Map inspects the
+**experience**, starting from the phone number a customer actually dials.
+
+- **Accurate flow resolution.** Each inbound number is matched to its flow using
+  `connect:ListFlowAssociations`, rather than assuming
+  `ListPhoneNumbersV2.TargetArn` points at a flow.
+- **Bounded static path enumeration.** Default, conditional, and error
+  transitions are followed from each entry point with limits of depth 50, 200
+  paths per phone number, and 5,000 paths per run. Cycle edges are pruned
+  without losing structural node reachability. A reached cap, dynamic target,
+  or unresolved flow reference marks enumeration incomplete rather than
+  claiming exhaustive runtime coverage.
+- **Canonical Journey outcomes.** Four catalog controls use the Journey executor:
+  `sec-flow-auth-001`, `cost-containment-001`, `journey-res-001`, and
+  `journey-scope-001`. Each produces one aggregate outcome per selected
+  instance, subject to the same catalog filters as every other control. See
+  [Journey-backed execution](check-catalog.md#journey-backed-execution).
+- **Interactive, offline map.** The CLI server-renders a deterministic
+  caller-focused projection into the HTML report. In the browser you can switch
+  between phone numbers, zoom and fit without distorting the layout, open a
+  node and connector inspector, and export SVG, PNG, or an editable draw.io
+  diagram.
+
+No separate web service or launcher is required — the map is part of the
+standard HTML report. Phone numbers are masked in report evidence, preserving
+only the last four digits.
 
 ### Scope and drill-downs
 

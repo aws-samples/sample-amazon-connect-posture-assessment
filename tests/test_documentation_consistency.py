@@ -13,6 +13,20 @@ from amazon_connect_assessment.models import FindingDisposition, Pillar
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README_PATH = REPO_ROOT / "README.md"
 CATALOG_PATH = REPO_ROOT / "docs" / "check-catalog.md"
+USER_GUIDE_PATH = REPO_ROOT / "docs" / "user-guide.md"
+DEVELOPMENT_GUIDE_PATH = REPO_ROOT / "docs" / "development-guide.md"
+MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
+GENERATIVE_AI_CONTROL_IDS = (
+    "ai-ops-guardrail-001",
+    "ai-ops-encryption-001",
+    "ai-ops-kb-sync-001",
+    "ai-ops-bedrock-logging-001",
+    "ai-ops-model-cost-001",
+    "ai-ops-cross-region-001",
+    "ops-acxd-handoff-001",
+    "ops-acxd-escalation-001",
+    "res-acxd-error-routing-001",
+)
 CURRENT_DOC_PATHS = (
     README_PATH,
     CATALOG_PATH,
@@ -246,6 +260,7 @@ def test_readme_offline_report_does_not_claim_cdn_dependencies():
 def test_public_documentation_describes_bounded_and_safe_runtime_contracts():
     # Arrange
     readme = README_PATH.read_text(encoding="utf-8")
+    development_guide = DEVELOPMENT_GUIDE_PATH.read_text(encoding="utf-8")
     current_documentation = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (
@@ -282,7 +297,71 @@ def test_public_documentation_describes_bounded_and_safe_runtime_contracts():
     assert ".gitlab-ci.yml" not in current_documentation
     assert "enumerates every path a caller can take" not in readme
     assert "Every default, conditional, and error transition" not in readme
-    assert re.search(r"frontend maintained in this\s+repository", readme)
-    assert "maintained in the main AWS Samples repository" not in readme
+    assert re.search(r"frontend\s+source is maintained in this repository", development_guide)
+    assert "maintained in the main AWS Samples repository" not in current_documentation
     assert "[HTML report](https://aws-samples.github.io/" in readme
     assert 'target="_blank"' not in readme
+
+
+def _github_anchor(heading: str) -> str:
+    """Return the anchor GitHub generates for a Markdown heading."""
+    slug = re.sub(r"[^\w\- ]", "", heading.strip().lower())
+    return slug.replace(" ", "-")
+
+
+def _anchors(markdown: str) -> set[str]:
+    return {
+        _github_anchor(match.group(1))
+        for match in re.finditer(r"^#{1,6} (.+)$", markdown, re.MULTILINE)
+    }
+
+
+def test_readme_documentation_links_resolve_to_existing_files_and_headings():
+    # Arrange
+    readme = README_PATH.read_text(encoding="utf-8")
+    targets = [
+        target
+        for target in MARKDOWN_LINK.findall(readme)
+        if not target.startswith(("http://", "https://", "mailto:"))
+    ]
+
+    # Act
+    broken = []
+    for target in targets:
+        path_part, _, anchor = target.partition("#")
+        document = README_PATH if not path_part else REPO_ROOT / path_part
+        if not document.exists():
+            broken.append(target)
+            continue
+        if anchor and anchor not in _anchors(document.read_text(encoding="utf-8")):
+            broken.append(target)
+
+    # Assert
+    assert targets
+    assert not broken
+
+
+def test_readme_reference_sections_live_in_their_owning_guides():
+    # Arrange
+    readme = README_PATH.read_text(encoding="utf-8")
+    catalog = CATALOG_PATH.read_text(encoding="utf-8")
+    user_guide = USER_GUIDE_PATH.read_text(encoding="utf-8")
+
+    # Act
+    generative_ai_section = catalog.split("## Generative AI coverage", 1)[1].split("\n## ", 1)[0]
+    journey_section = user_guide.split("### Caller Journey Map", 1)[1].split("\n### ", 1)[0]
+
+    # Assert
+    assert "## Generative AI coverage" not in readme
+    assert "## Caller Journey Map" not in readme
+    assert "docs/check-catalog.md#generative-ai-coverage" in readme
+    assert "docs/user-guide.md#caller-journey-map" in readme
+    assert "docs/user-guide.md#installation" in readme
+    assert "docs/user-guide.md#aws-access" in readme
+    for control_id in GENERATIVE_AI_CONTROL_IDS:
+        assert f"`{control_id}`" in generative_ai_section
+    assert "connect:ListFlowAssociations" in journey_section
+    assert "depth 50" in journey_section
+    assert "### pipx (recommended)" in user_guide
+    assert "pipx ensurepath" in user_guide
+    assert "raw.githubusercontent.com" in user_guide

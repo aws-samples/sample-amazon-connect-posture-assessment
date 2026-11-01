@@ -47,7 +47,9 @@ The HTML report spans two ownership boundaries:
 
 - Python in `report_generator.py` owns the report-data schema, embeds the
   `report-data` JSON island, and produces the self-contained HTML shell plus
-  backend JSON and CSV exports.
+  backend JSON and CSV exports. It also computes the accepted Caller Journey
+  Map layout and the portable SVG/draw.io exports; the browser renders that
+  same model interactively.
 - React/Cloudscape in `frontend/src/` owns rendering, report scope, metric and
   chart drill-downs, adaptive evidence cards/tables, browser CSV/JSON exports,
   and print/save-as-PDF behavior.

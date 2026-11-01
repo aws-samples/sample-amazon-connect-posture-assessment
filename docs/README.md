@@ -15,7 +15,7 @@ design records for the Amazon Connect Customer Posture Assessment Tool.
 ## Start Here
 
 - [Project README](../README.md) — installation, AWS access, common CLI usage, and report overview.
-- [User guide](user-guide.md) — detailed installation, AWS access, CLI usage, report operations, and CI/CD.
+- [User guide](user-guide.md) — detailed installation (pipx, repository checkout, CloudShell), AWS access, CLI usage, report operations including the Caller Journey Map, and CI/CD.
 - [Deployment architecture](architecture.svg) — rendered deployment diagram;
   [editable Draw.io source](architecture.drawio).
 - [Configuration guide](configuration.md) — YAML/JSON settings, precedence, output naming, and execution tuning.
@@ -23,7 +23,7 @@ design records for the Amazon Connect Customer Posture Assessment Tool.
 
 ## Current Behavior
 
-- [Check catalog](check-catalog.md) — all 64 canonical controls, dispositions, methodology, executor ownership, aliases, and unified filter behavior.
+- [Check catalog](check-catalog.md) — all 64 canonical controls, dispositions, methodology, executor ownership, aliases, generative AI coverage, and unified filter behavior.
 - [Report formats](report-formats.md) — HTML, JSON, CSV, and failed-control-only ASFF contracts, including the scored-control denominator.
 - [Performance guide](performance-optimization.md) — parallel execution, retry tuning, and journey-scoring bounds.
 - [IAM policy template](iam-policy-template.json) — canonical read-oriented
