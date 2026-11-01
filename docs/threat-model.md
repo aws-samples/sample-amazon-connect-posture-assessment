@@ -42,7 +42,7 @@ bucket before upload.
 | Zone | Description | Trust level |
 |---|---|---|
 | **Z1 — Execution host** | The workstation, CloudShell, or CI runner running the CLI. Has access to AWS credentials, the local filesystem, and report output. | Fully trusted |
-| **Z2 — AWS APIs** | Amazon Connect Customer, IAM/STS, CloudTrail, CloudWatch, KMS, Lambda, S3, Lex, Amazon Q in Connect, Bedrock, and Service Quotas. Data source and (for `--s3-output`) report sink. | Trusted (authenticated, TLS) |
+| **Z2 — AWS APIs** | Amazon Connect Customer, IAM/STS, CloudTrail, CloudWatch, KMS, Lambda, S3, Lex, Connect AI agents (formerly Amazon Q in Connect), Bedrock, and Service Quotas. Data source and (for `--s3-output`) report sink. | Trusted (authenticated, TLS) |
 | **Z3 — Generated reports** | HTML files with embedded JavaScript, plus JSON/CSV/ASFF. Opened directly in a browser or shared. | Untrusted content (flow names/parameters from AWS could contain payloads) |
 | **Z4 — Contact flow content** | JSON retrieved from the assessed AWS account. Parsed and traversed by the tool. | Untrusted (customer-controlled, potentially adversarial) |
 
@@ -150,7 +150,7 @@ assume every assessment API call appears in the configured trail.
 └────────────────────┘  │  ├─ CloudTrail                 │
                         │  ├─ CloudWatch / KMS           │
                         │  ├─ Lambda / Lex               │
-                        │  ├─ Q in Connect / Bedrock     │
+                        │  ├─ Connect AI agents/Bedrock  │
                         │  └─ Service Quotas             │
                         └──────────────┬────────────────┘
                                        │ Returns

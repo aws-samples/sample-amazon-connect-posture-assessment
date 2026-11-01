@@ -418,7 +418,7 @@ connect.get_metric_data_v2(
 | High ACW (>3 min average) + no automated summaries | Manual wrap-up cost | Enable Contact Lens auto-summarization |
 | High agent idle time + high queue wait simultaneously | Scheduling/forecasting gap | Deploy Forecasting, Capacity Planning & Scheduling |
 | Transfer rate >20% | Double-charging (2 agent sessions per contact) | Improve first-contact routing, skills-based routing |
-| Increasing AHT trend | Growing cost per contact | Enable real-time agent assist (Q in Connect) |
+| Increasing AHT trend | Growing cost per contact | Enable real-time agent assist (Connect AI agents) |
 | Agents <30% utilized consistently | Over-staffed or misrouted | Review routing profiles |
 
 ### 3.5 Inactive Users / Wasted Licensing
@@ -485,7 +485,7 @@ connect.list_bots(InstanceId=id, LexVersion='V1')
 # Voice ID
 connect.list_integration_associations(InstanceId=id, IntegrationType='VOICE_ID')
 
-# Amazon Q in Connect / Wisdom
+# Connect AI agents (formerly Amazon Q in Connect / Wisdom)
 connect.list_integration_associations(InstanceId=id, IntegrationType='WISDOM_ASSISTANT')
 connect.list_integration_associations(InstanceId=id, IntegrationType='WISDOM_KNOWLEDGE_BASE')
 
@@ -531,7 +531,7 @@ cloudwatch.get_metric_statistics(
 | Feature | Detection Method | If Absent → Risk/Opportunity |
 | --- | --- | --- |
 | **Contact Lens** | `CONTACT_LENS` attribute + storage config | No QM data, blind CX, no auto-summarization |
-| **Amazon Q / Wisdom** | `list_integration_associations(WISDOM_ASSISTANT)` | Agents lack AI-powered knowledge assist |
+| **Connect AI agents (formerly Amazon Q in Connect / Wisdom)** | `list_integration_associations(WISDOM_ASSISTANT)` | Agents lack AI-powered knowledge assist |
 | **Lex V2 bots** | `list_bots(LexVersion='V2')` | Low IVR containment, high agent cost |
 | **AI Agents (Agentic)** | Flow analysis for new agent blocks | Missing next-gen self-service |
 | **Voice ID** | `list_integration_associations(VOICE_ID)` | No biometric caller authentication |
@@ -544,7 +544,7 @@ cloudwatch.get_metric_statistics(
 | **Outbound Campaigns** | `HIGH_VOLUME_OUTBOUND` + CW metric | Missed proactive CX opportunity |
 | **Flow Modules** | `list_contact_flow_modules()` > 3 | Low flow reuse, high maintenance risk |
 | **Customer Profiles** | `list_integration_associations` type check | No unified customer context at answer |
-| **Real-time agent assist** | Q in Connect + Contact Lens real-time | Agents without live guidance |
+| **Real-time agent assist** | Connect AI agents + Contact Lens real-time | Agents without live guidance |
 | **Post-contact summarization** | Contact Lens auto-summary setting | High ACW, manual note-taking |
 
 ### 4.3 CX Improvement Opportunities
@@ -559,7 +559,7 @@ cloudwatch.get_metric_statistics(
 | High repeat contact rate (same customer <24h) | Root cause identification needed | High (cost + CX) |
 | No priority/VIP routing | Implement customer segment routing | Medium |
 | No skills-based routing | All agents get all calls vs. skill matching | High (FCR) |
-| No agent assist / knowledge integration | Deploy Q in Connect | High (AHT + quality) |
+| No agent assist / knowledge integration | Deploy Connect AI agents | High (AHT + quality) |
 | No personalisation at entry | Add Customer Profiles lookup — greet by name | Medium (CX) |
 | Hardcoded prompts (no dynamic/SSML) | Move to dynamic — enables A/B testing | Low |
 | Long IVR menus (>4 options) | Redesign with NLP input (Lex/AI agent) | High (containment) |

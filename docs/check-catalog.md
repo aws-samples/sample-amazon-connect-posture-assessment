@@ -85,8 +85,8 @@ validation. A `Pass` on an informational record means inventory completed.
 | `sec-cloudtrail-001` | CloudTrail Connect Management Write-Event Coverage | High | Control | BaseCheck |
 | `sec-federation-001` | Identity Federation / MFA Check | Low | Informational | BaseCheck |
 | `sec-profile-audit-001` | Security Profile Permissions Audit | High | Manual Review | BaseCheck |
-| `ai-ops-guardrail-001` | Q in Connect AI Guardrail Coverage | High | Control | BaseCheck |
-| `ai-ops-encryption-001` | Q in Connect Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
+| `ai-ops-guardrail-001` | Connect AI Agents Guardrail Coverage | High | Control | BaseCheck |
+| `ai-ops-encryption-001` | Connect AI Agents Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
 | `sec-lex-convlogs-001` | Lex Conversation Log Encryption | Medium | Control | BaseCheck |
 | `sec-prompt-inject-001` | Potential Unsafe Dynamic Content in Prompts | Medium | Manual Review | BaseCheck |
 | `sec-lambda-validation-001` | Lambda Branch Default Fallback Review | Medium | Manual Review | BaseCheck |
@@ -153,7 +153,7 @@ FAIL. If no storage configuration is returned, the control is not applicable.
 | `ops-logging-001` | Contact Flow Logging | High | Control | BaseCheck |
 | `ops-early-media-001` | Early Media for Outbound Calls | Low | Manual Review | BaseCheck |
 | `ops-auto-resolve-001` | SSML Voice Locale Fallback (`AUTO_RESOLVE_BEST_VOICES`) | Low | Informational | BaseCheck |
-| `ai-ops-kb-sync-001` | Q in Connect Knowledge Base Lifecycle and Ingestion Health | Medium | Control | BaseCheck |
+| `ai-ops-kb-sync-001` | Connect AI Agents Knowledge Base Lifecycle and Ingestion Health | Medium | Control | BaseCheck |
 | `ai-ops-bedrock-logging-001` | Bedrock Model Invocation Logging | Medium | Control | BaseCheck |
 | `ops-acxd-handoff-001` | Agentic CX Handoff Inventory | Low | Informational | BaseCheck |
 | `ops-acxd-escalation-001` | Agentic CX Escalation Path Review | Medium | Manual Review | BaseCheck |
@@ -166,6 +166,69 @@ FAIL. If no storage configuration is returned, the control is not applicable.
 | `perf-lambda-count-001` | Lambda Usage Structure Review | Low | Informational | BaseCheck |
 | `perf-sequential-lambda-001` | Sequential Lambda Invocations | Low | Manual Review | BaseCheck |
 | `perf-flow-complexity-001` | Contact Flow Structure Review | Low | Informational | BaseCheck |
+
+## Generative AI coverage
+
+Contact centres are where generative AI reached production first, and the
+failure modes are new: caller-controlled text reaching a prompt unchanged, a
+knowledge base quietly failing to ingest, an unguarded model answering customers
+directly, a model invocation with no record of what was said.
+
+Nine controls cover it. Three inspect only the Amazon Connect side of an Agentic
+CX Designer handoff; the other six use existing Connect AI agents (formerly
+Amazon Q in Connect) and Bedrock read APIs. They are deliberately **not** a
+separate pillar — an unguarded model is a security finding, a stalled knowledge
+base is an operational one, and reporting them anywhere else would hide them
+from the people who own the fix. This section is a cross-cutting index into the
+pillar tables above, not an additional set of controls: every control below is
+counted exactly once, in its own pillar.
+
+| Check | Pillar | Severity | What it looks for |
+|---|---|---|---|
+| `ai-ops-guardrail-001` | Security | High | Connect AI agent assistants serving customers with no AI guardrail attached |
+| `ai-ops-encryption-001` | Security | Medium | Connect AI agents on AWS-owned keys instead of a customer-managed KMS key |
+| `ai-ops-kb-sync-001` | Operational Excellence | Medium | Knowledge-base ingestion health and content lifecycle — a stale base answers confidently and wrongly |
+| `ai-ops-bedrock-logging-001` | Operational Excellence | Medium | Bedrock model-invocation logging disabled, leaving no record of what was said |
+| `ai-ops-model-cost-001` | Cost Optimization | Low | Prompt model selection against the work each prompt actually does |
+| `ai-ops-cross-region-001` | Resilience | Low | Cross-region inference profile availability for the models in use |
+| `ops-acxd-handoff-001` | Operational Excellence | Low | Redacted inventory of reachable Connect handoffs, configured workspace/application/alias references, and optional feature presence |
+| `ops-acxd-escalation-001` | Operational Excellence | Medium | Manual review of reachable Agentic CX handoffs without an authored condition whose exact token is `Escalation`; this does not prove a successful escalated-to-agent runtime outcome |
+| `res-acxd-error-routing-001` | Resilience | High | Reachable Agentic CX handoffs missing idle-timeout or catch-all error routes |
+
+Run only this set:
+
+```bash
+amazon-connect-assessment --region us-east-1 --checks \
+  ai-ops-guardrail-001 ai-ops-encryption-001 ai-ops-kb-sync-001 \
+  ai-ops-bedrock-logging-001 ai-ops-model-cost-001 ai-ops-cross-region-001 \
+  ops-acxd-handoff-001 ops-acxd-escalation-001 res-acxd-error-routing-001
+```
+
+The six Connect AI agents and Bedrock controls report **Not Applicable** when no
+relevant integration exists. The three Agentic CX controls report **Not
+Applicable** only after complete flow analysis finds no reachable
+`ConnectParticipantWithAgenticCX` action. Incomplete clean evidence is Skipped;
+a known structural defect still fails. These controls call no Agentic CX APIs
+and do not inspect application internals or expose context-variable values.
+
+`sec-prompt-inject-001` is deliberately **not** listed here. It reviews
+potentially unsafe dynamic content in SSML and agent-facing prompts. No model is
+involved, and a review candidate is not proof of an exploit. It is a Security
+control and appears in that pillar's table.
+
+Amazon Lex guardrail posture is **not** covered. An earlier check that claimed
+to cover it could not read a bot's configuration, so it failed every Lex
+integration it found regardless of how that bot was actually configured; it was
+removed rather than left in the report. Reimplementing it requires reading the
+bot's own configuration rather than inferring posture from the Connect
+integration alone.
+
+What *is* covered for Lex is where a bot's conversations end up:
+`sec-lex-convlogs-001` reads each associated bot alias's conversation-log
+settings and fails when audio logging writes caller recordings to S3 with no
+customer-managed key. It appears under Security rather than here, for the same
+reason as `sec-prompt-inject-001` — Lex is intent recognition, not a generative
+model, and counting it as AI coverage would overstate what this tool inspects.
 
 ## Connect-side Agentic CX execution
 

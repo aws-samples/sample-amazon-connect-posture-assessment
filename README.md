@@ -14,9 +14,9 @@ region, and it inventories the instance, parses your contact flows, maps what
 callers actually experience, and returns prioritized findings with remediation
 guidance.
 
-No agents or assessment infrastructure are deployed. Assessed resources are not
-modified; only the explicitly enabled `--s3-output` path creates or hardens the
-selected report bucket and uploads reports.
+No agents or assessment infrastructure are deployed, and assessed resources are
+not modified. See [Security and privacy](#security-and-privacy) for the one
+opt-in write path.
 
 ```bash
 pipx install git+https://github.com/aws-samples/sample-amazon-connect-posture-assessment
@@ -32,8 +32,6 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 - [Quick start](#quick-start)
 - [Common tasks](#common-tasks)
 - [What it assesses](#what-it-assesses)
-- [Caller Journey Map](#caller-journey-map)
-- [Generative AI coverage](#generative-ai-coverage)
 - [Report formats](#report-formats)
 - [Architecture](#architecture)
 - [Security and privacy](#security-and-privacy)
@@ -47,14 +45,14 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 
 | | |
 |---|---|
-| **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, performs bounded static path enumeration, and renders an interactive map you can zoom, inspect, and export. Enumeration is limited to depth 50, 200 paths per phone number, and 5,000 paths per run. Most tooling audits resources; this audits the experience. |
+| **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, performs bounded static path enumeration, and renders an interactive map you can zoom, inspect, and export. Most tooling audits resources; this audits the experience. See [Caller Journey Map](docs/user-guide.md#caller-journey-map). |
 | **Contact flow analysis** | Parses published flow content to find dead-end error paths, unreachable blocks, infinite loops, toll-fraud exposure, prompt-injection risk, and Lambda branching with no fallback path — issues that are invisible from the console. |
 | **64 canonical controls** | One catalog across all five Well-Architected pillars: 60 BaseCheck executors and 4 Journey-backed executors. Every record carries status, disposition, evidence, and methodology so measured controls stay distinct from review candidates and inventory. |
-| **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Amazon Q in Connect, and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](#generative-ai-coverage). |
+| **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Connect AI agents (formerly Amazon Q in Connect), and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](docs/check-catalog.md#generative-ai-coverage). |
 | **Quota headroom** | Concurrent-call and configuration-object utilization against your real Service Quotas ceilings, with a 90-day growth trend projecting how long the current rate leaves before you hit one. |
 | **Four output formats** | HTML, JSON, CSV, and ASFF for direct ingestion into AWS Security Hub. |
 | **Run-over-run comparison** | `--diff` against a previous JSON report shows what was resolved and what is new, so you can track remediation progress. |
-| **Safe by default** | Assessment access uses read-oriented `List`, `Get`, `Describe`, and `Head` operations. The consequential opt-in write, `--s3-output`, creates or hardens the selected report bucket and uploads the finished report. |
+| **Safe by default** | Read-oriented access to assessed resources. The only write path is the opt-in `--s3-output` report upload. |
 
 ---
 
@@ -70,12 +68,6 @@ Check out the sample [HTML report](https://aws-samples.github.io/sample-amazon-c
 ![Full sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report-full.png)
 
 </details>
-
-The HTML report uses the React/Cloudscape frontend maintained in this
-repository. The application bundle, fonts, report data, and Journey Map are
-embedded into one file so the report remains portable and works offline.
-Python computes the accepted Journey Map layout and portable SVG/draw.io
-exports; the Cloudscape report renders that same model interactively.
 
 A complete example is checked in at
 [`examples/sample_assessment_report.html`](examples/sample_assessment_report.html) —
@@ -97,85 +89,14 @@ instance, uses fixed timestamps, and contains no customer data.
 
 ### 2. Install
 
-The recommended install uses [pipx](https://pipx.pypa.io/), which keeps the tool
-in its own isolated environment and puts the command on your `PATH`.
-
-First, check whether `pipx` is already installed. Run only the command inside
-the code block; do not copy the `bash` label or the triple backticks:
-
-```bash
-pipx --version
-```
-
-If the command prints a version, skip the installation step. If it reports
-`command not found`, install `pipx` for your operating system:
-
-**macOS:**
-
-```bash
-brew install pipx
-pipx ensurepath
-```
-
-**Linux:**
-
-```bash
-python3 -m pip install --user pipx
-python3 -m pipx ensurepath
-```
-
-After installing, open a new terminal and confirm that `pipx` is available:
-
-```bash
-pipx --version
-```
-
-Then install the assessment tool:
-
 ```bash
 pipx install git+https://github.com/aws-samples/sample-amazon-connect-posture-assessment
-```
-
-If this command succeeds, installation is complete. You do not need to clone
-the repository.
-
-#### Verify the installation
-
-Run the version command to confirm that your shell can find the installed CLI
-and to display the release that pipx installed:
-
-```bash
 amazon-connect-assessment --version
 ```
 
-If it prints a version, continue to the permissions step. Include this output
-when reporting an installation problem. The README intentionally does not name
-an expected version, so these instructions remain correct when a new release is
-published.
-
-<details>
-<summary>Alternative for contributors: clone and install a local checkout</summary>
-
-Use this option only when you want to inspect or modify the source. Skip it if
-the primary `pipx install git+...` command succeeded.
-
-```bash
-git clone https://github.com/aws-samples/sample-amazon-connect-posture-assessment
-cd sample-amazon-connect-posture-assessment
-pipx install .
-```
-
-</details>
-
-<details>
-<summary>Alternative: AWS CloudShell or a virtual environment</summary>
-
-CloudShell already has credentials and Python available, which makes it the
-fastest way to run a one-off assessment. See
-[Installation](docs/user-guide.md#installation) in the User Guide for CloudShell
-and contributor virtual-environment setup.
-
-</details>
+The tool installs with [pipx](https://pipx.pypa.io/). See
+[Installation](docs/user-guide.md#installation) in the User Guide to install
+`pipx`, run from a repository checkout, or use AWS CloudShell.
 
 ### 3. Grant read permissions
 
@@ -186,39 +107,25 @@ supporting AWS services. Check whether your current identity already has it:
 amazon-connect-assessment --check-permissions --region us-east-1
 ```
 
-If permissions are missing, download the least-privilege policy template. A
-`pipx` installation does not place repository files in your current directory:
-
-```bash
-curl --fail --location --silent --show-error \
-  --output AmazonConnectSelfAssessmentPolicy.yaml \
-  https://raw.githubusercontent.com/aws-samples/sample-amazon-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
-```
-
-After the download succeeds, deploy the policy and attach it to your IAM role:
+If permissions are missing, deploy the least-privilege policy template
+[`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](cloudformation/AmazonConnectSelfAssessmentPolicy.yaml)
+and attach it to your IAM role:
 
 ```bash
 aws cloudformation deploy \
   --stack-name amazon-connect-assessment-permissions \
-  --template-file AmazonConnectSelfAssessmentPolicy.yaml \
+  --template-file cloudformation/AmazonConnectSelfAssessmentPolicy.yaml \
   --parameter-overrides AttachToRoleName=YOUR_ROLE_NAME \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
 
-If you cloned the repository, you can use the checked-in
-[`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](cloudformation/AmazonConnectSelfAssessmentPolicy.yaml)
-as `--template-file` instead of downloading it.
-
-Use `AttachToUserName=YOUR_USERNAME` to attach to an IAM user instead, or omit
-both parameters to create the policy without attaching it. The exact action list
-is published at
-[`docs/iam-policy-template.json`](docs/iam-policy-template.json) if you prefer to
-fold it into an existing role or permission set.
-
-> **Note:** The CloudFormation template intentionally grants read permissions
-> only. It does not include the S3 write permissions required by the optional
-> `--s3-output` flag.
+A `pipx` installation does not include the template, so download it first. See
+[AWS Access](docs/user-guide.md#aws-access) in the User Guide for the download
+command, attaching to an IAM user, and the
+[`docs/iam-policy-template.json`](docs/iam-policy-template.json) action list.
+The template grants read permissions only; it does not include the S3 write
+permissions required by `--s3-output`.
 
 ### 4. Run the assessment
 
@@ -288,121 +195,18 @@ findings set.
 | Security | 19 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
 | Resilience | 18 | Global Resiliency posture, quota headroom and growth, CloudWatch alarms, Agentic CX error/idle-timeout routing, flow error handling, loop detection, Lambda dependencies, and structural journey dead ends |
 | Cost Optimization | 16 | Claimed-number inventory, self-service containment, callback and data-continuity review, idle configuration, operating hours, premium features, model cost, and phone-reachability scope |
-| Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Q knowledge-base health, and Bedrock invocation logging |
+| Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Connect AI agents knowledge-base health, and Bedrock invocation logging |
 | Performance Efficiency | 3 | Route-aware Lambda inventory, sequential Lambda review, and flow-structure inventory |
 
-The catalog assigns one of three dispositions to every record: 23 `CONTROL`, 25
-`MANUAL_REVIEW`, and 16 `INFORMATIONAL`. Only passed and failed `CONTROL`
-records enter the posture score. The scored-control denominator excludes
-Skipped, Error, Not Applicable, manual-review, and informational records.
+Every record has one of three dispositions: 23 `CONTROL`, 25 `MANUAL_REVIEW`,
+and 16 `INFORMATIONAL`. Only passed and failed `CONTROL` records enter the
+posture score.
 
-Run `amazon-connect-assessment --list-checks` for the live unified selection, or
-see the [Check Catalog](docs/check-catalog.md) for every canonical ID, executor,
-disposition, evidence boundary, and verification method. The legacy input IDs
-`journey-sec-001` and `journey-cost-001` remain accepted aliases, but reports
-and listings emit only `sec-flow-auth-001` and `cost-containment-001`.
-
-A control outcome is measured evidence within its stated limits. A
-manual-review outcome identifies a candidate that still needs human validation.
-An informational outcome records inventory or planning context. Status tells
-you whether execution passed, failed, was skipped, errored, or was not
-applicable; it does not change the record's disposition.
-
----
-
-## Caller Journey Map
-
-Most assessment tooling inspects resources. The Caller Journey Map inspects the
-**experience**, starting from the phone number a customer actually dials.
-
-- **Accurate flow resolution.** Each inbound number is matched to its flow using
-  `connect:ListFlowAssociations`, rather than assuming
-  `ListPhoneNumbersV2.TargetArn` points at a flow.
-- **Bounded static path enumeration.** Default, conditional, and error
-  transitions are followed from each entry point with limits of depth 50, 200
-  paths per phone number, and 5,000 paths per run. Cycle edges are pruned
-  without losing structural node reachability. A reached cap, dynamic target,
-  or unresolved flow reference marks enumeration incomplete rather than
-  claiming exhaustive runtime coverage.
-- **Canonical Journey outcomes.** Four catalog controls use the Journey executor:
-  `sec-flow-auth-001`, `cost-containment-001`, `journey-res-001`, and
-  `journey-scope-001`. Each produces one aggregate outcome per selected
-  instance, subject to the same catalog filters as every other control.
-- **Interactive, offline map.** The CLI server-renders a deterministic
-  caller-focused projection into the HTML report. In the browser you can switch
-  between phone numbers, zoom and fit without distorting the layout, open a
-  node and connector inspector, and export SVG, PNG, or an editable draw.io
-  diagram.
-
-No separate web service or launcher is required — it is part of the standard
-HTML report.
-
-Phone numbers are masked in report evidence, preserving only the last four
-digits.
-
----
-
-## Generative AI coverage
-
-Contact centres are where generative AI reached production first, and the
-failure modes are new: caller-controlled text reaching a prompt unchanged, a
-knowledge base quietly failing to ingest, an unguarded model answering customers
-directly, a model invocation with no record of what was said.
-
-Nine checks cover it. Three inspect only the Amazon Connect side of an Agentic
-CX Designer handoff; the other six use existing Q in Connect and Bedrock read
-APIs. They are deliberately **not** a separate pillar — an unguarded model is a
-security finding, a stalled knowledge base is an operational one, and reporting
-them anywhere else would hide them from the people who own the fix. This section
-is a cross-cutting index into the pillar tables above, not an additional set of
-checks: every check below is counted exactly once, in its own pillar.
-
-| Check | Pillar | Severity | What it looks for |
-|---|---|---|---|
-| `ai-ops-guardrail-001` | Security | High | Amazon Q in Connect assistants serving customers with no AI guardrail attached |
-| `ai-ops-encryption-001` | Security | Medium | Q in Connect on AWS-owned keys instead of a customer-managed KMS key |
-| `ai-ops-kb-sync-001` | Operational Excellence | Medium | Knowledge-base ingestion health and content lifecycle — a stale base answers confidently and wrongly |
-| `ai-ops-bedrock-logging-001` | Operational Excellence | Medium | Bedrock model-invocation logging disabled, leaving no record of what was said |
-| `ai-ops-model-cost-001` | Cost Optimization | Low | Prompt model selection against the work each prompt actually does |
-| `ai-ops-cross-region-001` | Resilience | Low | Cross-region inference profile availability for the models in use |
-| `ops-acxd-handoff-001` | Operational Excellence | Low | Redacted inventory of reachable Connect handoffs, configured workspace/application/alias references, and optional feature presence |
-| `ops-acxd-escalation-001` | Operational Excellence | Medium | Manual review of reachable Agentic CX handoffs without an authored condition whose exact token is `Escalation`; this does not prove a successful escalated-to-agent runtime outcome |
-| `res-acxd-error-routing-001` | Resilience | High | Reachable Agentic CX handoffs missing idle-timeout or catch-all error routes |
-
-Run only this set:
-
-```bash
-amazon-connect-assessment --region us-east-1 --checks \
-  ai-ops-guardrail-001 ai-ops-encryption-001 ai-ops-kb-sync-001 \
-  ai-ops-bedrock-logging-001 ai-ops-model-cost-001 ai-ops-cross-region-001 \
-  ops-acxd-handoff-001 ops-acxd-escalation-001 res-acxd-error-routing-001
-```
-
-The six Q in Connect and Bedrock controls report **Not Applicable** when no
-relevant integration exists. The three Agentic CX controls report **Not
-Applicable** only after complete flow analysis finds no reachable
-`ConnectParticipantWithAgenticCX` action. Incomplete clean evidence is Skipped;
-a known structural defect still fails. These controls call no Agentic CX APIs
-and do not inspect application internals or expose context-variable values.
-
-`sec-prompt-inject-001` is deliberately **not** listed here. It reviews
-potentially unsafe dynamic content in SSML and agent-facing prompts. No model is
-involved, and a review candidate is not proof of an exploit. It is a Security
-finding and appears in that pillar's table.
-
-Amazon Lex guardrail posture is **not** covered. The check that claimed to cover
-it could not read a bot's configuration, so it failed every Lex integration it
-found regardless of how that bot was actually configured; it was removed rather
-than left in the report. See the
-[Check Catalog](docs/check-catalog.md#security--19-checks) for what
-reimplementing it requires.
-
-What *is* covered for Lex is where a bot's conversations end up:
-`sec-lex-convlogs-001` reads each associated bot alias's conversation-log
-settings and fails when audio logging writes caller recordings to S3 with no
-customer-managed key. It appears under Security rather than here, for the same
-reason as `sec-prompt-inject-001` — Lex is intent recognition, not a generative
-model, and counting it as AI coverage would overstate what this tool inspects.
+Run `amazon-connect-assessment --list-checks` for the live selection, or see the
+[Check Catalog](docs/check-catalog.md) for every canonical ID, disposition,
+evidence boundary, and verification method, including the
+[status and disposition rules](docs/check-catalog.md#status-and-disposition)
+and [Generative AI coverage](docs/check-catalog.md#generative-ai-coverage).
 
 ---
 
@@ -455,9 +259,9 @@ risks, and hardening recommendations.
 
 | Guide | Covers |
 |---|---|
-| [User Guide](docs/user-guide.md) | Installation paths, AWS access, CLI usage, S3 publishing, run comparison, CI/CD |
+| [User Guide](docs/user-guide.md) | Installation paths, AWS access, CLI usage, Caller Journey Map, S3 publishing, run comparison, CI/CD |
 | [Configuration](docs/configuration.md) | YAML and JSON settings, precedence, output naming, execution tuning |
-| [Check Catalog](docs/check-catalog.md) | All 64 canonical controls, dispositions, methodology, executor ownership, aliases, and filter behavior |
+| [Check Catalog](docs/check-catalog.md) | All 64 canonical controls, dispositions, methodology, generative AI coverage, executor ownership, aliases, and filter behavior |
 | [Report Formats](docs/report-formats.md) | HTML, JSON, CSV, and ASFF output contracts |
 | [Performance Guide](docs/performance-optimization.md) | Parallel execution, retry tuning, journey-scoring bounds |
 | [Troubleshooting](docs/troubleshooting.md) | Installation, credentials, permissions, runtime, and report issues |

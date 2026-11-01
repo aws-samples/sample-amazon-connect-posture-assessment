@@ -415,7 +415,7 @@ class AWSClientFactory:
         return self.get_client("lexv2-models")
 
     def get_qconnect_client(self) -> Any:
-        """Get the Amazon Q in Connect (qconnect) client."""
+        """Get the Connect AI agents client (qconnect API, formerly Amazon Q in Connect)."""
         return self.get_client("qconnect")
 
     def get_bedrock_client(self) -> Any:
@@ -571,14 +571,14 @@ class AWSClientFactory:
         )
 
     def get_qconnect_assistant_resilient(self, assistant_id: str) -> Dict[str, Any]:
-        """Get a Q in Connect assistant's configuration with resilience."""
+        """Get a Connect AI agent assistant's configuration with resilience."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client, "get_assistant", "qconnect", assistantId=assistant_id
         )
 
     def get_qconnect_knowledge_base_resilient(self, knowledge_base_id: str) -> Dict[str, Any]:
-        """Get a Q in Connect knowledge base's configuration with resilience."""
+        """Get a Connect AI agent knowledge base's configuration with resilience."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client,
@@ -588,7 +588,7 @@ class AWSClientFactory:
         )
 
     def list_ai_guardrails_resilient(self, assistant_id: str, **kwargs) -> Dict[str, Any]:
-        """List assistant-scoped Q in Connect AI guardrails with resilience."""
+        """List assistant-scoped Connect AI guardrails with resilience."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client,
@@ -599,7 +599,7 @@ class AWSClientFactory:
         )
 
     def list_ai_agents_resilient(self, assistant_id: str, **kwargs) -> Dict[str, Any]:
-        """List assistant-scoped Q in Connect AI agents with resilience."""
+        """List assistant-scoped Connect AI agents with resilience."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client,
@@ -610,7 +610,7 @@ class AWSClientFactory:
         )
 
     def get_ai_agent_resilient(self, assistant_id: str, ai_agent_id: str) -> Dict[str, Any]:
-        """Read one Q in Connect AI agent, including a version-qualified ID."""
+        """Read one Connect AI agent, including a version-qualified ID."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client,
@@ -621,7 +621,7 @@ class AWSClientFactory:
         )
 
     def list_ai_prompts_resilient(self, assistant_id: str, **kwargs) -> Dict[str, Any]:
-        """List assistant-scoped Q in Connect AI prompts with resilience."""
+        """List assistant-scoped Connect AI prompts with resilience."""
         client = self.get_qconnect_client()
         return self.call_api_with_resilience(
             client,
