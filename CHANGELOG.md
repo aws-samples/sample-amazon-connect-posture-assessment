@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+
+- Upgraded the report UI's `dompurify` dependency from 3.4.16 to 3.4.17 to
+  address GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, and GHSA-c6gr-qvv4-5v3f,
+  and rebuilt the committed report bundle.
+
 ### Upgrade notes
 
 - The unified catalog now emits 64 canonical control outcomes. The only legacy
