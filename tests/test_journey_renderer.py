@@ -6,8 +6,9 @@ orthogonal connectors, cap unreasonably large flows, emit editable draw.io XML,
 and keep all flow-derived content inert in HTML and XML artifacts.
 """
 
-# ElementTree only parses strings generated in-process by the renderer under test.
-from xml.etree import ElementTree as ET  # nosec B405
+from typing import Any
+
+from defusedxml import ElementTree as ET
 
 from amazon_connect_assessment.journey.renderer import (
     _HARD_CAP,
@@ -27,10 +28,9 @@ from amazon_connect_assessment.models import (
 )
 
 
-def _parse_generated_xml(xml_text: str) -> ET.Element:
-    """Parse XML emitted by the renderer, never external or customer input."""
-    # This helper never accepts external or customer-provided XML.
-    return ET.fromstring(xml_text)  # nosec B314
+def _parse_generated_xml(xml_text: str) -> Any:
+    """Parse XML emitted by the renderer with entity expansion and DTDs refused."""
+    return ET.fromstring(xml_text)
 
 
 def _action(action_id: str, action_type: str, **kwargs) -> FlowAction:

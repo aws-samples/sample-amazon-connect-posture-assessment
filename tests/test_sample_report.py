@@ -2,7 +2,6 @@
 
 import importlib.util
 import json
-import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -167,18 +166,13 @@ def test_sample_html_exposes_disposition_methodology_and_canonical_ids():
     assert "Assessment methodology" in html
 
 
-def test_checked_in_sample_matches_canonical_script_output(tmp_path):
+def test_checked_in_sample_matches_canonical_script_output(tmp_path, monkeypatch):
     # Arrange
     generated_sample = tmp_path / "sample_assessment_report.html"
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "--output", str(generated_sample)])
 
     # Act
-    subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--output", str(generated_sample)],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    assert SAMPLE_REPORT.main() == 0
 
     # Assert
     assert generated_sample.read_bytes() == CHECKED_IN_SAMPLE.read_bytes()
