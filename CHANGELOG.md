@@ -9,6 +9,9 @@ All notable changes to this project are documented in this file.
 - Upgraded the report UI's `dompurify` dependency from 3.4.16 to 3.4.17 to
   address GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, and GHSA-c6gr-qvv4-5v3f,
   and rebuilt the committed report bundle.
+- Test suite now parses renderer XML with `defusedxml` (pinned in the `test`
+  extra) and runs the canonical sample-report check in-process instead of
+  through `subprocess`, clearing Content Security Review scanner findings.
 
 ### Upgrade notes
 

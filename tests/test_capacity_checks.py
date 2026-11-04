@@ -567,7 +567,7 @@ class TestConfigurationQuotaUtilization:
         _populate(check_context.instance)
         api = _Api(
             **_quota_responses(),
-            list_users=[_users(100, next_token="p2"), _users(60)],
+            list_users=[_users(100, next_token="p2"), _users(60)],  # nosec B106
             list_phone_numbers_v2={"ListPhoneNumbersSummaryList": []},
         )
         finding = self._run(check_context, api)
@@ -604,7 +604,7 @@ class TestConfigurationQuotaUtilization:
         # 4,000 quota this is 50% and a PASS; the instance could be at 88%.
         api = _Api(
             **_quota_responses(),
-            list_users=[_users(100, next_token="more")] * 21,
+            list_users=[_users(100, next_token="more")] * 21,  # nosec B106
             list_phone_numbers_v2={"ListPhoneNumbersSummaryList": []},
         )
         finding = self._run(check_context, api)
