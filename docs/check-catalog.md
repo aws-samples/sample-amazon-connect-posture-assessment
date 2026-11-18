@@ -83,7 +83,7 @@ validation. A `Pass` on an informational record means inventory completed.
 | `sec-storage-001` | Instance Storage Encryption Check | High | Control | BaseCheck |
 | `sec-origins-001` | Approved Origins / CCP Access Control Check | High | Manual Review | BaseCheck |
 | `sec-cloudtrail-001` | CloudTrail Connect Management Write-Event Coverage | High | Control | BaseCheck |
-| `sec-federation-001` | Identity Federation / MFA Check | Low | Informational | BaseCheck |
+| `sec-federation-001` | Identity Federation / MFA Check | High | Manual Review | BaseCheck |
 | `sec-profile-audit-001` | Security Profile Permissions Audit | High | Manual Review | BaseCheck |
 | `ai-ops-guardrail-001` | Connect AI Agents Guardrail Coverage | High | Control | BaseCheck |
 | `ai-ops-encryption-001` | Connect AI Agents Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
@@ -101,6 +101,16 @@ validation. A `Pass` on an informational record means inventory completed.
 and every storage-type read completes. A failed read or a Kinesis stream destination whose
 encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
 FAIL. If no storage configuration is returned, the control is not applicable.
+
+`sec-federation-001` returns PASS only for SAML federation, where MFA is centrally
+enforceable and auditable at the IdP. Every other `IdentityManagementType` returns FAIL,
+because the instance exposes no federated sign-in path in which MFA can be proven — the
+entry condition for agent-credential compromise and agent-initiated outbound toll fraud.
+It carries the Manual Review disposition rather than Control because
+`IdentityManagementType` cannot prove MFA is *absent* either: Connect-managed identity
+behind your own SSO/MFA layer is legitimate, but nothing in the instance configuration
+evidences that layer, so a human must confirm it. Earlier releases returned PASS on both
+branches, which made a Connect-managed instance with no MFA anywhere read as reassurance.
 
 ### Resilience — 18 controls
 

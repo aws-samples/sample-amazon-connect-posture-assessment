@@ -955,28 +955,49 @@ class TestIdentityFederationCheck:
         )
         assert finding.status == CheckStatus.PASS
 
-    def test_non_saml_identity_inventory_passes_expected_result(
+    def test_non_saml_identity_fails_for_manual_review(
         self, make_check_context, sample_connect_instance
     ):
-        # Arrange
+        # Connect-managed identity with no federated sign-in path is a
+        # finding, not inventory: it is the entry condition for agent
+        # credential compromise and agent-initiated outbound toll fraud.
+        #
+        # This check previously returned PASS on BOTH branches, so a
+        # Connect-managed instance with no MFA anywhere produced a passing
+        # informational record that read as reassurance. A real toll-fraud
+        # incident walked straight through that gap.
         sample_connect_instance.identity_management_type = "CONNECT_MANAGED"
 
-        # Act
         finding = IdentityFederationCheck().execute(
             make_check_context(instance=sample_connect_instance)
         )
 
-        # Assert
-        assert finding.status == CheckStatus.PASS
-        assert finding.structured_remediation is None
-        assert "verify" in finding.description.lower()
-        assert "migrate" not in finding.description.lower()
+        assert finding.status == CheckStatus.FAIL
+        # Actionable, since the point is to get a human to confirm the
+        # external MFA layer exists (or establish one).
+        assert finding.structured_remediation is not None
+        assert "mfa" in finding.description.lower()
 
-    def test_severity_is_low_not_medium(self):
-        # Reviewer feedback: SAML is one good option, not the only
-        # one -- Connect-managed identity paired with a third-party IdP
-        # (Okta, Entra ID) for MFA is also viable. Downgraded from MEDIUM.
-        assert IdentityFederationCheck().severity == Severity.LOW
+    def test_no_branch_silently_passes_without_federation(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Regression guard for the original defect: every non-SAML identity
+        # type must be surfaced, not just the one spelled CONNECT_MANAGED.
+        for idm in ("CONNECT_MANAGED", "EXISTING_DIRECTORY", "", None):
+            sample_connect_instance.identity_management_type = idm
+            finding = IdentityFederationCheck().execute(
+                make_check_context(instance=sample_connect_instance)
+            )
+            assert finding.status == CheckStatus.FAIL, idm
+
+    def test_severity_is_high(self):
+        # Was LOW/Informational on the reasoning that Connect-managed
+        # identity behind a third-party IdP (Okta, Entra ID) is also viable.
+        # That remains true, which is why the finding carries the
+        # MANUAL_REVIEW disposition rather than asserting a control failure
+        # -- but it cannot be a silent PASS, because the assessment sees no
+        # evidence that such a layer exists.
+        assert IdentityFederationCheck().severity == Severity.HIGH
 
 
 # --- Security profile audit (sec-profile-audit-001) -----------------------

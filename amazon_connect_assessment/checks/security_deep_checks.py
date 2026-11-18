@@ -1277,14 +1277,15 @@ class IdentityFederationCheck(BaseCheck):
             check_id="sec-federation-001",
             name="Identity Federation / MFA Check",
             pillar=Pillar.SECURITY,
-            severity=Severity.LOW,
+            severity=Severity.HIGH,
             description=(
-                "Reports the instance's identity management type so you can "
-                "confirm centralized authentication and MFA are enforced "
-                "somewhere in the sign-in path — either via SAML federation "
-                "to your enterprise IdP, or via Connect-managed identity "
-                "combined with your own SSO/MFA layer (e.g. Okta, Entra ID) "
-                "in front of it."
+                "Checks whether the instance has a federated sign-in path that "
+                "makes MFA centrally enforceable. SAML federation places "
+                "authentication at your enterprise IdP. Connect-managed "
+                "identity does not, so it is raised for manual review: it can "
+                "still be sound behind your own SSO/MFA layer (e.g. Okta, "
+                "Entra ID), but nothing in the instance configuration proves "
+                "that layer exists."
             ),
         )
 
@@ -1305,17 +1306,55 @@ class IdentityFederationCheck(BaseCheck):
                 evidence=evidence,
             )
 
+        # Deliberately a finding, not inventory. Connect-managed identity with
+        # no visible federated sign-in path is the entry condition for
+        # agent-credential compromise — the first link in the agent-initiated
+        # outbound toll-fraud chain. IdentityManagementType cannot prove MFA is
+        # absent, so this carries the MANUAL_REVIEW disposition: it routes to a
+        # human for confirmation rather than asserting a control failure.
         return self.create_finding(
-            status=CheckStatus.PASS,
+            status=CheckStatus.FAIL,
             resource_id=instance.instance_id,
             resource_type="ConnectInstance",
             description=(
                 f"Instance {instance.display_name} reports '{idm or 'unknown'}' identity "
-                "management. This inventory does not establish whether MFA or "
-                "centralized lifecycle controls are enforced. Verify the actual sign-in "
-                "path, identity-provider or native MFA policy, and break-glass access."
+                "management, so there is no federated sign-in path in which MFA can be "
+                "centrally enforced and audited. Agent passwords may be the only "
+                "authentication factor, which is how agent credentials get compromised "
+                "and used for outbound toll fraud. Confirm an external SSO/MFA layer "
+                "fronts agent sign-in, test MFA and break-glass access, and record where "
+                "that control is administered."
             ),
             evidence=evidence,
+            structured_remediation=Remediation(
+                summary=("Establish and evidence a centrally enforced MFA path for agent sign-in."),
+                target_resources=[instance.instance_id],
+                steps=[
+                    RemediationStep(
+                        order=1,
+                        instruction=(
+                            "Confirm whether agent sign-in is fronted by an external "
+                            "SSO/MFA layer. If it is, record the provider and the "
+                            "enforcing policy as the governing identity control."
+                        ),
+                    ),
+                    RemediationStep(
+                        order=2,
+                        instruction=(
+                            "If no MFA layer exists, migrate the instance to SAML "
+                            "federation against your enterprise IdP, or place an "
+                            "SSO/MFA layer in front of Connect-managed sign-in."
+                        ),
+                    ),
+                    RemediationStep(
+                        order=3,
+                        instruction=(
+                            "Test MFA enforcement and break-glass access end to end, "
+                            "including that a password-only sign-in is rejected."
+                        ),
+                    ),
+                ],
+            ),
         )
 
 

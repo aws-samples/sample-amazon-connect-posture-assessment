@@ -31,8 +31,8 @@ def test_atomic_catalog_current_inventory_has_exact_approved_totals():
     assert len(registry) == 64
     assert disposition_counts == {
         FindingDisposition.CONTROL: 23,
-        FindingDisposition.MANUAL_REVIEW: 25,
-        FindingDisposition.INFORMATIONAL: 16,
+        FindingDisposition.MANUAL_REVIEW: 26,
+        FindingDisposition.INFORMATIONAL: 15,
     }
 
 
