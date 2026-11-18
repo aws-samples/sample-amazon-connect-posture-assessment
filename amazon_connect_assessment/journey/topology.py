@@ -43,9 +43,27 @@ def resolve_topology(
     phone_flow_ids = {e.contact_flow_id for e in phone_entries if e.contact_flow_id}
     reachable = _compute_transitive_reachability(phone_flow_ids, parsed_flows)
 
-    # Step 3: Classify tiers.
-    max_traffic_flows = config.get("journey_map", {}).get("max_traffic_flows", 10)
-    tier_assignments = _classify_tiers(phone_entries, parsed_flows, reachable, max_traffic_flows)
+    # Step 3: Classify each flow's channel usage from observed traffic. This
+    # is what surfaces chat/task/email-only flows, which have no phone
+    # number to be reachable from. Fails open to {} without metrics access.
+    journey_cfg = config.get("journey_map", {}) or {}
+    lookback_days = journey_cfg.get("traffic_lookback_days", _TRAFFIC_LOOKBACK_DAYS_DEFAULT)
+    channel_traffic = _resolve_flow_channel_traffic(
+        instance_arn=instance_arn,
+        factory=factory,
+        flow_ids=sorted(parsed_flows.keys()),
+        lookback_days=lookback_days,
+    )
+
+    # Step 4: Classify tiers.
+    max_traffic_flows = journey_cfg.get("max_traffic_flows", 10)
+    tier_assignments = _classify_tiers(
+        phone_entries,
+        parsed_flows,
+        reachable,
+        max_traffic_flows,
+        channel_traffic=channel_traffic,
+    )
 
     return phone_entries, tier_assignments
 
@@ -116,17 +134,32 @@ def _list_phone_numbers(
     return entries
 
 
-# Resource types ListFlowAssociations supports that represent a phone
-# number (as opposed to INBOUND_EMAIL / OUTBOUND_EMAIL /
-# ANALYTICS_CONNECTOR). A single Connect number can be channel-bound
-# under more than one of these — e.g. a toll-free number claimed for
-# voice and separately wired for SMS replies via AWS End User
-# Messaging — so all three are queried and merged.
-_FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES = (
-    "VOICE_PHONE_NUMBER",
-    "SMS_PHONE_NUMBER",
-    "WHATSAPP_MESSAGING_PHONE_NUMBER",
-)
+# Only VOICE_PHONE_NUMBER is queried here, deliberately.
+#
+# This mapping is keyed by ``ListPhoneNumbersV2``'s ``PhoneNumberArn``,
+# which is always a Connect-claimed voice number
+# (``arn:aws:connect:…:phone-number/…``). The other messaging resource
+# types ListFlowAssociations accepts are keyed by *AWS End User
+# Messaging* ARNs instead — ``arn:aws:sms-voice:…`` for SMS and
+# ``arn:aws:social-messaging:…`` for WhatsApp — so their ResourceIds can
+# never match a key in this map. Querying them only burned an API call
+# per assessment and merged entries nothing could look up.
+#
+# ``SMS_PHONE_NUMBER`` was additionally never a valid ResourceType for
+# ListFlowAssociations at all: its enum is VOICE_PHONE_NUMBER |
+# WHATSAPP_MESSAGING_PHONE_NUMBER | INBOUND_EMAIL | OUTBOUND_EMAIL |
+# ANALYTICS_CONNECTOR. Only the singular ``GetFlowAssociation`` accepts
+# SMS_PHONE_NUMBER. Since botocore does not validate enum values
+# client-side, that call reached the service and came back as a
+# ValidationException.
+#
+# Enumerating true SMS/WhatsApp/email entry points needs a different
+# seeding path (End User Messaging DescribePhoneNumbers +
+# GetFlowAssociation for SMS; SearchEmailAddresses +
+# ListFlowAssociations(INBOUND_EMAIL) for email) and a channel-aware
+# entry-point model. See ``_resolve_flow_channel_traffic`` below for the
+# traffic-derived channel classification that covers those flows today.
+_FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES = ("VOICE_PHONE_NUMBER",)
 
 
 def _list_voice_flow_associations(
@@ -134,9 +167,8 @@ def _list_voice_flow_associations(
     factory: AWSClientFactory,
 ) -> Dict[str, str]:
     """
-    Paginate ListFlowAssociations across every phone-number resource
-    type (voice, SMS, WhatsApp) and return a merged mapping of phone
-    number ARN -> contact flow ID.
+    Paginate ListFlowAssociations for voice phone numbers and return a
+    mapping of phone number ARN -> contact flow ID.
 
     ``FlowId`` in the response is a full flow ARN
     (``…/contact-flow/{id}``); this returns just the trailing ID.
@@ -179,6 +211,112 @@ def _list_voice_flow_associations(
                 logger.error(f"Failed to list flow associations: {e}")
 
     return flow_id_by_phone_arn
+
+
+# Channels GetMetricDataV2 can filter flow metrics by. Matches the
+# SearchContacts Channels enum.
+_METRIC_CHANNELS = ("VOICE", "CHAT", "TASK", "EMAIL")
+
+# GetMetricDataV2 caps FilterValues at 100 entries per filter.
+_METRIC_FILTER_BATCH = 100
+
+_TRAFFIC_LOOKBACK_DAYS_DEFAULT = 30
+
+
+def _resolve_flow_channel_traffic(
+    instance_arn: str,
+    factory: AWSClientFactory,
+    flow_ids: List[str],
+    lookback_days: int = _TRAFFIC_LOOKBACK_DAYS_DEFAULT,
+) -> Dict[str, Dict[str, int]]:
+    """
+    Classify each flow's channel usage from observed traffic.
+
+    Returns flow ID -> {channel: contacts started}, omitting channels with
+    no contacts and flows with no traffic at all.
+
+    A flow's own metadata cannot tell you its channel: ``ContactFlowType``
+    is a *position* in the contact lifecycle (CONTACT_FLOW, CUSTOMER_QUEUE,
+    AGENT_WHISPER, …) with no channel dimension, and one flow legitimately
+    serves voice, chat and task at once. So channel is resolved empirically
+    instead — ``GetMetricDataV2`` can filter flow metrics by channel, giving
+    a real per-channel contact count per flow.
+
+    This is queried per channel (filtered) rather than grouped by channel,
+    because CHANNEL is documented as a filter dimension for flow metrics
+    while grouping support is not guaranteed.
+
+    Fails open: returns whatever it collected (possibly ``{}``) on any
+    error, including a missing ``connect:GetMetricDataV2`` permission, so
+    callers degrade to reachability-only tiering rather than failing.
+    """
+    traffic: Dict[str, Dict[str, int]] = {}
+    if not flow_ids:
+        return traffic
+
+    from datetime import datetime, timedelta, timezone
+
+    # Align to midnight UTC so the window is well-defined and stable.
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=lookback_days)
+
+    client = factory.get_connect_client()
+    batches = [
+        flow_ids[i : i + _METRIC_FILTER_BATCH]
+        for i in range(0, len(flow_ids), _METRIC_FILTER_BATCH)
+    ]
+
+    for channel in _METRIC_CHANNELS:
+        for batch in batches:
+            next_token: Optional[str] = None
+            try:
+                while True:
+                    kwargs: Dict[str, Any] = {
+                        "ResourceArn": instance_arn,
+                        "StartTime": start,
+                        "EndTime": end,
+                        "Interval": {"IntervalPeriod": "TOTAL"},
+                        "Filters": [
+                            {"FilterKey": "FLOWS_RESOURCE_ID", "FilterValues": batch},
+                            {"FilterKey": "CHANNEL", "FilterValues": [channel]},
+                        ],
+                        "Groupings": ["FLOWS_RESOURCE_ID"],
+                        "Metrics": [{"Name": "FLOWS_STARTED"}],
+                    }
+                    if next_token:
+                        kwargs["NextToken"] = next_token
+
+                    resp = factory.call_api_with_resilience(
+                        client, "get_metric_data_v2", "connect", **kwargs
+                    )
+                    for res in resp.get("MetricResults", []) or []:
+                        flow_id = (res.get("Dimensions") or {}).get("FLOWS_RESOURCE_ID")
+                        if not flow_id:
+                            continue
+                        for coll in res.get("Collections", []) or []:
+                            value = coll.get("Value")
+                            if not value:
+                                continue
+                            count = int(value)
+                            if count > 0:
+                                traffic.setdefault(flow_id, {})[channel] = count
+
+                    next_token = resp.get("NextToken")
+                    if not next_token:
+                        break
+
+            except Exception as e:
+                if factory.is_access_denied(e):
+                    logger.warning(
+                        "Access denied for GetMetricDataV2; flow channel classification "
+                        "and tier 2 traffic promotion are unavailable"
+                    )
+                    return traffic
+                logger.warning(f"Failed to resolve {channel} flow traffic: {e}")
+                break
+
+    logger.info(f"Resolved channel traffic for {len(traffic)} flow(s)")
+    return traffic
 
 
 def _compute_transitive_reachability(
@@ -236,10 +374,21 @@ def _classify_tiers(
     parsed_flows: Dict[str, ContactFlowGraph],
     reachable: Set[str],
     max_traffic_flows: int,
+    channel_traffic: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> List[TierAssignment]:
-    """Three-tier classification for all flows."""
+    """
+    Three-tier classification for all flows.
+
+    ``channel_traffic`` maps flow ID -> {channel: contacts}. When supplied
+    it promotes non-phone-reachable flows that still carry real traffic out
+    of ``tier3_dormant`` and into ``tier2_traffic``, highest-volume first,
+    capped at ``max_traffic_flows``. When it is empty or None (no metrics
+    permission, or metrics unavailable) every unreachable flow stays
+    dormant, preserving the previous behaviour.
+    """
     assignments: List[TierAssignment] = []
     remaining = set(parsed_flows.keys()) - reachable
+    channel_traffic = channel_traffic or {}
 
     # Tier 1: phone-reachable
     for flow_id in reachable:
@@ -252,27 +401,77 @@ def _classify_tiers(
             tier = "tier1_did"
             rationale = "Sub-flow reachable from phone-anchored flow"
 
+        mix = channel_traffic.get(flow_id) or {}
         assignments.append(
             TierAssignment(
                 flow_id=flow_id,
                 flow_name=parsed_flows[flow_id].flow_name,
                 tier=tier,
-                rationale=rationale,
+                rationale=_append_channel_mix(rationale, mix),
+                contact_count_30d=sum(mix.values()) if mix else None,
+                channel_mix=dict(mix),
             )
         )
 
-    # Tier 2 and Tier 3: no traffic data available in this implementation
-    # (would require GetMetricDataV2 which is expensive). For now, all
-    # non-reachable flows go to tier3_dormant. Tier 2 traffic lookup is
-    # added in a follow-up when the API is confirmed available.
-    for flow_id in remaining:
+    # Tier 2: not phone-reachable, but observed carrying contacts. This is
+    # the only way a chat/task/email-only flow becomes visible to the
+    # journey pipeline — chat has no control-plane entry point to seed from
+    # (StartChatContact takes the flow ID from the caller), so observed
+    # traffic is the sole signal. Ranked by volume so the cap keeps the
+    # busiest flows.
+    ranked = sorted(
+        (f for f in remaining if sum((channel_traffic.get(f) or {}).values()) > 0),
+        key=lambda f: sum(channel_traffic[f].values()),
+        reverse=True,
+    )
+    tier2_ids = set(ranked[:max_traffic_flows])
+
+    for flow_id in tier2_ids:
+        mix = channel_traffic[flow_id]
+        total = sum(mix.values())
+        assignments.append(
+            TierAssignment(
+                flow_id=flow_id,
+                flow_name=parsed_flows[flow_id].flow_name,
+                tier="tier2_traffic",
+                rationale=_append_channel_mix(
+                    f"Not phone-reachable, but handled {total} contact(s) "
+                    f"in the last {_TRAFFIC_LOOKBACK_DAYS_DEFAULT} days",
+                    mix,
+                ),
+                contact_count_30d=total,
+                channel_mix=dict(mix),
+            )
+        )
+
+    # Tier 3: everything else.
+    for flow_id in remaining - tier2_ids:
+        mix = channel_traffic.get(flow_id) or {}
+        total = sum(mix.values())
+        if total > 0:
+            rationale = (
+                f"Not phone-reachable; {total} contact(s) observed but outside "
+                f"the top {max_traffic_flows} by volume"
+            )
+        else:
+            rationale = "Not reachable from any phone number"
         assignments.append(
             TierAssignment(
                 flow_id=flow_id,
                 flow_name=parsed_flows[flow_id].flow_name,
                 tier="tier3_dormant",
-                rationale="Not reachable from any phone number",
+                rationale=rationale,
+                contact_count_30d=total if mix else None,
+                channel_mix=dict(mix),
             )
         )
 
     return assignments
+
+
+def _append_channel_mix(rationale: str, mix: Dict[str, int]) -> str:
+    """Append an observed per-channel contact breakdown to a rationale."""
+    if not mix:
+        return rationale
+    parts = ", ".join(f"{channel} {count}" for channel, count in sorted(mix.items()))
+    return f"{rationale} (observed: {parts})"

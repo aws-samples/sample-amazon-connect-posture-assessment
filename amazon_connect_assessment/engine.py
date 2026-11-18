@@ -1401,23 +1401,28 @@ class AssessmentEngine:
                 break
         return all_numbers
 
-    # Resource types ListFlowAssociations supports that represent a phone
-    # number (as opposed to INBOUND_EMAIL / OUTBOUND_EMAIL / ANALYTICS_CONNECTOR,
-    # which aren't phone-number-shaped). A single Connect number can be
-    # channel-bound under more than one of these — e.g. a toll-free number
-    # claimed for voice and separately wired for SMS replies via AWS End
-    # User Messaging — so all three are queried and merged.
-    _FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES = (
-        "VOICE_PHONE_NUMBER",
-        "SMS_PHONE_NUMBER",
-        "WHATSAPP_MESSAGING_PHONE_NUMBER",
-    )
+    # Only VOICE_PHONE_NUMBER is queried here, deliberately — see the
+    # matching note in ``journey/topology.py``.
+    #
+    # This mapping is keyed by ``ListPhoneNumbersV2``'s ``PhoneNumberArn``
+    # (always ``arn:aws:connect:…:phone-number/…``), whereas the messaging
+    # resource types are keyed by AWS End User Messaging ARNs
+    # (``arn:aws:sms-voice:…``, ``arn:aws:social-messaging:…``), so their
+    # ResourceIds can never match a key in this map.
+    #
+    # ``SMS_PHONE_NUMBER`` was also never a valid ResourceType for
+    # ListFlowAssociations (only for the singular GetFlowAssociation).
+    # botocore does not validate enum values client-side, so that request
+    # reached the service and returned a ValidationException — which this
+    # method re-raises for any non-access-denied error, breaking journey
+    # mapping outright on live instances.
+    _FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES = ("VOICE_PHONE_NUMBER",)
 
     def _list_flow_associations_for_instance(self, instance: ConnectInstance) -> Dict[str, str]:
         """
-        Paginate ``connect:ListFlowAssociations`` across every phone-number
-        resource type (voice, SMS, WhatsApp) for one instance and return a
-        merged mapping of phone number ARN -> contact flow ID.
+        Paginate ``connect:ListFlowAssociations`` for voice phone numbers
+        on one instance and return a mapping of phone number ARN ->
+        contact flow ID.
 
         This is the API that actually reflects the Connect console's
         "Contact flow / IVR" field on a phone number — see the

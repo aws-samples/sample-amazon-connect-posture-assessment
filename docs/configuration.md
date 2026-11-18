@@ -261,9 +261,33 @@ output:
 
 # Caller journey scoring tuning (path discovery; does not change HTML map entries)
 journey_map:
-  max_paths_per_did: 200   # Max paths per phone number (reduce for speed)
-  max_depth: 50            # Max DFS depth per path
+  max_paths_per_did: 200     # Max paths per phone number (reduce for speed)
+  max_depth: 50              # Max DFS depth per path
+  max_traffic_flows: 10      # Max non-phone-reachable flows promoted on traffic
+  traffic_lookback_days: 30  # Window for per-flow, per-channel contact counts
 ```
+
+### Channel classification
+
+A flow's own metadata cannot tell you which channel uses it. `ContactFlowType`
+describes a position in the contact lifecycle (`CONTACT_FLOW`,
+`CUSTOMER_QUEUE`, `AGENT_WHISPER`, …) and carries no channel dimension, and a
+single flow legitimately serves voice, chat and task at once. So the assessment
+resolves channel empirically, using `connect:GetMetricDataV2` to count contacts
+started per flow per channel (`VOICE`, `CHAT`, `TASK`, `EMAIL`) over
+`traffic_lookback_days`.
+
+This also determines tiering. Flows reachable from an inbound phone number are
+tier 1. Flows that are *not* phone-reachable but still carry contacts are
+promoted to tier 2 (highest-volume first, capped at `max_traffic_flows`) and
+enter the journey graph; everything else is reported as dormant. Tier 2 is the
+only way a chat-, task- or email-only flow becomes visible, since those have no
+phone number to be reached from — chat in particular has no control-plane entry
+point at all, because `StartChatContact` takes the flow ID from the caller
+(your widget or app), not from Connect configuration.
+
+Without the `connect:GetMetricDataV2` permission this degrades cleanly: channel
+mixes come back empty and tiering falls back to reachability alone.
 
 The HTML Caller Journey Map is phone-number driven: it renders every available
 contact flow targeted by an inbound number. It has no `top_n` setting. The
