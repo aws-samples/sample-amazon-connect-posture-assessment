@@ -120,8 +120,8 @@ EXPECTED_IDS_BY_PILLAR = {
 }
 EXPECTED_DISPOSITIONS = {
     FindingDisposition.CONTROL: 23,
-    FindingDisposition.MANUAL_REVIEW: 25,
-    FindingDisposition.INFORMATIONAL: 16,
+    FindingDisposition.MANUAL_REVIEW: 26,
+    FindingDisposition.INFORMATIONAL: 15,
 }
 EXPECTED_EXECUTORS = {ExecutionSource.BASE_CHECK: 60, ExecutionSource.JOURNEY: 4}
 PILLAR_HEADINGS = {
@@ -176,8 +176,8 @@ def test_documentation_catalog_matches_pillar_disposition_and_executor_totals():
     assert runtime_executors == EXPECTED_EXECUTORS
     assert documented_dispositions == {
         "control": 23,
-        "manual_review": 25,
-        "informational": 16,
+        "manual_review": 26,
+        "informational": 15,
     }
     assert documented_executors == {"BaseCheck": 60, "Journey": 4}
     for pillar, count in expected_pillar_counts.items():
