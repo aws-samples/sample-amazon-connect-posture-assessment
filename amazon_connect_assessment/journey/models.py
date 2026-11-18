@@ -31,6 +31,11 @@ class TierAssignment:
     tier: str  # "tier1_did" | "tier1_tollfree" | "tier2_traffic" | "tier3_dormant"
     rationale: str
     contact_count_30d: Optional[int] = None
+    # Observed contacts per channel ("VOICE" | "CHAT" | "TASK" | "EMAIL"),
+    # from GetMetricDataV2. Empty when metrics are unavailable. A flow's own
+    # metadata carries no channel dimension, so this is the only reliable
+    # signal for which channels actually use a flow.
+    channel_mix: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
