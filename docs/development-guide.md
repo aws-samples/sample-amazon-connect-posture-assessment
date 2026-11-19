@@ -145,7 +145,7 @@ python scripts/performance_test.py
 # Pre-flight environment check (Python version, deps, imports, AWS credentials)
 python scripts/validate_environment.py
 
-# Regenerate the deterministic report from all 64 canonical controls
+# Regenerate the deterministic report from all 68 canonical controls
 python scripts/generate_sample_report.py
 ```
 
@@ -165,7 +165,7 @@ capture script comes from the AWS Samples Cloudscape report workflow.
 
 ## Adding a new canonical control
 
-The unified catalog contains 64 canonical records. Each record owns one root
+The unified catalog contains 68 canonical records. Each record owns one root
 condition, disposition, methodology, and executor. Of the current records, 60
 use a `BaseCheck` executor and 4 use the Journey executor. Add the catalog
 record before registering a new executor; catalog hydration rejects missing,

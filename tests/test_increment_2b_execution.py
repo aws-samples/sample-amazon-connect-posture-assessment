@@ -179,7 +179,7 @@ def test_registration_overlapping_executors_are_retired_expected_result():
     # Assert
     assert AuthenticationPatternCheck not in executor_types
     assert SelfServiceContainmentCheck not in executor_types
-    assert len(registry.list_check_ids()) == 60
+    assert len(registry.list_check_ids()) == 64
 
 
 def test_journey_prompt_only_path_is_not_self_service_expected_result():

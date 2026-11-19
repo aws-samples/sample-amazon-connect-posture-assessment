@@ -28,10 +28,10 @@ def test_atomic_catalog_current_inventory_has_exact_approved_totals():
     disposition_counts = Counter(control.disposition for control in registry)
 
     # Assert
-    assert len(registry) == 64
+    assert len(registry) == 68
     assert disposition_counts == {
         FindingDisposition.CONTROL: 23,
-        FindingDisposition.MANUAL_REVIEW: 26,
+        FindingDisposition.MANUAL_REVIEW: 30,
         FindingDisposition.INFORMATIONAL: 15,
     }
 
@@ -67,7 +67,7 @@ def test_atomic_catalog_every_canonical_control_has_complete_specific_methodolog
 
     # Assert
     assert missing == []
-    assert len(methodology_identities) == 64
+    assert len(methodology_identities) == 68
 
 
 def test_atomic_catalog_root_conditions_are_unique_for_canonical_controls():
@@ -78,8 +78,8 @@ def test_atomic_catalog_root_conditions_are_unique_for_canonical_controls():
     roots = [control.root_condition_key for control in registry]
 
     # Assert
-    assert len(roots) == 64
-    assert len(set(roots)) == 64
+    assert len(roots) == 68
+    assert len(set(roots)) == 68
 
 
 def test_atomic_catalog_legacy_aliases_resolve_and_deduplicate_canonical_selection():
@@ -226,7 +226,7 @@ def test_atomic_catalog_all_registered_base_checks_are_hydrated_from_catalog():
     register_all_checks(registry)
 
     # Assert
-    assert len(registry) == 60
+    assert len(registry) == 64
     for check in registry.get_all_checks():
         control = catalog.get(check.check_id)
         executor_key = f"{type(check).__module__}.{type(check).__qualname__}"
@@ -282,7 +282,7 @@ def test_atomic_catalog_execution_sources_match_increment_2b_expected_result():
     }
 
     # Assert
-    assert len(source_ids[ExecutionSource.BASE_CHECK]) == 60
+    assert len(source_ids[ExecutionSource.BASE_CHECK]) == 64
     assert source_ids[ExecutionSource.JOURNEY] == {
         "sec-flow-auth-001",
         "cost-containment-001",

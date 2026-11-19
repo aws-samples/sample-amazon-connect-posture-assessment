@@ -127,7 +127,7 @@ class TestDocsGenerator:
 
         # Assert
         assert "| Control ID |" in content
-        assert len(registry.get_selected_controls()) == 64
+        assert len(registry.get_selected_controls()) == 68
         for control in registry.get_selected_controls():
             assert control.control_id in content
         assert "sec-flow-auth-001" in content
