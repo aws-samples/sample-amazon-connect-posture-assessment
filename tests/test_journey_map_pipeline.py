@@ -402,7 +402,7 @@ class TestPhoneToFlowMapping:
 
         assert status is None
         assert transfer["scope"] == [
-            "Transfers the caller to BasicQueue to wait for an available agent."
+            "Transfers the customer to BasicQueue to wait for an available agent."
         ]
         engine.aws_client_factory.describe_queue_resilient.assert_called_once_with(
             "iid-1", queue_id

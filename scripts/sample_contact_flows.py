@@ -18,6 +18,14 @@ The flows are written to exercise the findings the journey pipeline can emit:
   any kind (``journey-cost-001``).
 * Six unreferenced flows on the primary instance are classified dormant
   (``journey-scope-001``, which triggers above five).
+* ``sms-support`` is the SMS flow on the main toll-free number. It reaches a
+  queue with no authentication, so the authentication control reports a CHAT
+  candidate alongside the voice one.
+* ``web-chat-entry`` has no association at all, as web chat never does; the
+  sample's usage metrics show it starting chat contacts, so it is discovered
+  as an observed CHAT entry point. Its Lex bot counts as self-service.
+* ``inbound-email`` is wired to support@example.com. Email is excluded from
+  the authentication and containment rules, which the findings state.
 """
 
 from __future__ import annotations
@@ -29,6 +37,9 @@ from typing import Any, Dict, List
 MAIN_IVR_ID = "aaaaaaaa-0000-4000-8000-000000000001"
 BILLING_ID = "aaaaaaaa-0000-4000-8000-000000000002"
 OVERFLOW_ID = "bbbbbbbb-0000-4000-8000-000000000001"
+SMS_ID = "aaaaaaaa-0000-4000-8000-000000000003"
+WEB_CHAT_ID = "aaaaaaaa-0000-4000-8000-000000000004"
+EMAIL_ID = "aaaaaaaa-0000-4000-8000-000000000005"
 
 MAIN_IVR_FLOW: Dict[str, Any] = {
     "Version": "2019-10-30",
@@ -184,6 +195,88 @@ OVERFLOW_FLOW: Dict[str, Any] = {
             "Identifier": "overflow-queue",
             "Type": "TransferContactToQueue",
             "Parameters": {"QueueId": "Overflow"},
+            "Transitions": {},
+        },
+    ],
+}
+
+SMS_FLOW: Dict[str, Any] = {
+    "Version": "2019-10-30",
+    "StartAction": "sms-greeting",
+    "Actions": [
+        {
+            "Identifier": "sms-greeting",
+            "Type": "MessageParticipant",
+            "Parameters": {"Text": "Thanks for texting Example Corp. An agent will reply shortly."},
+            "Transitions": {
+                "NextAction": "sms-queue",
+                "Errors": [{"NextAction": "sms-queue", "ErrorType": "NoMatchingError"}],
+            },
+        },
+        {
+            "Identifier": "sms-queue",
+            "Type": "TransferContactToQueue",
+            "Parameters": {"QueueId": "Messaging"},
+            "Transitions": {},
+        },
+    ],
+}
+
+WEB_CHAT_FLOW: Dict[str, Any] = {
+    "Version": "2019-10-30",
+    "StartAction": "chat-bot",
+    "Actions": [
+        {
+            "Identifier": "chat-bot",
+            "Type": "ConnectParticipantWithLexBot",
+            "Parameters": {
+                "LexV2Bot": {
+                    "AliasArn": (
+                        "arn:aws:lex:us-east-1:111122223333:bot-alias/EXAMPLEBOT/TSTALIASID"
+                    )
+                },
+                "Text": "Hi! What can I help you with today?",
+            },
+            "Transitions": {
+                "NextAction": "chat-resolved",
+                "Errors": [
+                    {"NextAction": "chat-queue", "ErrorType": "NoMatchingCondition"},
+                    {"NextAction": "chat-queue", "ErrorType": "NoMatchingError"},
+                ],
+            },
+        },
+        {
+            "Identifier": "chat-resolved",
+            "Type": "DisconnectParticipant",
+            "Parameters": {},
+            "Transitions": {},
+        },
+        {
+            "Identifier": "chat-queue",
+            "Type": "TransferContactToQueue",
+            "Parameters": {"QueueId": "Messaging"},
+            "Transitions": {},
+        },
+    ],
+}
+
+EMAIL_FLOW: Dict[str, Any] = {
+    "Version": "2019-10-30",
+    "StartAction": "tag-email",
+    "Actions": [
+        {
+            "Identifier": "tag-email",
+            "Type": "UpdateContactAttributes",
+            "Parameters": {"Attributes": {"inbound_channel": "email"}},
+            "Transitions": {
+                "NextAction": "email-queue",
+                "Errors": [{"NextAction": "email-queue", "ErrorType": "NoMatchingError"}],
+            },
+        },
+        {
+            "Identifier": "email-queue",
+            "Type": "TransferContactToQueue",
+            "Parameters": {"QueueId": "Email"},
             "Transitions": {},
         },
     ],

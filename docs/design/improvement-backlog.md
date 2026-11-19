@@ -91,54 +91,54 @@ dialing out. Right name, wrong vector; don't assume it covers this.
 
 ## B. Multi-channel journey mapping
 
-The journey pipeline maps voice only. Groundwork landed on
-`feature/journey-channel-classification`: per-flow, per-channel contact counts
-via `GetMetricDataV2`, which promotes traffic-carrying unreachable flows to
-tier 2. That makes non-voice flows *visible*; it does not make them
-*traversable* from their own entry points.
+**Status: B1, B2, B4 and B5 are done; B3 is addressed by observed entries.**
+Journeys are now discovered, enumerated and scored on every channel. What
+remains is listed under "Open" below.
 
-### B1. Email entry points
+### Done
 
-Smallest remaining win and structurally identical to the voice path already
-built: `SearchEmailAddresses` + `ListFlowAssociations(ResourceType=INBOUND_EMAIL)`
-→ email address ARN → flow ID.
+- **B1. Email entry points.** `ListFlowAssociations(INBOUND_EMAIL)`, labelled
+  through `SearchEmailAddresses` (optional: without it the entry keeps its
+  address ID).
+- **B2. SMS and WhatsApp entry points.** `ListFlowAssociations` for
+  `SMS_PHONE_NUMBER` and `WHATSAPP_MESSAGING_PHONE_NUMBER`. Verified live:
+  a Connect-claimed number's SMS association uses the same `arn:aws:connect`
+  phone-number ARN as `ListPhoneNumbersV2`, so it resolves to its E.164 number
+  with no End User Messaging call. An earlier note here said to enumerate SMS
+  via `pinpoint-sms-voice-v2:DescribePhoneNumbers`; that turned out to be
+  unnecessary for Connect-claimed numbers.
+- **B3. Chat entry points.** Still no control-plane source (`StartChatContact`
+  takes the flow ID from the caller), so web chat, task, and API-started entry
+  flows are discovered from `GetMetricDataV2` `FLOWS_STARTED` by flow and
+  channel: an entry-capable flow that starts contacts on a channel without
+  being reachable from that channel's associations is an *observed* entry.
+- **B4. Entry-point model.** `journey.models.EntryPoint(channel, entry_type,
+  identifier, contact_flow_id, …)`, keyed by channel and resource, and
+  `JourneyPath.entry_identifier` / `entry_type` / `entry_channel`
+  (`entry_number` remains as an alias).
+- **B5. Per-channel scoring.** `journey/channels.py` defines per-channel rule
+  applicability (authentication, self-service, callback, dead end), CX
+  features, and the reason each excluded rule does not apply. Coverage is
+  tracked per channel, so a gap on one channel does not mark another
+  incomplete.
 
-### B2. SMS entry points
+### Open
 
-`ListFlowAssociations` **cannot** enumerate these — `SMS_PHONE_NUMBER` is not in
-its ResourceType enum (only the singular `GetFlowAssociation` accepts it).
-Enumerate via AWS End User Messaging `pinpoint-sms-voice-v2:DescribePhoneNumbers`,
-then `GetFlowAssociation` per ARN. Needs a new client and a new IAM permission.
-
-WhatsApp *is* enumerable through `ListFlowAssociations`, but its ResourceIds are
-`arn:aws:social-messaging:…` ARNs, so it needs the same channel-aware entry-point
-model as SMS to be useful.
-
-### B3. Chat entry points have no control-plane source
-
-`StartChatContact` takes `ContactFlowId` from the caller, so the widget→flow
-mapping lives in the widget snippet or your own application, not in Connect.
-There is no widget API to enumerate (only `StartChatContact`,
-`StartOutboundChatContact`, `SendChatIntegrationEvent`). Options are
-user-supplied mappings in config, or relying on the traffic-derived
-classification from B's groundwork.
-
-### B4. Generalize the entry-point model
-
-`PhoneNumberEntry` → `EntryPoint(channel, identifier, identifier_type, flow_id)`,
-and `JourneyPath.entry_number` / `entry_number_type` →
-`entry_identifier` / `entry_channel`. The super-graph, DFS and terminal
-classification are already channel-agnostic and need no changes; the rename
-touches `renderer.py`, `view_model.py`, `journey_scorer.py` and ~4 test files.
-
-### B5. Per-channel scoring rules
-
-`JourneyScore` is voice-shaped. `has_callback_offering` and
-`consecutive_no_error_max` are meaningless for email, and chat should not be
-penalized for lacking a callback offer. Needs per-channel rule sets plus new
-terminal types (`task_created`, `case_created`).
-
----
+- **Observed entries depend on traffic in the window.** A web chat or task
+  flow with no contacts in the last `traffic_lookback_days` (max 34) is not
+  discovered. Seasonal chat flows will be missed outside their season.
+- **Observed entries are heuristic.** A flow started by
+  `StartOutboundVoiceContact`, or one reached only through a dynamic
+  transfer, also qualifies. Labels say "observed" for that reason.
+  `INITIATION_METHOD` grouping on the same metric could separate inbound
+  from outbound; not done yet.
+- **End User Messaging–only numbers** (not claimed in Connect) are mapped,
+  but labelled by resource ID rather than E.164; resolving them needs
+  `pinpoint-sms-voice-v2` / `social-messaging` read permissions.
+- **Chat authentication recognition** counts any action type containing
+  "Authenticat" (for the Authenticate Customer block), since the flow-language
+  action name for that block is not documented. Confirm it against an
+  exported flow that uses the block.
 
 ## Notes for whoever picks these up
 

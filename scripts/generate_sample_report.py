@@ -29,10 +29,16 @@ if str(REPO_ROOT) not in sys.path:
 from sample_contact_flows import (  # noqa: E402
     BILLING_FLOW,
     BILLING_ID,
+    EMAIL_FLOW,
+    EMAIL_ID,
     MAIN_IVR_FLOW,
     MAIN_IVR_ID,
     OVERFLOW_FLOW,
     OVERFLOW_ID,
+    SMS_FLOW,
+    SMS_ID,
+    WEB_CHAT_FLOW,
+    WEB_CHAT_ID,
     dormant_flow_specs,
 )
 
@@ -44,18 +50,14 @@ from amazon_connect_assessment.checks.control_registry import (  # noqa: E402
 )
 from amazon_connect_assessment.checks.registration import register_all_checks  # noqa: E402
 from amazon_connect_assessment.checks.registry import CheckRegistry  # noqa: E402
-from amazon_connect_assessment.journey.journey_scorer import (  # noqa: E402
-    generate_journey_findings,
-    score_journeys,
+from amazon_connect_assessment.engine import (  # noqa: E402
+    _CHANNEL_SORT,
+    _ENTRY_TYPE_SORT,
+    _PHONE_ENTRY_TYPES,
+    _journey_entry_label,
 )
-from amazon_connect_assessment.journey.models import (  # noqa: E402
-    JourneyMapResult,
-    PhoneNumberEntry,
-    TierAssignment,
-)
-from amazon_connect_assessment.journey.path_enumerator import enumerate_journeys  # noqa: E402
+from amazon_connect_assessment.journey import run_journey_mapping  # noqa: E402
 from amazon_connect_assessment.journey.renderer import flow_to_diagram_artifacts  # noqa: E402
-from amazon_connect_assessment.journey.super_graph import build_super_graph  # noqa: E402
 from amazon_connect_assessment.models import (  # noqa: E402
     AssessmentMetadata,
     AssessmentResult,
@@ -131,6 +133,29 @@ SAMPLE_PHONE_NUMBERS: dict[str, list[dict[str, str]]] = {
 }
 
 
+# Non-voice entry points. The main toll-free number is also SMS-enabled, with
+# its own flow; support@example.com (a reserved documentation domain) is the
+# inbound email address. Web chat has no association by design and is found
+# from SAMPLE_FLOW_TRAFFIC.
+SAMPLE_SMS_NUMBERS: dict[str, dict[str, str]] = {
+    PRIMARY_INSTANCE_ID: {"+18005550100": SMS_ID},
+}
+SAMPLE_EMAIL_ADDRESSES: dict[str, dict[str, str]] = {
+    PRIMARY_INSTANCE_ID: {"support@example.com": EMAIL_ID},
+}
+# FLOWS_STARTED over the lookback window, per flow and channel.
+SAMPLE_FLOW_TRAFFIC: dict[str, dict[str, dict[str, int]]] = {
+    PRIMARY_INSTANCE_ID: {
+        MAIN_IVR_ID: {"VOICE": 1840},
+        BILLING_ID: {"VOICE": 610},
+        SMS_ID: {"CHAT": 220},
+        WEB_CHAT_ID: {"CHAT": 1310},
+        EMAIL_ID: {"EMAIL": 470},
+    },
+    OVERFLOW_INSTANCE_ID: {OVERFLOW_ID: {"VOICE": 95}},
+}
+
+
 def _flow(instance_id: str, flow_id: str, name: str, flow_type: str, content: dict) -> ContactFlow:
     """Build a ContactFlow the way instance discovery would return it."""
     return ContactFlow(
@@ -151,6 +176,9 @@ def _build_instances() -> list[ConnectInstance]:
     primary_flows = [
         _flow(PRIMARY_INSTANCE_ID, MAIN_IVR_ID, "Main IVR", "CONTACT_FLOW", MAIN_IVR_FLOW),
         _flow(PRIMARY_INSTANCE_ID, BILLING_ID, "Billing Support", "CONTACT_FLOW", BILLING_FLOW),
+        _flow(PRIMARY_INSTANCE_ID, SMS_ID, "SMS Support", "CONTACT_FLOW", SMS_FLOW),
+        _flow(PRIMARY_INSTANCE_ID, WEB_CHAT_ID, "Web Chat Entry", "CONTACT_FLOW", WEB_CHAT_FLOW),
+        _flow(PRIMARY_INSTANCE_ID, EMAIL_ID, "Inbound Email", "CONTACT_FLOW", EMAIL_FLOW),
     ]
     primary_flows.extend(
         _flow(PRIMARY_INSTANCE_ID, spec["id"], spec["name"], spec["type"], spec["content"])
@@ -262,8 +290,8 @@ def _parse_flows(instance: ConnectInstance) -> dict:
     """Parse every flow on an instance, keyed by flow id.
 
     Mirrors ``AssessmentEngine._compute_journey_findings``, including the
-    flow_id/flow_name backfill — ``Content`` never carries Identifier/Name, so
-    without it every flow collapses onto the same super-graph key.
+    flow_id/flow_name/flow_type backfill — ``Content`` never carries
+    Identifier/Name/Type.
     """
     parser = ContactFlowParser()
     graphs = {}
@@ -271,73 +299,129 @@ def _parse_flows(instance: ConnectInstance) -> dict:
         graph = parser.parse(flow.content)
         graph.flow_id = flow.id
         graph.flow_name = flow.name
+        graph.flow_type = flow.type
         graphs[flow.id] = graph
     return graphs
 
 
-def _tier_assignments(instance: ConnectInstance, entry_flow_ids: set[str]) -> list[TierAssignment]:
-    """Classify flows the way ``journey.topology.resolve_topology`` would.
+class _SampleConnect:
+    """Read-only stand-in for the Connect APIs entry discovery calls.
 
-    Flows a phone number terminates on, and flows statically reachable from
-    them by transfer, are tier 1; everything else is dormant. (Tier 2 — flows
-    observed handling contacts but not phone-reachable — needs live
-    ``GetMetricDataV2`` data, so the sample has none.) Assigned here rather than
-    resolved from AWS because ``resolve_topology`` is the one step of the
-    pipeline that needs live ``ListPhoneNumbersV2`` / ``ListFlowAssociations``
-    calls. Every downstream step below is the production code.
+    The sample runs the production ``run_journey_mapping`` — entry discovery,
+    tiering, super-graph, enumeration, channel-aware scoring — unchanged.
+    Only the AWS responses are synthetic.
     """
-    transfer_targets = {BILLING_ID}
-    assignments: list[TierAssignment] = []
-    for flow in instance.contact_flows:
-        if flow.id in entry_flow_ids:
-            tier, rationale = "tier1_did", "Inbound phone number terminates on this flow"
-        elif flow.id in transfer_targets:
-            tier, rationale = "tier1_did", "Sub-flow reachable from phone-anchored flow"
-        else:
-            tier, rationale = (
-                "tier3_dormant",
-                "Not reachable from any phone number (usage metrics unavailable)",
-            )
-        assignments.append(
-            TierAssignment(flow_id=flow.id, flow_name=flow.name, tier=tier, rationale=rationale)
-        )
-    return assignments
+
+    def __init__(self, instance: ConnectInstance):
+        self.instance = instance
+        base = f"arn:aws:connect:{SAMPLE_REGION}:{SAMPLE_ACCOUNT_ID}"
+        self.numbers = [
+            {**num, "PhoneNumberArn": f"{base}:phone-number/{num['PhoneNumber'].lstrip('+')}"}
+            for num in SAMPLE_PHONE_NUMBERS[instance.instance_id]
+        ]
+        self.arn_by_number = {n["PhoneNumber"]: n["PhoneNumberArn"] for n in self.numbers}
+        self.emails = {
+            address: f"{instance.instance_arn}/email-address/{index:04d}"
+            for index, address in enumerate(SAMPLE_EMAIL_ADDRESSES.get(instance.instance_id, {}))
+        }
+
+    def get_connect_client(self):
+        return None
+
+    @staticmethod
+    def is_access_denied(_error) -> bool:
+        return False
+
+    def _flow_arn(self, flow_id: str) -> str:
+        return f"{self.instance.instance_arn}/contact-flow/{flow_id}"
+
+    def call_api_with_resilience(self, _client, operation, _service=None, **kwargs):
+        iid = self.instance.instance_id
+        if operation == "list_phone_numbers_v2":
+            return {"ListPhoneNumbersSummaryList": self.numbers}
+        if operation == "list_flow_associations":
+            pairs = {
+                "VOICE_PHONE_NUMBER": [(n["PhoneNumberArn"], n["flow_id"]) for n in self.numbers],
+                "SMS_PHONE_NUMBER": [
+                    (self.arn_by_number[number], flow_id)
+                    for number, flow_id in SAMPLE_SMS_NUMBERS.get(iid, {}).items()
+                ],
+                "INBOUND_EMAIL": [
+                    (self.emails[address], flow_id)
+                    for address, flow_id in SAMPLE_EMAIL_ADDRESSES.get(iid, {}).items()
+                ],
+            }.get(kwargs["ResourceType"], [])
+            return {
+                "FlowAssociationSummaryList": [
+                    {"ResourceId": resource, "FlowId": self._flow_arn(flow_id)}
+                    for resource, flow_id in pairs
+                ]
+            }
+        if operation == "search_email_addresses":
+            return {
+                "EmailAddresses": [
+                    {"EmailAddressArn": arn, "EmailAddress": address}
+                    for address, arn in self.emails.items()
+                ]
+            }
+        if operation == "get_metric_data_v2":
+            return {
+                "MetricResults": [
+                    {
+                        "Dimensions": {"FLOWS_RESOURCE_ID": flow_id, "CHANNEL": channel},
+                        "Collections": [{"Metric": {"Name": "FLOWS_STARTED"}, "Value": count}],
+                    }
+                    for flow_id, mix in SAMPLE_FLOW_TRAFFIC.get(iid, {}).items()
+                    for channel, count in mix.items()
+                ]
+            }
+        raise ValueError(f"sample has no response for {operation}")
 
 
 def build_journey_data(
     instances: list[ConnectInstance],
 ) -> tuple[list[dict], list[Finding]]:
-    """Run the journey pipeline over the sample flows.
+    """Run the production journey pipeline over the sample flows.
 
     Returns ``(journey_map_entries, journey_findings)`` — the same two things
-    ``AssessmentEngine`` produces, built by the same parser, super-graph, path
-    enumerator, scorer and renderer.
+    ``AssessmentEngine`` produces: one map entry per entry point on every
+    channel, and the channel-aware ``journey-*`` findings.
     """
     entries: list[dict] = []
     findings: list[Finding] = []
 
     for instance in instances:
-        numbers = SAMPLE_PHONE_NUMBERS[instance.instance_id]
         graphs = _parse_flows(instance)
-        entry_flow_ids = {n["flow_id"] for n in numbers}
+        output = run_journey_mapping(instance, graphs, _SampleConnect(instance), {})
+        findings.extend(output.findings)
 
-        # --- Caller Journey Map diagrams (one per number, deduped per flow) ---
         rendered: dict = {}
-        for num in numbers:
-            flow_id = num["flow_id"]
-            flow = next(f for f in instance.contact_flows if f.id == flow_id)
-            if flow_id not in rendered:
-                rendered[flow_id] = flow_to_diagram_artifacts(graphs[flow_id])
-            artifacts = rendered[flow_id]
+        flows = {f.id: f for f in instance.contact_flows}
+        for entry in output.result.entry_points:
+            flow = flows[entry.contact_flow_id]
+            if flow.id not in rendered:
+                rendered[flow.id] = flow_to_diagram_artifacts(graphs[flow.id])
+            artifacts = rendered[flow.id]
+            target = {
+                "channel": entry.channel,
+                "entry_type": entry.entry_type,
+                "identifier": entry.identifier,
+            }
             entries.append(
                 {
                     "instance_id": instance.instance_id,
                     "instance_display_name": instance.display_name,
-                    "phone_number": num["PhoneNumber"],
-                    "phone_type": num["PhoneNumberType"],
-                    "phone_country_code": num["PhoneNumberCountryCode"],
-                    "phone_description": num["PhoneNumberDescription"],
-                    "flow_id": flow_id,
+                    "phone_number": (
+                        entry.identifier if entry.entry_type in _PHONE_ENTRY_TYPES else ""
+                    ),
+                    "phone_type": entry.entry_type,
+                    "phone_country_code": entry.country_code,
+                    "phone_description": entry.description,
+                    "channel": entry.channel,
+                    "entry_type": entry.entry_type,
+                    "entry_identifier": entry.identifier,
+                    "entry_label": _journey_entry_label(target),
+                    "flow_id": flow.id,
                     "flow_name": flow.name,
                     "flow_type": flow.type,
                     "diagram_html": artifacts.diagram_html,
@@ -346,49 +430,14 @@ def build_journey_data(
                 }
             )
 
-        # --- journey-* findings ---
-        assignments = _tier_assignments(instance, entry_flow_ids)
-        super_graph = build_super_graph(graphs, assignments)
-        phone_entries = [
-            PhoneNumberEntry(
-                phone_number=num["PhoneNumber"],
-                number_type=num["PhoneNumberType"],
-                country_code=num["PhoneNumberCountryCode"],
-                contact_flow_id=num["flow_id"],
-                contact_flow_name=next(
-                    f.name for f in instance.contact_flows if f.id == num["flow_id"]
-                ),
-                target_arn=instance.instance_arn,
-            )
-            for num in numbers
-        ]
-        journeys = enumerate_journeys(super_graph=super_graph, phone_entries=phone_entries)
-        scores = score_journeys(journeys, {})
-        dormant = [a.flow_id for a in assignments if a.tier == "tier3_dormant"]
-        containment = {
-            e.phone_number: (
-                sum(
-                    1
-                    for j in journeys
-                    if j.entry_number == e.phone_number and j.terminal_type != "agent_queue"
-                )
-                / max(1, sum(1 for j in journeys if j.entry_number == e.phone_number))
-                * 100
-            )
-            for e in phone_entries
-        }
-        result = JourneyMapResult(
-            phone_entries=phone_entries,
-            tier_assignments=assignments,
-            journeys=journeys,
-            scores=scores,
-            dormant_flows=dormant,
-            dynamic_edges=super_graph.dynamic_references,
-            containment_scores=containment,
+    entries.sort(
+        key=lambda e: (
+            e["instance_display_name"],
+            _CHANNEL_SORT.get(e["channel"], 9),
+            _ENTRY_TYPE_SORT.get(e["entry_type"], 9),
+            e["entry_identifier"],
         )
-        findings.extend(generate_journey_findings(result, instance_id=instance.instance_id))
-
-    entries.sort(key=lambda e: (e["instance_display_name"], e["phone_number"]))
+    )
     return entries, findings
 
 

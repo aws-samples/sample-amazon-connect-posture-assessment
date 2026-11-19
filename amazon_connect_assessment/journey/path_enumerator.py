@@ -1,14 +1,14 @@
 """
-Bounded path enumeration for Caller Journey Mapping.
+Bounded path enumeration for Customer Journey Mapping.
 
-Traces all possible caller paths from each phone number entry point to
-terminal outcomes using iterative DFS with depth and path-count bounds.
+Traces all possible customer paths from each entry point — on any channel —
+to terminal outcomes using iterative DFS with depth and path-count bounds.
 """
 
 import logging
 from typing import Any, Dict, List, Tuple
 
-from .models import JourneyNode, JourneyPath, PhoneNumberEntry, SuperGraph
+from .models import EntryPoint, JourneyNode, JourneyPath, PhoneNumberEntry, SuperGraph
 
 logger = logging.getLogger("journey.path_enumerator")
 
@@ -64,13 +64,41 @@ def enumerate_journeys_with_completeness(
     max_paths: int = MAX_PATHS_PER_ENTRY,
     max_depth: int = MAX_PATH_DEPTH,
 ) -> Tuple[List[JourneyPath], bool, List[str]]:
-    """Enumerate paths and report whether traversal covered every bounded branch."""
-    all_journeys: List[JourneyPath] = []
-    limitations: List[str] = []
+    """Voice-era API: enumerate from phone entries; report overall completeness."""
+    entries = [
+        EntryPoint(
+            channel="VOICE",
+            entry_type=entry.number_type,
+            identifier=entry.phone_number,
+            contact_flow_id=entry.contact_flow_id or "",
+        )
+        for entry in phone_entries
+    ]
+    journeys, per_entry = enumerate_entry_journeys(super_graph, entries, max_paths, max_depth)
+    limitations = list(dict.fromkeys(item for items in per_entry.values() for item in items))
+    return journeys, not _coverage_limitations(limitations), limitations
 
-    for entry_index, entry in enumerate(phone_entries):
+
+def enumerate_entry_journeys(
+    super_graph: SuperGraph,
+    entry_points: List[EntryPoint],
+    max_paths: int = MAX_PATHS_PER_ENTRY,
+    max_depth: int = MAX_PATH_DEPTH,
+) -> Tuple[List[JourneyPath], Dict[str, List[str]]]:
+    """Enumerate paths from every entry point.
+
+    Returns the journeys and, per ``EntryPoint.key``, the limitations hit while
+    enumerating it, so coverage can be judged per channel: a gap on a chat
+    entry must not mark voice incomplete. Entries arrive sorted voice-first,
+    so the global path cap is the last thing to starve voice.
+    """
+    all_journeys: List[JourneyPath] = []
+    per_entry: Dict[str, List[str]] = {}
+
+    for entry_index, entry in enumerate(entry_points):
+        limitations = per_entry.setdefault(entry.key, [])
         if not entry.contact_flow_id:
-            limitations.append("phone entry is missing an associated contact flow")
+            limitations.append("entry is missing an associated contact flow")
             continue
         entry_key = super_graph.entry_points.get(entry.contact_flow_id)
         if not entry_key:
@@ -82,34 +110,38 @@ def enumerate_journeys_with_completeness(
         paths, entry_limitations = _enumerate_from_entry(
             super_graph,
             entry_key,
-            entry.phone_number,
-            entry.number_type,
+            entry.identifier,
+            entry.entry_type,
             max_paths,
             max_depth,
+            entry_channel=entry.channel,
         )
         all_journeys.extend(paths)
         limitations.extend(entry_limitations)
         if len(all_journeys) >= MAX_TOTAL_PATHS:
             exceeded_limit = len(all_journeys) > MAX_TOTAL_PATHS
-            unprocessed_entries = entry_index < len(phone_entries) - 1
             all_journeys = all_journeys[:MAX_TOTAL_PATHS]
-            if exceeded_limit or unprocessed_entries:
-                limitations.append(f"global path limit {MAX_TOTAL_PATHS} reached")
+            unprocessed = entry_points[entry_index + 1 :]
+            if exceeded_limit or unprocessed:
+                note = f"global path limit {MAX_TOTAL_PATHS} reached"
+                limitations.append(note)
+                for skipped in unprocessed:
+                    per_entry.setdefault(skipped.key, []).append(note)
                 logger.warning(
                     f"Global path limit ({MAX_TOTAL_PATHS}) reached; stopping enumeration early"
                 )
                 break
 
-    limitations = list(dict.fromkeys(limitations))
-    coverage_limitations = [
-        limitation
-        for limitation in limitations
-        if not limitation.startswith("loop-back edges pruned")
-    ]
+    per_entry = {key: list(dict.fromkeys(items)) for key, items in per_entry.items()}
     logger.info(
-        f"Enumerated {len(all_journeys)} journey paths across {len(phone_entries)} phone numbers"
+        f"Enumerated {len(all_journeys)} journey paths across {len(entry_points)} entry points"
     )
-    return all_journeys, not coverage_limitations, limitations
+    return all_journeys, per_entry
+
+
+def _coverage_limitations(limitations: List[str]) -> List[str]:
+    """Limitations that reduce coverage (loop-back pruning does not)."""
+    return [item for item in limitations if not item.startswith("loop-back edges pruned")]
 
 
 def _enumerate_from_entry(
@@ -120,6 +152,7 @@ def _enumerate_from_entry(
     max_paths: int,
     max_depth: int,
     max_steps: int = MAX_STEPS_PER_ENTRY,
+    entry_channel: str = "VOICE",
 ) -> Tuple[List[JourneyPath], List[str]]:
     """Run bounded iterative DFS and report any cap that truncated coverage."""
     paths: List[JourneyPath] = []
@@ -156,8 +189,9 @@ def _enumerate_from_entry(
             flows_seen = list(dict.fromkeys(n.flow_id for n in current_path))
             paths.append(
                 JourneyPath(
-                    entry_number=entry_number,
-                    entry_number_type=entry_type,
+                    entry_identifier=entry_number,
+                    entry_type=entry_type,
+                    entry_channel=entry_channel,
                     nodes=current_path,
                     terminal_type="truncated",
                     terminal_details={
@@ -176,8 +210,9 @@ def _enumerate_from_entry(
             flows_seen = list(dict.fromkeys(n.flow_id for n in current_path))
             paths.append(
                 JourneyPath(
-                    entry_number=entry_number,
-                    entry_number_type=entry_type,
+                    entry_identifier=entry_number,
+                    entry_type=entry_type,
+                    entry_channel=entry_channel,
                     nodes=current_path,
                     terminal_type=terminal_type,
                     terminal_details=_extract_terminal_details(node),
@@ -209,8 +244,9 @@ def _enumerate_from_entry(
                 limitations.append("unresolved dynamic transfer target")
                 paths.append(
                     JourneyPath(
-                        entry_number=entry_number,
-                        entry_number_type=entry_type,
+                        entry_identifier=entry_number,
+                        entry_type=entry_type,
+                        entry_channel=entry_channel,
                         nodes=current_path,
                         terminal_type="unresolved_transfer",
                         terminal_details={
@@ -226,8 +262,9 @@ def _enumerate_from_entry(
             # and not an unresolved dynamic transfer either.
             paths.append(
                 JourneyPath(
-                    entry_number=entry_number,
-                    entry_number_type=entry_type,
+                    entry_identifier=entry_number,
+                    entry_type=entry_type,
+                    entry_channel=entry_channel,
                     nodes=current_path,
                     terminal_type="disconnect",
                     terminal_details={
