@@ -349,13 +349,13 @@ def test_readme_reference_sections_live_in_their_owning_guides():
 
     # Act
     generative_ai_section = catalog.split("## Generative AI coverage", 1)[1].split("\n## ", 1)[0]
-    journey_section = user_guide.split("### Caller Journey Map", 1)[1].split("\n### ", 1)[0]
+    journey_section = user_guide.split("### Customer Journey Map", 1)[1].split("\n### ", 1)[0]
 
     # Assert
     assert "## Generative AI coverage" not in readme
-    assert "## Caller Journey Map" not in readme
+    assert "## Customer Journey Map" not in readme
     assert "docs/check-catalog.md#generative-ai-coverage" in readme
-    assert "docs/user-guide.md#caller-journey-map" in readme
+    assert "docs/user-guide.md#customer-journey-map" in readme
     assert "docs/user-guide.md#installation" in readme
     assert "docs/user-guide.md#aws-access" in readme
     for control_id in GENERATIVE_AI_CONTROL_IDS:

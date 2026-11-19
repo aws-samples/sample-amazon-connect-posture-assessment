@@ -35,8 +35,8 @@ class TestJourneyFindingInstance:
 
         node = JourneyNode(flow_id="f1", flow_name="Main", action_id="a1", action_type="Transfer")
         path = JourneyPath(
-            entry_number="+18005551212",
-            entry_number_type="TOLL_FREE",
+            entry_identifier="+18005551212",
+            entry_type="TOLL_FREE",
             nodes=[node],
             terminal_type="agent_queue",
             terminal_details={"queue": "Sales"},

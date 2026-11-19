@@ -88,10 +88,10 @@ _GENERIC_LABEL: Dict[str, str] = {
     "MessageParticipant": "Plays a message",
     "PlayPrompt": "Plays a prompt",
     "MessageParticipantByText": "Sends a text message",
-    "GetUserInput": "Asks caller to choose",
-    "GetParticipantInput": "Asks caller to choose",
-    "StoreUserInput": "Captures caller input",
-    "StoreCustomerInput": "Captures caller input",
+    "GetUserInput": "Asks customer to choose",
+    "GetParticipantInput": "Asks customer to choose",
+    "StoreUserInput": "Captures customer input",
+    "StoreCustomerInput": "Captures customer input",
     "ConnectToLexBot": "Talks to a Lex bot",
     "ConnectParticipantWithLexBot": "Talks to a Lex bot",
     "ConnectParticipantWithAgenticCX": "Agentic CX application",
@@ -100,7 +100,7 @@ _GENERIC_LABEL: Dict[str, str] = {
     "CreateCallback": "Offered a callback",
     "SetCallbackNumber": "Callback registered",
     "Wait": "Waits",
-    "DisconnectParticipant": "Call ends",
+    "DisconnectParticipant": "Contact ends",
     "EndFlowExecution": "Flow ends",
     "TransferParticipantToThirdParty": "Transferred externally",
     "TransferContactToPhoneNumber": "Transferred externally",
@@ -120,16 +120,16 @@ _EDGE_LABEL_MAX_CHARS = 24
 # hover tooltip so a reader doesn't have to guess what "PROCESSING" or
 # "WAITS" implies about the caller's experience at that step.
 _CATEGORY_EXPLANATION: Dict[str, str] = {
-    "speaks": "The caller hears something (a prompt, message, or announcement).",
-    "chooses": "The caller provides input — a key press, spoken response, or conversation.",
+    "speaks": "The customer hears something (a prompt, message, or announcement).",
+    "chooses": "The customer provides input — a key press, spoken response, or conversation.",
     "agentic": (
         "The participant is handed to an Amazon Connect Agentic CX application for an "
         "interactive self-service attempt."
     ),
-    "waits": "The caller is placed on hold, queued, or offered a callback.",
+    "waits": "The customer is placed on hold, queued, or offered a callback.",
     "terminal": "The interaction ends here — disconnect, transfer, or handoff to another flow.",
     "processing": (
-        "Invisible to the caller — internal system work such as a data "
+        "Invisible to the customer — internal system work such as a data "
         "lookup, setting an attribute, or branching logic."
     ),
 }
@@ -153,16 +153,16 @@ _CONDITION_EXPLANATIONS: Dict[str, str] = {
     ),
     "NoMatchingCondition": (
         "Amazon Connect's built-in catch-all for this action's "
-        "conditional branches: taken when the caller's response (a key "
+        "conditional branches: taken when the customer's response (a key "
         "press, spoken input, or an attribute's value) doesn't match "
         "any of the specific conditions configured on this action."
     ),
     "InvalidPhoneNumber": (
-        "Taken when the input captured from the caller doesn't pass "
+        "Taken when the input captured from the customer doesn't pass "
         "Amazon Connect's phone-number format validation."
     ),
     "InputTimeLimitExceeded": (
-        "Taken when the caller doesn't respond before this action's configured time limit runs out."
+        "Taken when the customer doesn't respond before this action's configured time limit runs out."
     ),
     "QueueAtCapacity": (
         "Taken when the destination queue has already reached its "
@@ -182,7 +182,7 @@ _DEFAULT_ERROR_EXPLANATION = (
     "documentation for it."
 )
 _DEFAULT_CONDITION_EXPLANATION = (
-    "A branch defined on this action for a specific caller response "
+    "A branch defined on this action for a specific customer response "
     "(a key press, a recognized value, or an attribute comparison) — "
     "this is the exact label the flow's author gave that branch."
 )
@@ -266,7 +266,7 @@ class JourneyDiagramArtifacts:
 
 @dataclass
 class _Layout:
-    """Fully resolved layout for the caller-focused journey projection."""
+    """Fully resolved layout for the customer-focused journey projection."""
 
     model: JourneyViewModel
     visible: Dict[str, JourneyNode]
@@ -583,7 +583,7 @@ def _render(graph: ContactFlowGraph, layout: Optional[_Layout] = None) -> str:
         nodes_html.append(_render_node(x, y, node))
 
     parts = [
-        '<p class="jm-primary-note">Main caller route is centered. '
+        '<p class="jm-primary-note">Main customer route is centered. '
         "Alternatives appear above it; fallback and technical routes appear below.</p>",
         f'<div class="jm-canvas" style="width:{canvas_w}px;height:{canvas_h}px;">',
         connectors_svg,
@@ -893,11 +893,11 @@ _SVG_LABEL_TEXT = "#424650"
 _SVG_FONT_FAMILY = "'Open Sans', 'Helvetica Neue', Roboto, Arial, sans-serif"
 # Category captions, matching the report UI's legend.
 _SVG_CATEGORY_LABELS: Dict[str, str] = {
-    "speaks": "Caller hears",
-    "chooses": "Caller chooses",
+    "speaks": "Customer is told",
+    "chooses": "Customer chooses",
     "agentic": "Agentic self-service",
-    "waits": "Caller waits",
-    "terminal": "Call ends",
+    "waits": "Customer waits",
+    "terminal": "Contact ends",
     "processing": "System work",
 }
 
@@ -980,7 +980,7 @@ def _render_drawio_export(graph: ContactFlowGraph, layout: _Layout) -> Optional[
     _paths, _labels, canvas_w, canvas_h = _build_connectors(
         layout.positions, layout.forward_edges, layout.back_edges
     )
-    diagram_name = "Caller Journey"
+    diagram_name = "Customer Journey"
     if graph.flow_name:
         diagram_name += f" - {_xml_text(graph.flow_name)}"
     model_attrs = {
@@ -1454,22 +1454,22 @@ def _customer_experience_scope(
         return details
     if action_type in ("GetUserInput", "GetParticipantInput"):
         details = _voice_prompt_scope(
-            params, context, opening="Prompts the caller before collecting input"
+            params, context, opening="Prompts the customer before collecting input"
         )
         timeout = _first_parameter(params, "InputTimeLimitSeconds", "Timeout", "TimeoutSeconds")
         max_digits = _first_parameter(params, "MaxDigits", "MaximumDigits")
         if max_digits and timeout:
             details.append(f"Waits up to {timeout} seconds for as many as {max_digits} digits.")
         elif timeout:
-            details.append(f"Waits up to {timeout} seconds for the caller's response.")
+            details.append(f"Waits up to {timeout} seconds for the customer's response.")
         elif max_digits:
-            details.append(f"Collects as many as {max_digits} digits from the caller.")
+            details.append(f"Collects as many as {max_digits} digits from the customer.")
         else:
-            details.append("Waits for a spoken response or keypad input from the caller.")
+            details.append("Waits for a spoken response or keypad input from the customer.")
         return details
     if action_type in ("StoreUserInput", "StoreCustomerInput"):
         details = _voice_prompt_scope(
-            params, context, opening="Prompts the caller before storing input"
+            params, context, opening="Prompts the customer before storing input"
         )
         max_digits = _first_parameter(params, "MaxDigits", "MaximumDigits")
         if max_digits:
@@ -1477,7 +1477,9 @@ def _customer_experience_scope(
                 f"Stores as many as {max_digits} entered digits for later flow decisions."
             )
         else:
-            details.append("Stores the caller's input for later routing or data-processing steps.")
+            details.append(
+                "Stores the customer's input for later routing or data-processing steps."
+            )
         return details
     if action_type in ("ConnectToLexBot", "ConnectParticipantWithLexBot"):
         ai = _ai_agent_details(action)
@@ -1612,7 +1614,7 @@ def _customer_experience_scope(
                 for item in participants
             ]
             if set(names) == {"agent", "caller"}:
-                return ["Configures contact recording to capture both caller and agent audio."]
+                return ["Configures contact recording to capture both customer and agent audio."]
             return [f"Configures contact recording to capture {', '.join(names)} audio."]
         status = str(params.get("RecordingStatus") or params.get("RecordingBehavior") or "")
         if status and not isinstance(behavior, dict):
@@ -1622,17 +1624,17 @@ def _customer_experience_scope(
         queue = _queue_identity(action, context)
         return [
             f"Selects {queue} as the destination for the next queue transfer.",
-            "Prepares routing only; the caller is transferred by a later block.",
+            "Prepares routing only; the customer is transferred by a later block.",
         ]
     if action_type in ("TransferToQueue", "TransferContactToQueue"):
         queue = _queue_identity(action, context)
-        details = [f"Transfers the caller to {queue} to wait for an available agent."]
+        details = [f"Transfers the customer to {queue} to wait for an available agent."]
         if _has_outcome(action, "QueueAtCapacity"):
             details.append("Uses a separate configured route when the queue is at capacity.")
         return details
     if action_type == "CreateCallback":
         queue = _queue_identity(action, context)
-        return [f"Creates a callback request in {queue} so the caller does not remain on hold."]
+        return [f"Creates a callback request in {queue} so the customer does not remain on hold."]
     if action_type == "SetCallbackNumber":
         return ["Stores the confirmed callback number for a later callback request."]
     if action_type == "Wait":
@@ -1648,9 +1650,9 @@ def _customer_experience_scope(
         destination = _phone_destination(params)
         if destination:
             if destination == "a number selected from contact data":
-                return ["Transfers the caller to an external number selected from contact data."]
-            return [f"Transfers the caller to an external number ending in {destination[-4:]}."]
-        return ["Transfers the caller to the configured external destination."]
+                return ["Transfers the customer to an external number selected from contact data."]
+            return [f"Transfers the customer to an external number ending in {destination[-4:]}."]
+        return ["Transfers the customer to the configured external destination."]
     if action_type in ("TransferToFlow", "TransferContactToFlow"):
         flow = action.resource_details.get("flow", {}).get("identity")
         if flow:
@@ -1662,7 +1664,7 @@ def _customer_experience_scope(
             return [f"Repeats the connected journey steps up to {count} times before exiting."]
         return ["Repeats the connected journey steps until a configured exit route is taken."]
     if action_type == "DisconnectParticipant":
-        return ["Disconnects the voice contact; no further flow actions run for the caller."]
+        return ["Disconnects the voice contact; no further flow actions run for the customer."]
     if action_type == "EndFlowExecution":
         return [
             "Stops this flow execution and returns control to its invoking context when applicable."
@@ -1674,7 +1676,7 @@ def _customer_experience_scope(
     if category == "chooses":
         return ["Collects customer input and uses it to continue the journey."]
     if category == "waits":
-        return ["Places the caller into a configured waiting or callback step."]
+        return ["Places the customer into a configured waiting or callback step."]
     if category == "terminal":
         return ["Ends or hands off this part of the customer journey."]
     return [
@@ -1686,7 +1688,7 @@ def _customer_experience_scope(
 def _voice_prompt_scope(
     params: Dict,
     context: Dict[str, str],
-    opening: str = "Plays a prompt to the caller",
+    opening: str = "Plays a prompt to the customer",
 ) -> List[str]:
     text = _text_param(params)
     details: List[str] = []

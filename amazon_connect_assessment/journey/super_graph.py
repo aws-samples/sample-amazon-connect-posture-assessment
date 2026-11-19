@@ -26,21 +26,23 @@ def build_super_graph(
     tier_assignments: List[TierAssignment],
 ) -> SuperGraph:
     """
-    Build a super-graph by connecting tier1+tier2 flow graphs at transfer edges.
+    Build a super-graph by connecting tier 1 flow graphs at transfer edges.
+
+    Only phone-reachable (tier 1) flows are stitched, because only phone
+    entry points are enumerated. Tier 2 flows (in use via chat/task/email,
+    not phone-reachable) are deliberately excluded: stitching them adds no
+    journeys, and any dynamic reference inside one would mark *voice*
+    enumeration incomplete and push every journey control to SKIPPED.
 
     Args:
         parsed_flows: All parsed flow graphs indexed by flow_id.
-        tier_assignments: Tier classification (only tier1 + tier2 are stitched).
+        tier_assignments: Tier classification (only tier 1 is stitched).
 
     Returns:
         SuperGraph with all nodes, edges, and entry points.
     """
     graph = SuperGraph()
-    in_scope_ids = {
-        t.flow_id
-        for t in tier_assignments
-        if t.tier.startswith("tier1") or t.tier == "tier2_traffic"
-    }
+    in_scope_ids = {t.flow_id for t in tier_assignments if t.tier.startswith("tier1")}
 
     visited: Set[str] = set()
     for flow_id in in_scope_ids:

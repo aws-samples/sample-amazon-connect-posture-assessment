@@ -256,6 +256,11 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             # claimed to, not the flow it's assigned to in the console —
             # ListFlowAssociations is the API that reflects that field.
             "connect:ListFlowAssociations",
+            # Resolves inbound email address ARNs (from ListFlowAssociations
+            # INBOUND_EMAIL) to addresses, so email entry points in the
+            # customer journey map are labelled. Optional: without it email
+            # entries are still mapped, labelled by address ID.
+            "connect:SearchEmailAddresses",
             # Discovers Connect AI agent assistant and knowledge-base integrations
             # for the instance-level AI operations maturity checks.
             "connect:ListIntegrationAssociations",

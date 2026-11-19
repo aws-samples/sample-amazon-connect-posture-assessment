@@ -55,7 +55,7 @@ bundle, fonts, report-data JSON, and Journey Map into one offline file. It inclu
   and evidence for every finding in the selected report scope;
 - methodology sections for why the control exists, evidence source, proof
   limitations, developer/admin meaning, and verification criteria;
-- the phone-number-driven Caller Journey Map when flow analysis is enabled.
+- the Customer Journey Map, covering entry points on every channel, when flow analysis is enabled.
 
 The JSON and CSV export actions remain explicitly labeled as full-assessment,
 all-instance exports. Print and PDF output follow the selected report scope.

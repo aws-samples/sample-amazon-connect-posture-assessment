@@ -261,15 +261,60 @@ output:
 
 # Caller journey scoring tuning (path discovery; does not change HTML map entries)
 journey_map:
-  max_paths_per_did: 200   # Max paths per phone number (reduce for speed)
-  max_depth: 50            # Max DFS depth per path
+  max_paths_per_did: 200     # Max paths per phone number (reduce for speed)
+  max_depth: 50              # Max DFS depth per path
+  traffic_lookback_days: 30  # Usage window in days, 1-34 (API limit: under 35)
 ```
 
-The HTML Caller Journey Map is phone-number driven: it renders every available
-contact flow targeted by an inbound number. It has no `top_n` setting. The
+### Channel classification
+
+A flow's own metadata cannot tell you which channel uses it. `ContactFlowType`
+describes a position in the contact lifecycle (`CONTACT_FLOW`,
+`CUSTOMER_QUEUE`, `AGENT_WHISPER`, …) and carries no channel dimension, and a
+single flow legitimately serves voice, chat and task at once. So the assessment
+resolves channel empirically, using `connect:GetMetricDataV2` to count contacts
+started per flow per channel (`VOICE`, `CHAT`, `TASK`, `EMAIL`) over
+`traffic_lookback_days`.
+
+This also determines tiering:
+
+| Tier | Meaning | Journey enumeration |
+|---|---|---|
+| 1 | An entry point's flow, or reachable from one: phone, SMS, WhatsApp, email, or an *observed* entry flow | Yes, scored with the entry's channel rules |
+| 2 | A queue, hold, whisper, or transfer flow that started contacts but is not reachable from any entry | No — listed in `journey-scope-001` |
+| 3 | Not reachable from any entry and no contacts in the window | No — dormant-flow review |
+
+An *observed* entry flow is how web chat, tasks, and API-started contacts are
+found: they have no control-plane association (`StartChatContact` takes the
+flow ID from the caller), so a contact flow that started contacts on a channel
+without being reachable from that channel's associations is treated as an entry
+point for it. Tier 2 is therefore only ever queue, hold, whisper, or transfer
+flows, which run inside other contacts' journeys rather than starting one.
+
+The usage window ends one minute before the run, so contacts from earlier the
+same day count. Metrics are only requested for flows whose tier they can change
+(entry-capable flows, and flows no association reaches).
+
+If an association or phone-number lookup fails, `journey-scope-001` names the
+failed discovery and reports SKIPPED rather than "no dormant flows", because
+real entry flows may then look unreachable.
+
+`traffic_lookback_days` must be an integer from 1 to 34, because
+`GetMetricDataV2` with a `TOTAL` interval requires a window under 35 days.
+Out-of-range values are clamped and invalid ones fall back to 30, each with a
+warning.
+
+Without the `connect:GetMetricDataV2` permission, or if any metrics request
+fails, the run discards the usage data rather than classifying on partial
+counts. Tiering then falls back to reachability alone, and `journey-scope-001`
+says its dormant labels are reachability-only.
+
+The HTML Customer Journey Map renders every discovered entry point — phone,
+SMS, and WhatsApp numbers, email addresses, and observed entry flows — that
+reaches an available contact flow. It has no `top_n` setting. The
 `journey_map` values above control the separate journey-scoring pipeline and its
 findings. That pipeline performs bounded static enumeration, not exhaustive
-runtime exploration: it uses depth 50 and 200 paths per phone number by default,
+runtime exploration: it uses depth 50 and 200 paths per entry point by default,
 with a fixed 5,000-path cap per instance. Cycle edges are pruned without reducing
 static structural reachability; reached caps, dynamic targets, and unresolved
 flow references mark enumeration incomplete.

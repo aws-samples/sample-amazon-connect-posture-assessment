@@ -537,6 +537,22 @@ describe('journey entry options', () => {
     assert.equal(options[1].labelTag, 'Backup');
   });
 
+  it('labels and tags entry points on every channel', () => {
+    const base = entry('i-1', 'Primary', '', 'Flow');
+    const options = journeyEntryOptions([
+      { ...base, phone_number: '+18005550100', phone_type: 'TOLL_FREE', channel: 'VOICE', entry_type: 'TOLL_FREE', entry_label: '+18005550100' },
+      { ...base, phone_number: '+18005550100', phone_type: 'SMS', channel: 'CHAT', entry_type: 'SMS', entry_label: '+18005550100 · SMS' },
+      { ...base, phone_type: 'EMAIL_ADDRESS', channel: 'EMAIL', entry_type: 'EMAIL_ADDRESS', entry_label: 'support@example.com · Email' },
+      { ...base, phone_type: 'OBSERVED_FLOW', channel: 'CHAT', entry_type: 'OBSERVED_FLOW', entry_label: 'Web Chat · CHAT (observed)' },
+    ]);
+    assert.deepEqual(options.map((o) => o.label), [
+      '+18005550100', '+18005550100 · SMS', 'support@example.com · Email', 'Web Chat · CHAT (observed)',
+    ]);
+    assert.deepEqual(options.map((o) => o.tags), [
+      ['VOICE', 'TOLL FREE'], ['CHAT', 'SMS'], ['EMAIL'], ['CHAT', 'OBSERVED'],
+    ]);
+  });
+
   it('uses the flow name when the report scope contains one instance', () => {
     const options = journeyEntryOptions([entry('i-1', 'Primary', '+18005550100', 'Main IVR')]);
     assert.equal(options[0].labelTag, 'Main IVR');

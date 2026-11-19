@@ -34,16 +34,16 @@ import {
   Table,
   Toggle,
 } from '@cloudscape-design/components';
-import { journeyEntryOptions } from './data';
+import { journeyEntryOptions, journeyEntryType } from './data';
 import { downloadSvgAsPng, downloadText, safeFilenamePart } from './download';
 
 export const CATEGORIES = {
-  speaks: { label: 'Caller hears', color: colorChartsPaletteCategorical1 },
-  chooses: { label: 'Caller chooses', color: colorChartsPaletteCategorical4 },
+  speaks: { label: 'Customer is told', color: colorChartsPaletteCategorical1 },
+  chooses: { label: 'Customer chooses', color: colorChartsPaletteCategorical4 },
   agentic: { label: 'Agentic self-service', color: colorChartsPaletteCategorical2 },
-  waits: { label: 'Caller waits', color: colorChartsPaletteCategorical5 },
+  waits: { label: 'Customer waits', color: colorChartsPaletteCategorical5 },
   processing: { label: 'System work', color: colorChartsPaletteCategorical3 },
-  terminal: { label: 'Call ends', color: colorChartsStatusNeutral },
+  terminal: { label: 'Contact ends', color: colorChartsStatusNeutral },
 };
 export const ROUTE = {
   normal: { type: 'success', label: 'Normal', color: colorTextBodySecondary },
@@ -255,7 +255,7 @@ function StepsTable({ model, selectedKey, onSelect }) {
 
 function EmptyJourney({ status }) {
   return (
-    <Container header={<Header variant="h2">Caller journey map</Header>}>
+    <Container header={<Header variant="h2">Customer journey map</Header>}>
       <SpaceBetween size="s">
         <Box>
           {status?.message ?? 'No inbound phone number in this assessment terminates on a contact flow, so there is no journey to draw.'}
@@ -329,7 +329,7 @@ export default function JourneyMap({ journey, selection, onSelect, onClearSelect
       header={
         <Header
           variant="h2"
-          description="How a caller moves through the contact flow behind each inbound number. Only numbers that terminate on a contact flow are listed. Select a step or route for details."
+          description="How a customer moves through the contact flow behind each entry point: phone and SMS numbers, email addresses, and flows observed starting chat or task contacts. Select a step or route for details."
           actions={
             <ButtonDropdown
               items={[
@@ -343,12 +343,12 @@ export default function JourneyMap({ journey, selection, onSelect, onClearSelect
             </ButtonDropdown>
           }
         >
-          Caller journey map
+          Customer journey map
         </Header>
       }
     >
       <SpaceBetween size="l">
-        <FormField label="DID / toll-free number">
+        <FormField label="Entry point">
           <Select
             selectedOption={entryOptions[entryIndex] ?? entryOptions[0]}
             options={entryOptions}
@@ -364,7 +364,15 @@ export default function JourneyMap({ journey, selection, onSelect, onClearSelect
           columns={4}
           items={[
             { label: 'Contact flow', value: entry.flow_name, info: <Box variant="code" fontSize="body-s">{entry.flow_id}</Box> },
-            { label: 'Number type', value: entry.phone_type ? <Badge color="grey">{entry.phone_type.replace(/_/g, ' ')}</Badge> : '—' },
+            {
+              label: 'Channel',
+              value: entry.channel || journeyEntryType(entry) ? (
+                <SpaceBetween direction="horizontal" size="xxs">
+                  {entry.channel && <Badge color="blue">{entry.channel}</Badge>}
+                  {journeyEntryType(entry) && journeyEntryType(entry) !== entry.channel && <Badge color="grey">{journeyEntryType(entry)}</Badge>}
+                </SpaceBetween>
+              ) : '—',
+            },
             { label: 'Displayed steps', value: model.displayed_step_count ?? Object.keys(model.nodes).length },
             {
               label: 'Flow actions',

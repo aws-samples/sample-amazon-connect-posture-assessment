@@ -278,6 +278,9 @@ Resources:
               # to, for the Caller Journey Map. ListPhoneNumbersV2's
               # TargetArn is the instance/TDG ARN, not the flow ARN.
               - connect:ListFlowAssociations
+              # Labels inbound email entry points (email address ARN ->
+              # address) for the customer journey map.
+              - connect:SearchEmailAddresses
               # Discovers the Connect AI agent resources associated with the
               # instance for the AI operations maturity checks.
               - connect:ListIntegrationAssociations
