@@ -102,9 +102,9 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             instance_alias=instance_alias,
             service_role=service_role,
             status=status,
-            identity_management_type=detailed_info.get(
-                "identity_management_type", "CONNECT_MANAGED"
-            ),
+            # No default: an unobserved identity type must stay None so checks
+            # can report it as not evaluated, rather than as Connect-managed.
+            identity_management_type=detailed_info.get("identity_management_type"),
             inbound_calls_enabled=detailed_info.get("inbound_calls_enabled", False),
             outbound_calls_enabled=detailed_info.get("outbound_calls_enabled", False),
         )
@@ -124,9 +124,7 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             instance_details = response.get("Instance", {})
 
             return {
-                "identity_management_type": instance_details.get(
-                    "IdentityManagementType", "CONNECT_MANAGED"
-                ),
+                "identity_management_type": instance_details.get("IdentityManagementType"),
                 "inbound_calls_enabled": instance_details.get("InboundCallsEnabled", False),
                 "outbound_calls_enabled": instance_details.get("OutboundCallsEnabled", False),
             }
@@ -155,8 +153,9 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             detailed_info = self._get_instance_details(instance.instance_id)
 
             # Update instance with any additional details
-            instance.identity_management_type = detailed_info.get(
-                "identity_management_type", instance.identity_management_type
+            # Never let a missing value clobber one the engine already observed.
+            instance.identity_management_type = (
+                detailed_info.get("identity_management_type") or instance.identity_management_type
             )
             instance.inbound_calls_enabled = detailed_info.get(
                 "inbound_calls_enabled", instance.inbound_calls_enabled

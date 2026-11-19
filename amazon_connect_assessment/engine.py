@@ -499,7 +499,7 @@ class AssessmentEngine:
                     instance = ConnectInstance(
                         instance_id=instance_id,
                         instance_arn=instance_detail["Arn"],
-                        identity_management_type=instance_detail["IdentityManagementType"],
+                        identity_management_type=instance_detail.get("IdentityManagementType"),
                         inbound_calls_enabled=instance_detail["InboundCallsEnabled"],
                         outbound_calls_enabled=instance_detail["OutboundCallsEnabled"],
                         instance_alias=instance_detail.get("InstanceAlias"),

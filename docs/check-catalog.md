@@ -102,15 +102,18 @@ and every storage-type read completes. A failed read or a Kinesis stream destina
 encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
 FAIL. If no storage configuration is returned, the control is not applicable.
 
-`sec-federation-001` returns PASS only for SAML federation, where MFA is centrally
-enforceable and auditable at the IdP. Every other `IdentityManagementType` returns FAIL,
-because the instance exposes no federated sign-in path in which MFA can be proven — the
-entry condition for agent-credential compromise and agent-initiated outbound toll fraud.
-It carries the Manual Review disposition rather than Control because
-`IdentityManagementType` cannot prove MFA is *absent* either: Connect-managed identity
-behind your own SSO/MFA layer is legitimate, but nothing in the instance configuration
-evidences that layer, so a human must confirm it. Earlier releases returned PASS on both
-branches, which made a Connect-managed instance with no MFA anywhere read as reassurance.
+`sec-federation-001` returns PASS for SAML federation, where MFA is centrally
+enforceable and auditable at the IdP. `EXISTING_DIRECTORY` and `CONNECT_MANAGED`
+return FAIL, each with its own remediation: directory-backed instances can enforce
+MFA through RADIUS on the AWS Directory Service directory, while Connect-managed
+instances have no agent MFA path, and because identity management cannot be
+changed on an existing instance, moving to SAML means a new instance. A missing or
+unrecognized identity type returns SKIPPED rather than being treated as
+Connect-managed. FAIL carries the Manual Review disposition rather than Control,
+because `IdentityManagementType` cannot prove MFA is *absent*, only that the
+instance does not evidence it. As a manual review it is non-scoring and is not
+exported to Security Hub. Earlier releases returned PASS for every identity type,
+which made a Connect-managed instance with no MFA anywhere read as reassurance.
 
 ### Resilience — 18 controls
 
