@@ -122,6 +122,7 @@ def run_journey_mapping(
         enumeration_limitations=enumeration_limitations,
         channel_coverage=channel_coverage,
         entry_discovery_limitations=discovery.limitations,
+        discovery_incomplete_channels=sorted(discovery.incomplete_channels),
     )
 
     # Step 7: Generate one canonical outcome per selected Journey control.

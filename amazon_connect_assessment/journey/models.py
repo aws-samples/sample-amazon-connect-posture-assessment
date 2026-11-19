@@ -232,6 +232,10 @@ class JourneyMapResult:
     # Why some entry points could not be discovered (permission denied, API
     # error), per source. These narrow coverage without failing the run.
     entry_discovery_limitations: List[str] = field(default_factory=list)
+    # Channels whose entry-point discovery failed (denied or errored
+    # association/phone-number lookups). Reachability, and so every tier
+    # label, is unreliable for these channels.
+    discovery_incomplete_channels: List[str] = field(default_factory=list)
 
     def mark_incomplete(self, limitation: str) -> None:
         """Record an instance-wide gap: every channel becomes incomplete."""

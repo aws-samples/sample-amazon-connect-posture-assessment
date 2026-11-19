@@ -543,3 +543,90 @@ class TestHtmlMapTargets:
 @pytest.mark.parametrize("channel", ["VOICE", "CHAT", "EMAIL", "TASK"])
 def test_every_channel_has_rules(channel):
     assert rules_for(channel).channel == channel
+
+
+# --- PR #22 review regressions -------------------------------------------------
+
+
+class TestReviewRegressions:
+    def _instance(self):
+        return ConnectInstance(
+            instance_id=IID,
+            instance_arn=INSTANCE_ARN,
+            identity_management_type="SAML",
+            inbound_calls_enabled=True,
+            outbound_calls_enabled=False,
+        )
+
+    def _scope(self, flows, factory):
+        output = run_journey_mapping(self._instance(), flows, factory, {})
+        return next(f for f in output.findings if f.check_id == "journey-scope-001")
+
+    def test_failed_association_lookup_is_not_a_clean_pass(self):
+        # Review #1: with every unreachable flow showing traffic, a denied
+        # ListFlowAssociations used to read as "No dormant flows" (PASS).
+        flows = _flows()
+        flows.pop("flow-old")
+        traffic = [_metric(f, "VOICE", 3) for f in ("flow-sms", "flow-wa", "flow-email")]
+        factory = _factory(
+            traffic=DEFAULT_TRAFFIC + traffic,
+            fail={"list_flow_associations": PermissionError("denied")},
+        )
+        finding = self._scope(flows, factory)
+        assert finding.status == CheckStatus.SKIPPED
+        assert "entry-point discovery failed for" in finding.description
+        assert "connect:ListFlowAssociations" in finding.description
+        assert finding.evidence["discovery_incomplete_channels"] == ["CHAT", "EMAIL", "VOICE"]
+
+    def test_failed_phone_lookup_with_dormant_flows_says_so(self):
+        finding = self._scope(
+            _flows(), _factory(fail={"list_phone_numbers_v2": RuntimeError("boom")})
+        )
+        assert finding.status == CheckStatus.FAIL
+        assert "some of these flows may be reachable" in finding.description
+
+    def test_usage_window_includes_today(self):
+        # Review #2: a midnight-aligned end dropped today's contacts.
+        from datetime import datetime, timedelta, timezone
+
+        factory = _factory()
+        discover_entry_points(IID, INSTANCE_ARN, factory, _flows(), {})
+        (request,) = [
+            c.kwargs
+            for c in factory.call_api_with_resilience.call_args_list
+            if c.args[1] == "get_metric_data_v2"
+        ]
+        now = datetime.now(timezone.utc)
+        assert now - timedelta(minutes=3) <= request["EndTime"] <= now
+        assert request["EndTime"] - request["StartTime"] == timedelta(days=30)
+
+    def test_tier2_is_only_ever_non_entry_flow_types(self):
+        # Review #3: tier 2 cannot hide an uncovered customer entry flow.
+        found = _discover()
+        flows = _flows()
+        tier2 = [t.flow_id for t in found.tier_assignments if t.tier == "tier2_traffic"]
+        assert tier2 == ["flow-queue"]
+        assert all(flows[f].flow_type != "CONTACT_FLOW" for f in tier2)
+
+    def test_metrics_skip_flows_whose_tier_cannot_change(self):
+        # Review #4: a reachable hold flow is tier 1 whatever its traffic.
+        flows = _flows()
+        flows["flow-ivr"] = _graph(
+            "flow-ivr",
+            ["MessageParticipant", "TransferToFlow"],
+            params={1: _transfer_to("flow-hold")},
+        )
+        flows["flow-hold"] = _graph("flow-hold", ["MessageParticipant"], flow_type="CUSTOMER_HOLD")
+        factory = _factory()
+        discover_entry_points(IID, INSTANCE_ARN, factory, flows, {})
+        (request,) = [
+            c.kwargs
+            for c in factory.call_api_with_resilience.call_args_list
+            if c.args[1] == "get_metric_data_v2"
+        ]
+        queried = next(
+            f["FilterValues"] for f in request["Filters"] if f["FilterKey"] == "FLOWS_RESOURCE_ID"
+        )
+        assert "flow-hold" not in queried  # reachable, not entry-capable
+        assert "flow-queue" in queried  # unreachable: may be in use
+        assert "flow-ivr" in queried  # entry-capable: may be an observed entry

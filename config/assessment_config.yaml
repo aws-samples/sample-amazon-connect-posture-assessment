@@ -49,9 +49,6 @@ journey_map:
   # pipeline (run_journey_mapping). They do not affect the rendered map above.
   max_paths_per_did: 200
   max_depth: 50
-  # Reserved; currently has no effect. Flows that are in use but not
-  # phone-reachable (tier 2) are classified and reported, not enumerated.
-  max_traffic_flows: 10
   # Days of connect:GetMetricDataV2 history used to see which channels
   # (VOICE / CHAT / TASK / EMAIL) actually start each flow — a flow's own
   # metadata has no channel dimension. Integer, 1-34: the API requires the
