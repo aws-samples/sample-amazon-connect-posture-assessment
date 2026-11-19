@@ -314,9 +314,17 @@ class TestOutboundDestination:
 # --- A5: cost alerting ----------------------------------------------------------
 
 
-def _cost_factory(monitors=(), subscriptions=(), budgets=(), errors=None):
+def _cost_factory(monitors=(), subscriptions=(), budgets=(), errors=None, notified=None):
     errors = errors or {}
+    notified = {b["BudgetName"]: 1 for b in budgets} if notified is None else notified
     responses = {
+        "describe_budget_notifications_for_account": errors.get("notifications")
+        or {
+            "BudgetNotificationsForAccount": [
+                {"BudgetName": name, "Notifications": [{}] * count}
+                for name, count in notified.items()
+            ]
+        },
         "get_anomaly_monitors": errors.get("monitors") or {"AnomalyMonitors": list(monitors)},
         "get_anomaly_subscriptions": errors.get("subs")
         or {"AnomalySubscriptions": list(subscriptions)},
@@ -396,3 +404,110 @@ class TestFraudCostAlerting:
         check.execute(_ctx(factory))
         check.execute(_ctx(factory))
         assert calls.count("get_anomaly_monitors") == 1
+
+
+# --- Audit against the PR #22/#23 review findings -----------------------------
+
+
+class TestReviewClassRegressions:
+    """Each test pins one class of defect the earlier reviews found."""
+
+    def test_ip_access_without_default_profile_skips(self):
+        # Missing data must not become a confident FAIL.
+        factory = _factory(_profiles({"Id": "o", "Name": "Office", "AllowedIps": ["10.0.0.0/8"]}))
+        finding = IpAccessControlCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+
+    def test_partial_destination_sample_is_not_a_clean_pass(self):
+        # A failed batch must not leave partial data behind a PASS.
+        factory = _dest_factory(["+12065550111", "+12065550112"])
+        inner = factory.call_api_with_resilience.side_effect
+
+        def _flaky(c, op, s=None, **kw):
+            if op == "describe_contact" and kw["ContactId"] == "c1":
+                raise _client_error("ThrottlingException")
+            return inner(c, op, s, **kw)
+
+        factory.call_api_with_resilience.side_effect = _flaky
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["destination_read_failures"] == 1
+
+    def test_non_telephone_endpoints_do_not_block_a_pass(self):
+        factory = _dest_factory(["+12065550111", "sip:agent@example"])
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.PASS
+
+    def test_budget_without_notifications_does_not_pass(self):
+        # A claimed control that alerts no one is not a control.
+        budget = {"BudgetName": "connect", "CostFilters": {"Service": ["Amazon Connect"]}}
+        finding = FraudCostAlertingCheck().execute(
+            _ctx(_cost_factory(budgets=[budget], notified={"connect": 0}))
+        )
+        assert finding.status == CheckStatus.FAIL
+        assert "have no notifications" in finding.description
+
+    def test_filter_expression_budget_counts(self):
+        # Budgets defined with the newer FilterExpression must not be missed.
+        budget = {
+            "BudgetName": "connect",
+            "FilterExpression": {"Dimensions": {"Key": "SERVICE", "Values": ["Amazon Connect"]}},
+        }
+        assert (
+            FraudCostAlertingCheck().execute(_ctx(_cost_factory(budgets=[budget]))).status
+            == CheckStatus.PASS
+        )
+
+    def test_unreadable_budgets_skip_rather_than_claim_absence(self):
+        factory = _cost_factory(
+            [SERVICE_MONITOR],
+            [{"MonitorArnList": ["m1"], "Frequency": "WEEKLY"}],
+            errors={"budgets": _client_error("AccessDeniedException")},
+        )
+        finding = FraudCostAlertingCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+
+    def test_thresholds_are_recorded_as_the_methodology_states(self):
+        sub = {"MonitorArnList": ["m1"], "Frequency": "WEEKLY", "Threshold": 200.0}
+        finding = FraudCostAlertingCheck().execute(_ctx(_cost_factory([SERVICE_MONITOR], [sub])))
+        assert finding.evidence["alert_thresholds_for_connect"][0]["threshold"] == 200.0
+
+    def test_controls_are_registered_as_manual_review_with_consistent_severity(self):
+        # Through the real registry, not a hand-set disposition: a broken
+        # registration would export these to Security Hub as failed controls,
+        # and a per-finding severity on a non-dynamic control is rejected.
+        from amazon_connect_assessment.checks.control_registry import (
+            get_atomic_control_registry,
+        )
+        from amazon_connect_assessment.checks.registration import register_all_checks
+        from amazon_connect_assessment.checks.registry import CheckRegistry
+        from amazon_connect_assessment.models import FindingDisposition
+        from amazon_connect_assessment.score_policy import is_control_failure
+
+        registry = CheckRegistry()
+        register_all_checks(registry)
+        catalog = get_atomic_control_registry()
+        cases = {
+            "sec-ip-access-001": _factory(_profiles({"Id": "d", "IsDefault": True})),
+            "sec-outbound-scope-001": _scope_factory([["agent"], ["agent"]]),
+            "sec-outbound-dest-001": _dest_factory(["+33612345678"]),
+            "sec-fraud-alerting-001": _cost_factory(
+                [SERVICE_MONITOR], [{"MonitorArnList": ["m1"], "Frequency": "WEEKLY"}]
+            ),
+        }
+        for control_id, factory in cases.items():
+            finding = registry.get_check(control_id).execute(_ctx(factory))
+            control = catalog.get(control_id)
+            assert finding.status == CheckStatus.FAIL, control_id
+            assert finding.disposition == FindingDisposition.MANUAL_REVIEW, control_id
+            assert not is_control_failure(finding), control_id
+            if finding.severity != control.default_severity:
+                assert control.dynamic_severity, control_id
+
+    def test_contact_record_control_can_be_disabled_as_documented(self):
+        from amazon_connect_assessment.checks.registration import register_all_checks
+        from amazon_connect_assessment.checks.registry import CheckRegistry
+
+        registry = CheckRegistry()
+        register_all_checks(registry, checks_config={"sec-outbound-dest-001": {"enabled": False}})
+        assert "sec-outbound-dest-001" not in registry.list_check_ids()
