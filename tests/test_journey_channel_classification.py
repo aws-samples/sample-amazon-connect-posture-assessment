@@ -394,7 +394,7 @@ class TestDormantFlowControl:
         finding = _scope_finding(result)
         assert finding.status == CheckStatus.PASS
         assert "phone-anchored static closure" not in finding.description
-        assert "not enumerated as journeys" in finding.description
+        assert "rather than enumerated as journeys" in finding.description
         assert finding.evidence["traffic_observed_flow_ids"] == ["flow-webchat"]
         assert finding.evidence["traffic_observed_channel_mix"] == {"flow-webchat": {"CHAT": 310}}
 

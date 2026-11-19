@@ -263,7 +263,6 @@ output:
 journey_map:
   max_paths_per_did: 200     # Max paths per phone number (reduce for speed)
   max_depth: 50              # Max DFS depth per path
-  max_traffic_flows: 10      # Reserved; currently no effect
   traffic_lookback_days: 30  # Usage window in days, 1-34 (API limit: under 35)
 ```
 
@@ -281,19 +280,24 @@ This also determines tiering:
 
 | Tier | Meaning | Journey enumeration |
 |---|---|---|
-| 1 | Reachable from an inbound phone number | Yes |
-| 2 | Not phone-reachable, but started contacts in the window | No — reported only |
-| 3 | Not phone-reachable and no contacts in the window | No — dormant-flow review |
+| 1 | An entry point's flow, or reachable from one: phone, SMS, WhatsApp, email, or an *observed* entry flow | Yes, scored with the entry's channel rules |
+| 2 | A queue, hold, whisper, or transfer flow that started contacts but is not reachable from any entry | No — listed in `journey-scope-001` |
+| 3 | Not reachable from any entry and no contacts in the window | No — dormant-flow review |
 
-Tier 2 is how flows used through a non-phone entry point become visible:
-chat-, task- and email-only flows, and also queue and whisper flows (for
-example a `CUSTOMER_QUEUE` hold flow), which start contacts without being a
-transfer target. Chat in particular has no control-plane
-entry point at all, because `StartChatContact` takes the flow ID from the caller
-(your widget or app), not from Connect configuration. Tier 2 flows appear in the
-`journey-scope-001` finding with their channel mix, and are excluded from the
-dormant list. They are **not** enumerated or scored as journeys yet; that needs
-channel-specific entry points and scoring rules.
+An *observed* entry flow is how web chat, tasks, and API-started contacts are
+found: they have no control-plane association (`StartChatContact` takes the
+flow ID from the caller), so a contact flow that started contacts on a channel
+without being reachable from that channel's associations is treated as an entry
+point for it. Tier 2 is therefore only ever queue, hold, whisper, or transfer
+flows, which run inside other contacts' journeys rather than starting one.
+
+The usage window ends one minute before the run, so contacts from earlier the
+same day count. Metrics are only requested for flows whose tier they can change
+(entry-capable flows, and flows no association reaches).
+
+If an association or phone-number lookup fails, `journey-scope-001` names the
+failed discovery and reports SKIPPED rather than "no dormant flows", because
+real entry flows may then look unreachable.
 
 `traffic_lookback_days` must be an integer from 1 to 34, because
 `GetMetricDataV2` with a `TOTAL` interval requires a window under 35 days.

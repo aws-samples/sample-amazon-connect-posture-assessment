@@ -210,11 +210,25 @@ def discover_entry_points(
             )
         )
 
+    # Usage metrics are only fetched for flows whose classification they can
+    # change: entry-capable flows (any of them may be an observed entry on a
+    # channel whose associations don't reach it) and flows not reachable from
+    # any association. A reachable queue or whisper flow is tier 1 whatever
+    # its traffic, so querying it only adds calls against a throttle-prone API.
+    reachable_from_associations = _compute_transitive_reachability(
+        {e.contact_flow_id for e in found.entry_points}, parsed_flows
+    )
+    metric_flow_ids = sorted(
+        flow_id
+        for flow_id, graph in parsed_flows.items()
+        if (graph.flow_type or "") in _ENTRY_CAPABLE_FLOW_TYPES
+        or flow_id not in reachable_from_associations
+    )
     journey_cfg = config.get("journey_map", {}) or {}
     found.channel_traffic = _resolve_flow_channel_traffic(
         instance_arn=instance_arn,
         factory=factory,
-        flow_ids=sorted(parsed_flows.keys()),
+        flow_ids=metric_flow_ids,
         lookback_days=_traffic_lookback_days(journey_cfg),
     )
     if not found.channel_traffic.available:
@@ -534,8 +548,11 @@ def _resolve_flow_channel_traffic(
         traffic.status = "complete"
         return traffic
 
-    # Align to midnight UTC so the window is well-defined and stable.
-    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # End one minute before now, floored to the minute: today's contacts
+    # count (a midnight-aligned end dropped them, so a flow busy only today
+    # looked dormant), and the margin keeps EndTime from landing after the
+    # service's clock, which the API rejects.
+    end = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(second=0, microsecond=0)
     start = end - timedelta(days=lookback_days)
     client = factory.get_connect_client()
     collected: Dict[str, Dict[str, int]] = {}

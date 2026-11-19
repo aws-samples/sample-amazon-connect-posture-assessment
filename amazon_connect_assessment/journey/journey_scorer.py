@@ -388,10 +388,28 @@ def generate_journey_findings(
                 )
                 continue
             dormant_flows = sorted(result.dormant_flows)
+            # Tier 2 is always queue, hold, whisper, or transfer flows: any
+            # entry-capable flow with observed traffic either is reachable on
+            # that channel or becomes an observed entry (tier 1). They run
+            # inside other contacts' journeys rather than starting one, so
+            # they are listed, and they cannot make this control fail.
             traffic_flows = sorted(result.traffic_observed_flows)
+            discovery_gaps = list(result.discovery_incomplete_channels)
             usage_known = result.usage_metrics_status == "complete"
             window = result.usage_window_days
-            status = CheckStatus.FAIL if dormant_flows else _no_candidate_status(result)
+            if dormant_flows:
+                status = CheckStatus.FAIL
+            elif discovery_gaps:
+                # A failed association or phone-number lookup leaves flows
+                # unreachable that really are entry flows, so "no dormant
+                # flows" cannot be trusted.
+                status = CheckStatus.SKIPPED
+            else:
+                status = _no_candidate_status(result)
+            gap_text = (
+                f"entry-point discovery failed for {', '.join(discovery_gaps)}"
+                f" ({'; '.join(result.entry_discovery_limitations)})"
+            )
             if dormant_flows and usage_known:
                 description = (
                     f"{len(dormant_flows)} flow(s) are not reachable from any entry point "
@@ -406,26 +424,28 @@ def generate_journey_findings(
                     "unavailable, so flows started only by web chat, tasks, or the API, and "
                     "queue or whisper flows, may be included."
                 )
-            elif traffic_flows:
+            elif discovery_gaps:
                 description = (
-                    f"No dormant flows. {len(traffic_flows)} flow(s) are not reachable from any "
-                    f"entry point but started contacts in the last {window} days, typically as "
-                    "queue, hold, or whisper flows, or dynamically invoked sub-flows."
+                    f"No dormant flow was found, but {gap_text}. Reachability, and every "
+                    "dormant or in-use label, is unreliable until discovery succeeds."
                 )
+            elif traffic_flows:
+                description = "No dormant flows."
             else:
                 description = "Every parsed flow is reachable from a discovered entry point."
+            if dormant_flows and discovery_gaps:
+                description += f" Because {gap_text}, some of these flows may be reachable."
             if traffic_flows:
                 description += (
-                    f" The {len(traffic_flows)} in-use, unreachable flow(s) are not enumerated "
-                    "as journeys, so journey controls do not cover them."
-                    if dormant_flows
-                    else " They are not enumerated as journeys, so journey controls do not "
-                    "cover them."
+                    f" {len(traffic_flows)} in-use flow(s) are queue, hold, whisper, or transfer "
+                    "flows: they run inside other contacts' journeys rather than starting one, "
+                    "so they are listed here rather than enumerated as journeys."
                 )
+            traffic_flow_set = set(traffic_flows)
             channel_mix_by_flow = {
                 t.flow_id: t.channel_mix
                 for t in result.tier_assignments
-                if t.flow_id in set(traffic_flows)
+                if t.flow_id in traffic_flow_set
             }
             findings.append(
                 _canonical_finding(
@@ -444,6 +464,7 @@ def generate_journey_findings(
                         "traffic_observed_channel_mix": channel_mix_by_flow,
                         "usage_metrics_status": result.usage_metrics_status,
                         "usage_window_days": window if usage_known else None,
+                        "discovery_incomplete_channels": discovery_gaps,
                         "dynamic_reference_count": len(result.dynamic_edges),
                     },
                 )
