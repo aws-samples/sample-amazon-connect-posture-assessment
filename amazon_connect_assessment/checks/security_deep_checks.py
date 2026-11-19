@@ -1285,7 +1285,7 @@ class IdentityFederationCheck(BaseCheck):
     Outcome per ``IdentityManagementType``:
 
     * ``SAML`` — PASS. MFA is enforced at the IdP.
-    * ``EXISTING_DIRECTORY`` — FAIL (Manual Review). MFA is possible through
+    * ``EXISTING_DIRECTORY`` — FAIL (Manual Review, MEDIUM). MFA is possible through
       RADIUS on the AWS Directory Service directory, but the Connect API does
       not show whether it is enabled.
     * ``CONNECT_MANAGED`` — FAIL (Manual Review). Connect-specific user names
@@ -1319,12 +1319,16 @@ class IdentityFederationCheck(BaseCheck):
 
     def execute(self, context: CheckContext):
         instance = context.instance
-        idm = (instance.identity_management_type or "").upper()
-        evidence = {"identity_management_type": idm}
+        raw = instance.identity_management_type
+        idm = (raw or "").upper()
+        # Record the value exactly as returned (None stays null, case is kept)
+        # so an auditor can tell "not returned" from "returned empty".
+        evidence = {"identity_management_type": raw}
         common = {
             "resource_id": instance.instance_id,
             "resource_type": "ConnectInstance",
             "evidence": evidence,
+            "context": context,
         }
 
         if idm == "SAML":
@@ -1338,8 +1342,12 @@ class IdentityFederationCheck(BaseCheck):
             )
 
         if idm == "EXISTING_DIRECTORY":
+            # MEDIUM, not HIGH: a directory-backed instance has an MFA path
+            # (RADIUS on the directory) that is merely unverified here, unlike
+            # Connect-managed identity, which has none.
             return self.create_finding(
                 status=CheckStatus.FAIL,
+                severity=Severity.MEDIUM,
                 description=(
                     f"Instance {instance.display_name} authenticates agents against an "
                     "existing directory through AWS Directory Service. MFA can be enforced "
@@ -1440,14 +1448,12 @@ class IdentityFederationCheck(BaseCheck):
 
         return self.create_finding(
             status=CheckStatus.SKIPPED,
-            resource_id=instance.instance_id,
-            resource_type="ConnectInstance",
             description=(
                 f"Skipped: instance {instance.display_name} did not report a recognized "
                 f"identity management type ({idm or 'none returned'}), so the sign-in MFA "
                 "path cannot be evaluated."
             ),
-            evidence={**evidence, "evidence_complete": False},
+            **{**common, "evidence": {**evidence, "evidence_complete": False}},
         )
 
 
