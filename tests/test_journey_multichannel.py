@@ -630,3 +630,18 @@ class TestReviewRegressions:
         assert "flow-hold" not in queried  # reachable, not entry-capable
         assert "flow-queue" in queried  # unreachable: may be in use
         assert "flow-ivr" in queried  # entry-capable: may be an observed entry
+
+
+def test_policy_grants_every_permission_entry_discovery_calls():
+    # A merge that drops these would otherwise pass every other test while
+    # discovery degrades silently in real runs.
+    from amazon_connect_assessment import iam_permissions
+
+    granted = {a for s in iam_permissions.POLICY_STATEMENTS for a in s["Action"]}
+    required = {
+        "connect:ListPhoneNumbersV2",
+        "connect:ListFlowAssociations",
+        "connect:SearchEmailAddresses",
+        "connect:GetMetricDataV2",
+    }
+    assert required <= granted, sorted(required - granted)
