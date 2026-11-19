@@ -1401,74 +1401,32 @@ class AssessmentEngine:
                 break
         return all_numbers
 
-    # Only VOICE_PHONE_NUMBER is queried here, deliberately — see the
-    # matching note in ``journey/topology.py``.
-    #
-    # This mapping is keyed by ``ListPhoneNumbersV2``'s ``PhoneNumberArn``
-    # (always ``arn:aws:connect:…:phone-number/…``), whereas the messaging
-    # resource types are keyed by AWS End User Messaging ARNs
-    # (``arn:aws:sms-voice:…``, ``arn:aws:social-messaging:…``), so their
-    # ResourceIds can never match a key in this map.
-    #
-    # ``SMS_PHONE_NUMBER`` was also never a valid ResourceType for
-    # ListFlowAssociations (only for the singular GetFlowAssociation).
-    # botocore does not validate enum values client-side, so that request
-    # reached the service and returned a ValidationException — which this
-    # method re-raises for any non-access-denied error, breaking journey
-    # mapping outright on live instances.
-    _FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES = ("VOICE_PHONE_NUMBER",)
-
     def _list_flow_associations_for_instance(self, instance: ConnectInstance) -> Dict[str, str]:
         """
-        Paginate ``connect:ListFlowAssociations`` for voice phone numbers
-        on one instance and return a mapping of phone number ARN ->
-        contact flow ID.
+        Return phone number ARN -> contact flow ID for one instance.
 
         This is the API that actually reflects the Connect console's
         "Contact flow / IVR" field on a phone number — see the
         ``_compute_journey_map`` docstring for why ``ListPhoneNumbersV2``'s
-        ``TargetArn`` cannot be used for this. ``FlowId`` in the response
-        is a full flow ARN (``…/contact-flow/{id}``); this method returns
-        just the trailing ID so callers can look it up directly in
-        ``instance.contact_flows``.
+        ``TargetArn`` cannot be used for this.
 
-        Raises :class:`_AccessDeniedListingFlowAssociations` if the API
-        rejects the request as unauthorized so the caller can bucket it
-        into a specific empty-state reason. Any other exception
+        Delegates to ``journey.topology.list_voice_flow_associations``, the
+        single implementation shared with the journey pipeline (which
+        explains why only ``VOICE_PHONE_NUMBER`` is queried). The error
+        policy is this caller's own: access denied raises
+        :class:`_AccessDeniedListingFlowAssociations` so the caller can
+        bucket it into a specific empty-state reason; any other exception
         propagates.
         """
+        from .journey.topology import list_voice_flow_associations
+
         factory = self.aws_client_factory
-        flow_id_by_phone_arn: Dict[str, str] = {}
-        for resource_type in self._FLOW_ASSOCIATION_PHONE_RESOURCE_TYPES:
-            next_token: Optional[str] = None
-            for _ in range(20):  # Bounded page pull — 20 * 1000 = 20000 associations
-                kwargs: Dict[str, Any] = {
-                    "InstanceId": instance.instance_id,
-                    "ResourceType": resource_type,
-                    "MaxResults": 1000,
-                }
-                if next_token:
-                    kwargs["NextToken"] = next_token
-                try:
-                    resp = factory.call_api_with_resilience(
-                        factory.get_connect_client(),
-                        "list_flow_associations",
-                        "connect",
-                        **kwargs,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    if factory.is_access_denied(e):
-                        raise _AccessDeniedListingFlowAssociations() from e
-                    raise
-                for assoc in resp.get("FlowAssociationSummaryList") or []:
-                    phone_arn = assoc.get("ResourceId") or ""
-                    flow_arn = assoc.get("FlowId") or ""
-                    if phone_arn and flow_arn:
-                        flow_id_by_phone_arn[phone_arn] = flow_arn.rsplit("/", 1)[-1]
-                next_token = resp.get("NextToken")
-                if not next_token:
-                    break
-        return flow_id_by_phone_arn
+        try:
+            return list_voice_flow_associations(instance.instance_id, factory)
+        except Exception as e:  # noqa: BLE001
+            if factory.is_access_denied(e):
+                raise _AccessDeniedListingFlowAssociations() from e
+            raise
 
     def _diagnose_empty_journey_map(
         self,

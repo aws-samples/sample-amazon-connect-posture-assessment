@@ -263,8 +263,8 @@ output:
 journey_map:
   max_paths_per_did: 200     # Max paths per phone number (reduce for speed)
   max_depth: 50              # Max DFS depth per path
-  max_traffic_flows: 10      # Max non-phone-reachable flows promoted on traffic
-  traffic_lookback_days: 30  # Window for per-flow, per-channel contact counts
+  max_traffic_flows: 10      # Reserved; currently no effect
+  traffic_lookback_days: 30  # Usage window in days, 1-34 (API limit: under 35)
 ```
 
 ### Channel classification
@@ -277,17 +277,33 @@ resolves channel empirically, using `connect:GetMetricDataV2` to count contacts
 started per flow per channel (`VOICE`, `CHAT`, `TASK`, `EMAIL`) over
 `traffic_lookback_days`.
 
-This also determines tiering. Flows reachable from an inbound phone number are
-tier 1. Flows that are *not* phone-reachable but still carry contacts are
-promoted to tier 2 (highest-volume first, capped at `max_traffic_flows`) and
-enter the journey graph; everything else is reported as dormant. Tier 2 is the
-only way a chat-, task- or email-only flow becomes visible, since those have no
-phone number to be reached from — chat in particular has no control-plane entry
-point at all, because `StartChatContact` takes the flow ID from the caller
-(your widget or app), not from Connect configuration.
+This also determines tiering:
 
-Without the `connect:GetMetricDataV2` permission this degrades cleanly: channel
-mixes come back empty and tiering falls back to reachability alone.
+| Tier | Meaning | Journey enumeration |
+|---|---|---|
+| 1 | Reachable from an inbound phone number | Yes |
+| 2 | Not phone-reachable, but started contacts in the window | No — reported only |
+| 3 | Not phone-reachable and no contacts in the window | No — dormant-flow review |
+
+Tier 2 is how flows used through a non-phone entry point become visible:
+chat-, task- and email-only flows, and also queue and whisper flows (for
+example a `CUSTOMER_QUEUE` hold flow), which start contacts without being a
+transfer target. Chat in particular has no control-plane
+entry point at all, because `StartChatContact` takes the flow ID from the caller
+(your widget or app), not from Connect configuration. Tier 2 flows appear in the
+`journey-scope-001` finding with their channel mix, and are excluded from the
+dormant list. They are **not** enumerated or scored as journeys yet; that needs
+channel-specific entry points and scoring rules.
+
+`traffic_lookback_days` must be an integer from 1 to 34, because
+`GetMetricDataV2` with a `TOTAL` interval requires a window under 35 days.
+Out-of-range values are clamped and invalid ones fall back to 30, each with a
+warning.
+
+Without the `connect:GetMetricDataV2` permission, or if any metrics request
+fails, the run discards the usage data rather than classifying on partial
+counts. Tiering then falls back to reachability alone, and `journey-scope-001`
+says its dormant labels are reachability-only.
 
 The HTML Caller Journey Map is phone-number driven: it renders every available
 contact flow targeted by an inbound number. It has no `top_n` setting. The

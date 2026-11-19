@@ -56,7 +56,7 @@ def run_journey_mapping(
     from .topology import resolve_topology
 
     # Step 1: Topology resolution
-    phone_entries, tier_assignments = resolve_topology(
+    phone_entries, tier_assignments, channel_traffic = resolve_topology(
         instance_id=instance.instance_id,
         instance_arn=instance.instance_arn,
         factory=factory,
@@ -64,7 +64,7 @@ def run_journey_mapping(
         config=config,
     )
 
-    # Step 2: Build super-graph (tier 1 + tier 2 only)
+    # Step 2: Build super-graph (tier 1 only — see build_super_graph)
     super_graph = build_super_graph(parsed_flows, tier_assignments)
 
     # Step 3: Enumerate paths
@@ -88,6 +88,7 @@ def run_journey_mapping(
 
     # Step 5: Assemble result
     dormant_flows = [t.flow_id for t in tier_assignments if t.tier == "tier3_dormant"]
+    traffic_observed_flows = [t.flow_id for t in tier_assignments if t.tier == "tier2_traffic"]
     containment_scores = _compute_containment_scores(phone_entries, journeys, scores)
 
     result = JourneyMapResult(
@@ -96,6 +97,9 @@ def run_journey_mapping(
         journeys=journeys,
         scores=scores,
         dormant_flows=dormant_flows,
+        traffic_observed_flows=traffic_observed_flows,
+        usage_metrics_status=channel_traffic.status,
+        usage_window_days=channel_traffic.window_days,
         dynamic_edges=super_graph.dynamic_references,
         containment_scores=containment_scores,
         enumeration_complete=enumeration_complete,

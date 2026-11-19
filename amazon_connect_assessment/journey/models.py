@@ -30,11 +30,14 @@ class TierAssignment:
     flow_name: str
     tier: str  # "tier1_did" | "tier1_tollfree" | "tier2_traffic" | "tier3_dormant"
     rationale: str
-    contact_count_30d: Optional[int] = None
-    # Observed contacts per channel ("VOICE" | "CHAT" | "TASK" | "EMAIL"),
-    # from GetMetricDataV2. Empty when metrics are unavailable. A flow's own
-    # metadata carries no channel dimension, so this is the only reliable
-    # signal for which channels actually use a flow.
+    # Contacts observed starting this flow over ``observed_window_days``
+    # (GetMetricDataV2). Both are None when usage metrics were unavailable,
+    # which is distinct from an observed count of 0.
+    observed_contact_count: Optional[int] = None
+    observed_window_days: Optional[int] = None
+    # Observed contacts per channel ("VOICE" | "CHAT" | "TASK" | "EMAIL").
+    # A flow's own metadata carries no channel dimension, so this is the only
+    # reliable signal for which channels actually use a flow.
     channel_mix: Dict[str, int] = field(default_factory=dict)
 
 
@@ -149,6 +152,16 @@ class JourneyMapResult:
     journeys: List[JourneyPath] = field(default_factory=list)
     scores: Dict[str, JourneyScore] = field(default_factory=dict)
     dormant_flows: List[str] = field(default_factory=list)
+    # Not phone-reachable, but observed handling contacts: in use through a
+    # non-phone entry point. Not enumerated as journeys (no chat/task/email
+    # entry points or channel-appropriate scoring yet), so reported here
+    # rather than silently disappearing from both lists.
+    traffic_observed_flows: List[str] = field(default_factory=list)
+    # "complete" when usage metrics were resolved; otherwise why not
+    # ("access_denied" | "error" | "not_requested"). When not complete,
+    # dormant labels are reachability-only.
+    usage_metrics_status: str = "not_requested"
+    usage_window_days: int = 0
     dynamic_edges: List[Dict[str, Any]] = field(default_factory=list)
     containment_scores: Dict[str, float] = field(default_factory=dict)
     enumeration_complete: bool = True
