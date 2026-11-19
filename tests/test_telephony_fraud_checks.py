@@ -511,3 +511,25 @@ class TestReviewClassRegressions:
         registry = CheckRegistry()
         register_all_checks(registry, checks_config={"sec-outbound-dest-001": {"enabled": False}})
         assert "sec-outbound-dest-001" not in registry.list_check_ids()
+
+
+def test_policy_grants_every_permission_the_controls_call():
+    # A merge that drops these would otherwise pass every other test while
+    # the controls SKIP in real runs for lack of permission.
+    from amazon_connect_assessment import iam_permissions
+
+    granted = {a for s in iam_permissions.POLICY_STATEMENTS for a in s["Action"]}
+    required = {
+        "connect:ListAuthenticationProfiles",
+        "connect:DescribeAuthenticationProfile",
+        "connect:ListSecurityProfiles",
+        "connect:ListSecurityProfilePermissions",
+        "connect:SearchUsers",
+        "connect:ListPhoneNumbersV2",
+        "connect:SearchContacts",
+        "connect:DescribeContact",
+        "ce:GetAnomalyMonitors",
+        "ce:GetAnomalySubscriptions",
+        "budgets:ViewBudget",
+    }
+    assert required <= granted, sorted(required - granted)
