@@ -4,11 +4,9 @@ Tests for per-flow channel classification and traffic-based tiering.
 Guarded here:
 
 1. ``ListFlowAssociations`` is only ever asked for ``VOICE_PHONE_NUMBER``,
-   through one shared helper. ``SMS_PHONE_NUMBER`` is not in that
-   operation's ResourceType enum (only ``GetFlowAssociation`` accepts it);
-   botocore does not validate enums client-side, so the request reached the
-   service as a ValidationException. The engine re-raised it, breaking
-   journey mapping outright on live instances.
+   through one shared helper. SMS and WhatsApp associations are keyed by
+   End User Messaging ARNs, which can never match the ``PhoneNumberArn``
+   keys this map is looked up by, so querying them was wasted calls.
 
 2. Channel usage comes from ``GetMetricDataV2``, in one request per
    100-flow batch, and is never partial: any failure discards everything

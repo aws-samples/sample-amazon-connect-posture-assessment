@@ -171,12 +171,11 @@ def _list_phone_numbers(
 # for SMS and ``arn:aws:social-messaging:…`` for WhatsApp — so their
 # ResourceIds can never match a key in this map.
 #
-# ``SMS_PHONE_NUMBER`` was additionally never a valid ResourceType for
-# ListFlowAssociations: its enum is VOICE_PHONE_NUMBER |
-# WHATSAPP_MESSAGING_PHONE_NUMBER | INBOUND_EMAIL | OUTBOUND_EMAIL |
-# ANALYTICS_CONNECTOR. Only the singular ``GetFlowAssociation`` accepts it.
-# botocore does not validate enum values client-side, so that request reached
-# the service and came back as a ValidationException.
+# ``SMS_PHONE_NUMBER`` is also absent from the SDK's documented
+# ListFlowAssociations ResourceType enum (it is documented only for
+# ``GetFlowAssociation``). The service does currently accept it — verified
+# live, it returns SMS associations — but those can never match here for the
+# ARN reason above, so querying it only cost an API call per assessment.
 #
 # Enumerating SMS/WhatsApp/email entry points needs a different seeding path
 # (End User Messaging DescribePhoneNumbers + GetFlowAssociation for SMS;
