@@ -252,7 +252,7 @@ Common options:
 
 ```bash
 # List controls selected by the effective configuration without calling AWS
-# From the repository root, the bundled config selects 63 of 64 controls
+# From the repository root, the bundled config selects 67 of 68 controls
 python -m amazon_connect_assessment.cli --list-checks
 
 # Select canonical controls (BaseCheck and Journey-backed IDs behave the same)

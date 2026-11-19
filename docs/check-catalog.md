@@ -1,12 +1,12 @@
 # Amazon Connect Customer Posture Assessment Tool — Check Catalog
 
-The assessment has **64 canonical controls** in one catalog. The catalog contains
-60 `BaseCheck` executors and 4 Journey-backed executors. Every selected control
+The assessment has **68 canonical controls** in one catalog. The catalog contains
+64 `BaseCheck` executors and 4 Journey-backed executors. Every selected control
 produces one outcome per assessed Amazon Connect Customer instance when the
 control applies to that execution path.
 
-The catalog has 23 `CONTROL`, 25 `MANUAL_REVIEW`, and 16 `INFORMATIONAL`
-records. The pillar totals are Security 19, Resilience 18, Cost Optimization 16,
+The catalog has 23 `CONTROL`, 30 `MANUAL_REVIEW`, and 15 `INFORMATIONAL`
+records. The pillar totals are Security 23, Resilience 18, Cost Optimization 16,
 Operational Excellence 8, and Performance Efficiency 3.
 
 Run `amazon-connect-assessment --list-checks` to see the controls selected from
@@ -73,7 +73,7 @@ validation. A `Pass` on an informational record means inventory completed.
 
 ## Unified catalog
 
-### Security — 19 controls
+### Security — 23 controls
 
 | Control ID | Name | Severity | Disposition | Executor |
 |---|---|---|---|---|
@@ -85,6 +85,10 @@ validation. A `Pass` on an informational record means inventory completed.
 | `sec-cloudtrail-001` | CloudTrail Connect Management Write-Event Coverage | High | Control | BaseCheck |
 | `sec-federation-001` | Identity Federation / MFA Check | High | Manual Review | BaseCheck |
 | `sec-profile-audit-001` | Security Profile Permissions Audit | High | Manual Review | BaseCheck |
+| `sec-ip-access-001` | IP-Based Access Control for Agent Sign-In | High | Manual Review | BaseCheck |
+| `sec-outbound-scope-001` | Outbound Calling Permission Scope | Medium | Manual Review | BaseCheck |
+| `sec-outbound-dest-001` | Outbound Call Destination Review | High | Manual Review | BaseCheck |
+| `sec-fraud-alerting-001` | Toll-Fraud Cost Alerting | High | Manual Review | BaseCheck |
 | `ai-ops-guardrail-001` | Connect AI Agents Guardrail Coverage | High | Control | BaseCheck |
 | `ai-ops-encryption-001` | Connect AI Agents Customer-Managed Key Encryption | Medium | Manual Review | BaseCheck |
 | `sec-lex-convlogs-001` | Lex Conversation Log Encryption | Medium | Control | BaseCheck |
@@ -101,6 +105,40 @@ validation. A `Pass` on an informational record means inventory completed.
 and every storage-type read completes. A failed read or a Kinesis stream destination whose
 encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
 FAIL. If no storage configuration is returned, the control is not applicable.
+
+### Telephony toll-fraud controls
+
+Four controls cover agent-initiated toll fraud — a stolen agent login used to
+dial premium-rate destinations — alongside `sec-federation-001`, which covers
+the sign-in itself. All four are read-only Manual Review records.
+
+- `sec-ip-access-001` reads the instance's authentication profiles and passes
+  when the default profile allows sign-in only from listed IP ranges. A block
+  list alone, or restrictions only on non-default profiles, fails. Authentication
+  profiles are enabled per account by AWS: when the API reports the account "is
+  not allowed to use this feature", the control fails, because no IP control is
+  possible until AWS enables it. HIGH when outbound calling is enabled, MEDIUM
+  otherwise.
+- `sec-outbound-scope-001` finds the security profiles granting
+  `OutboundCallAccess` (CCP "Make outbound calls") and fails when more than half
+  of users hold it — typically because Connect's default Agent profile includes
+  it. Not applicable when outbound calling is disabled.
+- `sec-outbound-dest-001` samples the 100 most recent agent-dialed, callback,
+  and API-started voice contacts from the last 14 days and compares each
+  destination's country calling code with those of the instance's own numbers.
+  Calls to non-geographic codes commonly used for fraud (+870, +881, +882, +883,
+  +979) fail at HIGH; calls to countries where the instance holds no number fail
+  at MEDIUM. The outbound country allowlist itself is AWS-managed and cannot be
+  read through the API. Dialed numbers are reduced to their calling code in
+  memory and never stored or logged; the report records counts per code. This
+  control needs `connect:SearchContacts` and `connect:DescribeContact`; disable
+  it in configuration if contact-record access is not acceptable.
+- `sec-fraud-alerting-001` passes when an AWS Cost Anomaly Detection monitor
+  covering Amazon Connect has an IMMEDIATE or DAILY alert, or an AWS Budget is
+  filtered to Amazon Connect. Weekly-only alerts or a monitor with no
+  subscription fail at MEDIUM; nothing at all fails at HIGH. Monitors in an AWS
+  Organizations management account are not visible from a member account, and
+  the evidence is read once per account per run.
 
 `sec-federation-001` returns PASS for SAML federation, where MFA is centrally
 enforceable and auditable at the IdP. `EXISTING_DIRECTORY` and `CONNECT_MANAGED`
@@ -326,7 +364,7 @@ Examples:
 
 ```bash
 # List controls selected by the effective configuration without calling AWS
-# From the repository root, the bundled config selects 63 of 64 controls
+# From the repository root, the bundled config selects 67 of 68 controls
 amazon-connect-assessment --list-checks
 
 # Select one BaseCheck control and one Journey-backed control
