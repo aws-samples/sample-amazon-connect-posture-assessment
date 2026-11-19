@@ -15,7 +15,7 @@ design records for the Amazon Connect Customer Posture Assessment Tool.
 ## Start Here
 
 - [Project README](../README.md) — installation, AWS access, common CLI usage, and report overview.
-- [User guide](user-guide.md) — detailed installation (pipx, repository checkout, CloudShell), AWS access, CLI usage, report operations including the Caller Journey Map, and CI/CD.
+- [User guide](user-guide.md) — detailed installation (pipx, repository checkout, CloudShell), AWS access, CLI usage, report operations including the Customer Journey Map, and CI/CD.
 - [Deployment architecture](architecture.svg) — rendered deployment diagram;
   [editable Draw.io source](architecture.drawio).
 - [Configuration guide](configuration.md) — YAML/JSON settings, precedence, output naming, and execution tuning.

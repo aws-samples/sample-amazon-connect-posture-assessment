@@ -457,16 +457,27 @@ export function flattenEvidenceForPrint(block, path = []) {
   return rows;
 }
 
+// Readable entry-type badge. Voice-era reports carry only phone_type.
+export function journeyEntryType(entry) {
+  const type = entry.entry_type || entry.phone_type;
+  if (!type) return null;
+  return { EMAIL_ADDRESS: 'EMAIL', OBSERVED_FLOW: 'OBSERVED', WHATSAPP: 'WHATSAPP' }[type] ?? type.replace(/_/g, ' ');
+}
+
 export function journeyEntryOptions(entries) {
   const multipleInstances = new Set(entries.map((entry) => entry.instance_id)).size > 1;
-  return entries.map((entry, index) => ({
-    value: String(index),
-    label: entry.phone_number || entry.flow_name,
-    description: entry.phone_description || undefined,
-    labelTag: multipleInstances ? (entry.instance_display_name || entry.instance_id) : entry.flow_name,
-    tags: [
-      ...(entry.phone_type ? [entry.phone_type.replace(/_/g, ' ')] : []),
-      ...(multipleInstances ? [entry.flow_name] : []),
-    ],
-  }));
+  return entries.map((entry, index) => {
+    const type = journeyEntryType(entry);
+    return {
+      value: String(index),
+      label: entry.entry_label || entry.phone_number || entry.flow_name,
+      description: entry.phone_description || undefined,
+      labelTag: multipleInstances ? (entry.instance_display_name || entry.instance_id) : entry.flow_name,
+      tags: [
+        ...(entry.channel ? [entry.channel] : []),
+        ...(type && type !== entry.channel ? [type] : []),
+        ...(multipleInstances ? [entry.flow_name] : []),
+      ],
+    };
+  });
 }

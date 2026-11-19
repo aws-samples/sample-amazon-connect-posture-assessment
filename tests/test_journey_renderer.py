@@ -109,7 +109,7 @@ class TestTooltips:
         result = flow_to_diagram_html(_graph(actions))
         assert "Action type:" not in result
         assert "InvokeLambdaFunction" not in result
-        assert "Invisible to the caller" in result
+        assert "Invisible to the customer" in result
 
     def test_node_tooltip_explains_category(self):
         actions = [_action("a0", "TransferToQueue")]
@@ -308,7 +308,7 @@ class TestCategoryMapping:
         actions = [_action("a0", "GetUserInput")]
         result = flow_to_diagram_html(_graph(actions))
         assert "jm-node-chooses" in result
-        assert "Asks caller to choose" in result
+        assert "Asks customer to choose" in result
 
     def test_transfer_to_queue_is_waits(self):
         actions = [_action("a0", "TransferToQueue")]
@@ -320,7 +320,7 @@ class TestCategoryMapping:
         actions = [_action("a0", "DisconnectParticipant")]
         result = flow_to_diagram_html(_graph(actions))
         assert "jm-node-terminal" in result
-        assert "Call ends" in result
+        assert "Contact ends" in result
 
     def test_unknown_action_falls_to_processing_without_exposing_raw_type(self):
         actions = [_action("a0", "SomeInternalFrobnicator")]
@@ -496,7 +496,7 @@ class TestRichLabels:
         message = next(node for node in model["nodes"].values() if node["category"] == "speaks")
 
         assert message["scope"] == [
-            "Plays a prompt to the caller using inline static text.",
+            "Plays a prompt to the customer using inline static text.",
             "Synthesizes the prompt with Amazon Polly using Matthew and the Generative engine.",
             'Prompt: "Welcome to Acme support."',
         ]
@@ -519,7 +519,7 @@ class TestRichLabels:
         transfer = next(node for node in model["nodes"].values() if node["category"] == "waits")
 
         assert transfer["scope"] == [
-            "Transfers the caller to BasicQueue to wait for an available agent."
+            "Transfers the customer to BasicQueue to wait for an available agent."
         ]
 
     def test_every_visible_block_has_reader_focused_scope(self):
@@ -1165,7 +1165,7 @@ class TestCallerFocusedProjection:
         default_route = next(iter(default_model["edges"].values()))
 
         # Assert
-        assert setup["summary"] == "Prepares the contact before the caller-facing journey begins."
+        assert setup["summary"] == "Prepares the contact before the customer-facing journey begins."
         assert spoken_message["summary"] == ""
         assert default_route["summary"] == ""
 
@@ -1182,7 +1182,7 @@ class TestCallerFocusedProjection:
             "System setup · 2 internal actions",
             'AI conversation: "Hello, how can I help you today?"',
             'Plays: "Thank you for calling."',
-            "Call ends",
+            "Contact ends",
         ]
 
     def test_projection_reader_labels_replace_connect_implementation_terms(self):

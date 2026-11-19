@@ -1,8 +1,10 @@
 """
 Data models for Caller Journey Mapping.
 
-These represent the telephony topology, cross-flow super-graph, enumerated
-paths, and per-journey scoring used by the journey mapping pipeline.
+These represent the entry-point topology (phone numbers, SMS/WhatsApp
+numbers, email addresses, and traffic-observed entry flows), the cross-flow
+super-graph, enumerated paths, and per-journey scoring used by the journey
+mapping pipeline.
 """
 
 import hashlib
@@ -20,6 +22,44 @@ class PhoneNumberEntry:
     contact_flow_id: Optional[str] = None
     contact_flow_name: Optional[str] = None
     target_arn: Optional[str] = None
+
+
+# Contact channels as Amazon Connect reports them. SMS and WhatsApp contacts
+# are CHAT-channel contacts (subtype connect:SMS / connect:WhatsApp).
+# Customer-facing channels first; this order is used for sorting and summaries.
+CHANNELS = ("VOICE", "CHAT", "EMAIL", "TASK")
+
+
+@dataclass
+class EntryPoint:
+    """
+    Where a customer contact enters the instance, on any channel.
+
+    ``entry_type`` says how the entry was discovered:
+
+    * ``DID`` / ``TOLL_FREE`` — a voice phone number association
+    * ``SMS`` / ``WHATSAPP`` — a messaging number association (CHAT channel)
+    * ``EMAIL_ADDRESS`` — an inbound email address association
+    * ``OBSERVED_FLOW`` — a contact flow that started contacts on this channel
+      without any discoverable association (web chat, tasks, API-started
+      contacts). Chat in particular has no control-plane entry point:
+      ``StartChatContact`` takes the flow ID from the caller.
+    """
+
+    channel: str  # one of CHANNELS
+    entry_type: str
+    identifier: str  # E.164 number, email address, or flow name
+    contact_flow_id: str
+    contact_flow_name: Optional[str] = None
+    source: str = ""  # API or signal the entry was discovered from
+    country_code: str = ""
+    description: str = ""
+    observed_contact_count: Optional[int] = None
+
+    @property
+    def key(self) -> str:
+        """Stable identity: the same number can be both a voice and an SMS entry."""
+        return f"{self.channel}|{self.entry_type}|{self.identifier}"
 
 
 @dataclass
@@ -59,21 +99,43 @@ class JourneyNode:
 
 @dataclass
 class JourneyPath:
-    """A complete caller journey from phone number entry to terminal outcome."""
+    """A complete customer journey from an entry point to a terminal outcome."""
 
-    entry_number: str
-    entry_number_type: str  # "DID" | "TOLL_FREE"
+    entry_identifier: str  # phone number, email address, or flow name
+    entry_type: str  # EntryPoint.entry_type
     nodes: List[JourneyNode] = field(default_factory=list)
     terminal_type: str = ""
     # "agent_queue" | "disconnect" | "callback" | "bot_resolved" |
     # "external_transfer" | "voicemail"
     terminal_details: Dict[str, Any] = field(default_factory=dict)
     flows_traversed: List[str] = field(default_factory=list)
+    entry_channel: str = "VOICE"
+
+    @property
+    def entry_number(self) -> str:
+        """Deprecated alias for ``entry_identifier`` (voice-era name)."""
+        return self.entry_identifier
+
+    @property
+    def entry_number_type(self) -> str:
+        """Deprecated alias for ``entry_type`` (voice-era name)."""
+        return self.entry_type
+
+    @property
+    def entry_key(self) -> str:
+        return f"{self.entry_channel}|{self.entry_type}|{self.entry_identifier}"
 
     @property
     def path_hash(self) -> str:
-        """Deterministic hash for deduplication and scoring lookup."""
+        """Deterministic hash for deduplication and scoring lookup.
+
+        Scoring is channel-specific, so the same node sequence reached from a
+        voice and an SMS entry must hash differently. VOICE keeps the original
+        node-only key so voice hashes are unchanged across releases.
+        """
         key = "|".join(n.key for n in self.nodes)
+        if self.entry_channel != "VOICE":
+            key = f"{self.entry_channel}#{key}"
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     @property
@@ -108,18 +170,14 @@ class JourneyScore:
     # Aggregate
     cx_maturity: str = "Basic"  # "Basic" | "Intermediate" | "Advanced"
     deficiencies: List[str] = field(default_factory=list)
+    channel: str = "VOICE"
 
     @property
     def cx_feature_count(self) -> int:
-        return sum(
-            [
-                self.has_personalization,
-                self.has_callback_offering,
-                self.has_returning_caller_detection,
-                self.has_dynamic_prompt,
-                self.has_nlu_bot,
-            ]
-        )
+        """CX features present, counting only those meaningful on this channel."""
+        from .channels import rules_for
+
+        return sum(bool(getattr(self, name)) for name in rules_for(self.channel).cx_features)
 
 
 @dataclass
@@ -148,14 +206,15 @@ class JourneyMapResult:
     """Complete journey mapping results for the instance."""
 
     phone_entries: List[PhoneNumberEntry] = field(default_factory=list)
+    # Every entry point on every channel that journeys were enumerated from.
+    entry_points: List["EntryPoint"] = field(default_factory=list)
     tier_assignments: List[TierAssignment] = field(default_factory=list)
     journeys: List[JourneyPath] = field(default_factory=list)
     scores: Dict[str, JourneyScore] = field(default_factory=dict)
     dormant_flows: List[str] = field(default_factory=list)
-    # Not phone-reachable, but observed handling contacts: in use through a
-    # non-phone entry point. Not enumerated as journeys (no chat/task/email
-    # entry points or channel-appropriate scoring yet), so reported here
-    # rather than silently disappearing from both lists.
+    # Observed starting contacts, but not reachable from any entry point and
+    # not an entry point themselves — typically queue, hold, and whisper
+    # flows, or sub-flows invoked dynamically. In use, so not dormant.
     traffic_observed_flows: List[str] = field(default_factory=list)
     # "complete" when usage metrics were resolved; otherwise why not
     # ("access_denied" | "error" | "not_requested"). When not complete,
@@ -166,6 +225,31 @@ class JourneyMapResult:
     containment_scores: Dict[str, float] = field(default_factory=dict)
     enumeration_complete: bool = True
     enumeration_limitations: List[str] = field(default_factory=list)
+    # Per-channel coverage: {channel: {"complete": bool, "limitations": [...],
+    # "entry_points": int, "journeys": int}}. A gap on one channel (say, a
+    # dynamic transfer inside a chat flow) must not mark voice incomplete.
+    channel_coverage: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Why some entry points could not be discovered (permission denied, API
+    # error), per source. These narrow coverage without failing the run.
+    entry_discovery_limitations: List[str] = field(default_factory=list)
+
+    def mark_incomplete(self, limitation: str) -> None:
+        """Record an instance-wide gap: every channel becomes incomplete."""
+        self.enumeration_complete = False
+        self.enumeration_limitations = list(
+            dict.fromkeys([*self.enumeration_limitations, limitation])
+        )
+        for coverage in self.channel_coverage.values():
+            coverage["complete"] = False
+            coverage["limitations"] = list(
+                dict.fromkeys([*coverage.get("limitations", []), limitation])
+            )
+
+    def channel_complete(self, channel: str) -> bool:
+        coverage = self.channel_coverage.get(channel)
+        if coverage is None:
+            return self.enumeration_complete
+        return bool(coverage.get("complete"))
 
     @property
     def total_journeys(self) -> int:

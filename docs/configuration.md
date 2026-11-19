@@ -338,11 +338,12 @@ fails, the run discards the usage data rather than classifying on partial
 counts. Tiering then falls back to reachability alone, and `journey-scope-001`
 says its dormant labels are reachability-only.
 
-The HTML Caller Journey Map is phone-number driven: it renders every available
-contact flow targeted by an inbound number. It has no `top_n` setting. The
+The HTML Customer Journey Map renders every discovered entry point — phone,
+SMS, and WhatsApp numbers, email addresses, and observed entry flows — that
+reaches an available contact flow. It has no `top_n` setting. The
 `journey_map` values above control the separate journey-scoring pipeline and its
 findings. That pipeline performs bounded static enumeration, not exhaustive
-runtime exploration: it uses depth 50 and 200 paths per phone number by default,
+runtime exploration: it uses depth 50 and 200 paths per entry point by default,
 with a fixed 5,000-path cap per instance. Cycle edges are pruned without reducing
 static structural reachability; reached caps, dynamic targets, and unresolved
 flow references mark enumeration incomplete.

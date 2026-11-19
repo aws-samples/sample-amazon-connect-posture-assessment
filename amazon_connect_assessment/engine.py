@@ -36,6 +36,43 @@ from .score_policy import (
     is_control_failure,
 )
 
+_PHONE_ENTRY_TYPES = {
+    "DID",
+    "TOLL_FREE",
+    "SMS",
+    "WHATSAPP",
+    "SHORT_CODE",
+    "UIFN",
+    "SHARED",
+    "THIRD_PARTY_TF",
+    "THIRD_PARTY_DID",
+}
+_CHANNEL_SORT = {"VOICE": 0, "CHAT": 1, "EMAIL": 2, "TASK": 3}
+_ENTRY_TYPE_SORT = {
+    "DID": 0,
+    "TOLL_FREE": 0,
+    "SMS": 1,
+    "WHATSAPP": 1,
+    "EMAIL_ADDRESS": 2,
+    "OBSERVED_FLOW": 3,
+}
+_ENTRY_TYPE_LABELS = {
+    "SMS": "SMS",
+    "WHATSAPP": "WhatsApp",
+    "EMAIL_ADDRESS": "Email",
+}
+
+
+def _journey_entry_label(target: Dict[str, Any]) -> str:
+    """Dropdown label: ``+1… · SMS``, ``support@… · Email``, ``Web chat flow · CHAT``."""
+    identifier = target["identifier"]
+    entry_type = target["entry_type"]
+    if entry_type == "OBSERVED_FLOW":
+        return f"{identifier} · {target['channel']} (observed)"
+    if target["channel"] == "VOICE":
+        return identifier
+    return f"{identifier} · {_ENTRY_TYPE_LABELS.get(entry_type, entry_type)}"
+
 
 class _AccessDeniedListingPhoneNumbers(Exception):
     """
@@ -102,6 +139,9 @@ class AssessmentEngine:
         # Assessment state
         self._start_time: Optional[float] = None
         self._execution_errors: List[str] = []
+        # Entry points discovered by journey mapping, per instance ID, reused
+        # by the HTML journey map so entry discovery runs once per instance.
+        self._journey_entry_points: Dict[str, List[Any]] = {}
         self._assessment_id: Optional[str] = None
 
     def add_analyzer(self, analyzer: BaseAnalyzer) -> None:
@@ -661,6 +701,9 @@ class AssessmentEngine:
                     # ContactFlow object we already have.
                     graph.flow_id = flow.id
                     graph.flow_name = flow.name
+                    # Content carries no Type either; entry discovery needs it
+                    # to tell entry-capable flows from queue/whisper flows.
+                    graph.flow_type = flow.type or ""
                     parsed_flows[flow.id] = graph
                 except Exception as e:  # noqa: BLE001
                     unusable_flow_ids.append(flow.id)
@@ -694,15 +737,15 @@ class AssessmentEngine:
                     config=self.config,
                     selected_control_ids=selected_control_ids,
                 )
+                if not hasattr(self, "_journey_entry_points"):
+                    self._journey_entry_points = {}
+                self._journey_entry_points[instance.instance_id] = output.result.entry_points
                 if unusable_flow_ids:
                     limitation = (
                         f"{len(set(unusable_flow_ids))} discovered contact flow(s) were empty, "
                         "unparseable, or structurally unusable"
                     )
-                    output.result.enumeration_complete = False
-                    output.result.enumeration_limitations = list(
-                        dict.fromkeys([*output.result.enumeration_limitations, limitation])
-                    )
+                    output.result.mark_incomplete(limitation)
                     instance_findings = generate_journey_findings(
                         output.result,
                         instance_id=instance.instance_id,
@@ -1065,22 +1108,17 @@ class AssessmentEngine:
             rendered: Dict[str, Any] = {}
             instance_has_flow_bound_number = False
 
-            for num in numbers:
-                phone_arn = num.get("PhoneNumberArn") or ""
-                flow_id = flow_id_by_phone_arn.get(phone_arn)
-                if not flow_id:
-                    # No VOICE_PHONE_NUMBER flow association — points at
-                    # a queue, agent, or is unassigned. Still counted so
-                    # the empty-state reason is honest.
-                    numbers_bound_to_non_flow += 1
-                    continue
+            targets, non_flow = self._journey_map_targets(instance, numbers, flow_id_by_phone_arn)
+            numbers_bound_to_non_flow += non_flow
 
+            for target in targets:
+                flow_id = target["flow_id"]
                 instance_has_flow_bound_number = True
                 flow = flow_by_id.get(flow_id)
                 if flow is None or not flow.content:
                     self.logger.debug(
-                        "Phone %s targets flow %s but flow content is unavailable; skipping entry.",
-                        num.get("PhoneNumber"),
+                        "Entry %s targets flow %s but flow content is unavailable; skipping entry.",
+                        target["identifier"],
                         flow_id,
                     )
                     continue
@@ -1128,13 +1166,20 @@ class AssessmentEngine:
                     continue
 
                 artifacts = rendered[flow_id]
+                is_phone = target["entry_type"] in _PHONE_ENTRY_TYPES
                 entry = {
                     "instance_id": instance.instance_id,
                     "instance_display_name": instance.display_name,
-                    "phone_number": num.get("PhoneNumber", "") or "",
-                    "phone_type": num.get("PhoneNumberType", "") or "",
-                    "phone_country_code": (num.get("PhoneNumberCountryCode", "") or ""),
-                    "phone_description": num.get("PhoneNumberDescription", "") or "",
+                    # phone_* keep their voice-era meaning; non-phone entries
+                    # leave phone_number empty and use the entry_* fields.
+                    "phone_number": target["identifier"] if is_phone else "",
+                    "phone_type": target["entry_type"],
+                    "phone_country_code": target["country_code"],
+                    "phone_description": target["description"],
+                    "channel": target["channel"],
+                    "entry_type": target["entry_type"],
+                    "entry_identifier": target["identifier"],
+                    "entry_label": _journey_entry_label(target),
                     "flow_id": flow_id,
                     "flow_name": flow.name,
                     "flow_type": flow.type,
@@ -1147,8 +1192,15 @@ class AssessmentEngine:
             if instance_has_flow_bound_number:
                 instances_with_flow_bound_numbers += 1
 
-        # Deterministic order: instance name, then phone number.
-        entries.sort(key=lambda e: (e["instance_display_name"], e["phone_number"]))
+        # Deterministic order: instance name, channel, entry type, identifier.
+        entries.sort(
+            key=lambda e: (
+                e["instance_display_name"],
+                _CHANNEL_SORT.get(e["channel"], 9),
+                _ENTRY_TYPE_SORT.get(e["entry_type"], 9),
+                e["entry_identifier"],
+            )
+        )
 
         if entries:
             return entries, None
@@ -1161,6 +1213,51 @@ class AssessmentEngine:
             numbers_bound_to_non_flow=numbers_bound_to_non_flow,
         )
         return entries, status
+
+    def _journey_map_targets(
+        self,
+        instance: ConnectInstance,
+        numbers: List[Dict[str, Any]],
+        flow_id_by_phone_arn: Dict[str, str],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Entries to draw for one instance, and how many numbers had no flow.
+
+        Uses the entry points journey mapping already discovered (every
+        channel) when available; otherwise voice numbers only.
+        """
+        non_flow = 0
+        voice_targets: List[Dict[str, Any]] = []
+        for num in numbers:
+            flow_id = flow_id_by_phone_arn.get(num.get("PhoneNumberArn") or "")
+            if not flow_id:
+                # No voice flow association — points at a queue, agent, or is
+                # unassigned. Counted so the empty-state reason is honest.
+                non_flow += 1
+                continue
+            voice_targets.append(
+                {
+                    "channel": "VOICE",
+                    "entry_type": num.get("PhoneNumberType", "") or "",
+                    "identifier": num.get("PhoneNumber", "") or "",
+                    "country_code": num.get("PhoneNumberCountryCode", "") or "",
+                    "description": num.get("PhoneNumberDescription", "") or "",
+                    "flow_id": flow_id,
+                }
+            )
+        cached = getattr(self, "_journey_entry_points", {}).get(instance.instance_id)
+        if not cached:
+            return voice_targets, non_flow
+        return [
+            {
+                "channel": e.channel,
+                "entry_type": e.entry_type,
+                "identifier": e.identifier,
+                "country_code": e.country_code,
+                "description": e.description,
+                "flow_id": e.contact_flow_id,
+            }
+            for e in cached
+        ], non_flow
 
     def _enrich_journey_resource_details(
         self,

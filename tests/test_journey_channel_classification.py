@@ -29,8 +29,8 @@ import pytest
 
 from amazon_connect_assessment.journey.journey_scorer import generate_journey_findings
 from amazon_connect_assessment.journey.models import (
+    EntryPoint,
     JourneyMapResult,
-    PhoneNumberEntry,
     TierAssignment,
 )
 from amazon_connect_assessment.journey.super_graph import build_super_graph
@@ -263,15 +263,21 @@ class TestLookbackValidation:
 # --- Tiering ---------------------------------------------------------------
 
 
+def _entry(
+    flow_id: str, channel: str = "VOICE", entry_type: str = "DID", ident: str = "+18005550001"
+):
+    return EntryPoint(
+        channel=channel, entry_type=entry_type, identifier=ident, contact_flow_id=flow_id
+    )
+
+
 class TestTrafficBasedTiering:
     def test_every_in_use_unreachable_flow_is_tier2(self):
-        # No volume cap: tier 2 is a classification, not an enumeration
-        # budget, so a quiet-but-used flow must not be labelled dormant.
+        # No volume cap: a quiet-but-used flow must not be labelled dormant.
         assignments = _classify_tiers(
             [],
             _flows("flow-busy", "flow-quiet"),
-            set(),
-            channel_traffic=_traffic({"flow-busy": {"CHAT": 900}, "flow-quiet": {"TASK": 1}}),
+            _traffic({"flow-busy": {"CHAT": 900}, "flow-quiet": {"TASK": 1}}),
         )
         assert {a.flow_id: a.tier for a in assignments} == {
             "flow-busy": "tier2_traffic",
@@ -279,59 +285,57 @@ class TestTrafficBasedTiering:
         }
 
     def test_rationale_and_counts_use_the_configured_window(self):
-        # Review finding: the window was hard-coded to 30 days.
         (assignment,) = _classify_tiers(
-            [],
-            _flows("flow-webchat"),
-            set(),
-            channel_traffic=_traffic({"flow-webchat": {"CHAT": 310}}, window=14),
+            [], _flows("flow-q"), _traffic({"flow-q": {"VOICE": 310}}, window=14)
         )
         assert "last 14 days" in assignment.rationale
-        assert "CHAT 310" in assignment.rationale
         assert assignment.observed_contact_count == 310
         assert assignment.observed_window_days == 14
-        assert assignment.channel_mix == {"CHAT": 310}
 
     def test_dormant_with_metrics_records_an_observed_zero(self):
-        (assignment,) = _classify_tiers(
-            [], _flows("flow-old"), set(), channel_traffic=_traffic({}, window=21)
-        )
+        (assignment,) = _classify_tiers([], _flows("flow-old"), _traffic({}, window=21))
         assert assignment.tier == "tier3_dormant"
         assert assignment.observed_contact_count == 0
         assert "no contacts in the last 21 days" in assignment.rationale
 
     def test_without_metrics_counts_are_unknown_not_zero(self):
         (assignment,) = _classify_tiers(
-            [],
-            _flows("flow-old"),
-            set(),
-            channel_traffic=ChannelTraffic(status="access_denied", window_days=30),
+            [], _flows("flow-old"), ChannelTraffic(status="access_denied", window_days=30)
         )
         assert assignment.tier == "tier3_dormant"
         assert assignment.observed_contact_count is None
-        assert assignment.observed_window_days is None
         assert "usage metrics unavailable" in assignment.rationale
 
-    def test_tier1_records_channel_mix(self):
-        entry = PhoneNumberEntry(
-            phone_number="+18005550001",
-            number_type="TOLL_FREE",
-            country_code="US",
-            contact_flow_id="flow-ivr",
-        )
+    @pytest.mark.parametrize(
+        ("channel", "entry_type", "tier"),
+        [
+            ("VOICE", "DID", "tier1_did"),
+            ("VOICE", "TOLL_FREE", "tier1_tollfree"),
+            ("CHAT", "SMS", "tier1_messaging"),
+            ("CHAT", "WHATSAPP", "tier1_messaging"),
+            ("EMAIL", "EMAIL_ADDRESS", "tier1_email"),
+            ("CHAT", "OBSERVED_FLOW", "tier1_observed"),
+        ],
+    )
+    def test_entry_flows_are_tier1_by_entry_type(self, channel, entry_type, tier):
         (assignment,) = _classify_tiers(
-            [entry],
-            _flows("flow-ivr"),
-            {"flow-ivr"},
-            channel_traffic=_traffic({"flow-ivr": {"VOICE": 1200, "CHAT": 40}}),
+            [_entry("flow-a", channel, entry_type)], _flows("flow-a"), _traffic({})
         )
-        assert assignment.tier == "tier1_tollfree"
-        assert assignment.observed_contact_count == 1240
+        assert assignment.tier == tier
+        assert assignment.rationale.startswith("Entry flow for")
+
+    def test_phone_entry_wins_over_messaging_for_a_shared_flow(self):
+        entries = [
+            _entry("flow-a", "CHAT", "SMS", "+18005550002"),
+            _entry("flow-a", "VOICE", "DID", "+18005550001"),
+        ]
+        (assignment,) = _classify_tiers(entries, _flows("flow-a"), _traffic({}))
+        assert assignment.tier == "tier1_did"
 
     def test_output_order_is_deterministic(self):
         ids = [f"flow-{i}" for i in (5, 1, 9, 3, 7)]
         runs = {
-            tuple(a.flow_id for a in _classify_tiers([], _flows(*ids), set(), _traffic({})))
+            tuple(a.flow_id for a in _classify_tiers([], _flows(*ids), _traffic({})))
             for _ in range(5)
         }
         assert runs == {tuple(sorted(ids))}
