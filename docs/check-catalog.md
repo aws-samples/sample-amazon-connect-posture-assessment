@@ -104,9 +104,10 @@ FAIL. If no storage configuration is returned, the control is not applicable.
 
 `sec-federation-001` returns PASS for SAML federation, where MFA is centrally
 enforceable and auditable at the IdP. `EXISTING_DIRECTORY` and `CONNECT_MANAGED`
-return FAIL, each with its own remediation: directory-backed instances can enforce
-MFA through RADIUS on the AWS Directory Service directory, while Connect-managed
-instances have no agent MFA path, and because identity management cannot be
+return FAIL, each with its own remediation and severity: directory-backed
+instances (MEDIUM) can enforce MFA through RADIUS on the AWS Directory Service
+directory, so the gap is that MFA is unverified, while Connect-managed instances
+(HIGH) have no agent MFA path, and because identity management cannot be
 changed on an existing instance, moving to SAML means a new instance. A missing or
 unrecognized identity type returns SKIPPED rather than being treated as
 Connect-managed. FAIL carries the Manual Review disposition rather than Control,

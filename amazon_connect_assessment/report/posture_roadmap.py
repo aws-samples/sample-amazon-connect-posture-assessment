@@ -59,10 +59,6 @@ _EFFORT_MAP_HIGH = {
     "res-acgr-failover-test-001",
     "res-acgr-numbers-001",
     "sec-excessive-agency-001",
-    # A failing result means no MFA path is evidenced. Moving to SAML
-    # federation requires a new instance (identity management cannot be
-    # changed in place), so this is identity-migration work like ACGR's.
-    "sec-federation-001",
 }
 _EFFORT_MAP_LOW = {
     "ops-logging-001",

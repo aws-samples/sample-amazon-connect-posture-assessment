@@ -454,6 +454,8 @@ _CONTROLS = (
         ),
         _base_executor("security_deep_checks", "IdentityFederationCheck"),
         False,
+        # MEDIUM for EXISTING_DIRECTORY (MFA possible, unverified); HIGH otherwise.
+        dynamic_severity=True,
     ),
     _control(
         "sec-profile-audit-001",

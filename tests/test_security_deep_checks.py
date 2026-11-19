@@ -1009,31 +1009,51 @@ class TestIdentityFederationCheck:
         # because the instance shows no evidence of such a layer.
         assert IdentityFederationCheck().severity == Severity.HIGH
 
-    def test_failure_is_not_exported_to_security_hub(
+    def test_registered_check_is_manual_review_and_not_exported(
         self, make_check_context, sample_connect_instance
     ):
-        # Review concern: every FAIL maps to FAILED/HIGH in ASFF. That mapping
-        # only applies to scored CONTROL failures; Manual Review FAILs are
-        # filtered out before it, so this does not raise Security Hub alerts.
-        from amazon_connect_assessment.checks.control_registry import (
-            get_atomic_control_registry,
-        )
+        # Takes the check from a real registry rather than setting the
+        # disposition by hand, so a broken registration (which would send this
+        # to Security Hub as a HIGH failed control) fails the test.
+        from amazon_connect_assessment.checks.registration import register_all_checks
         from amazon_connect_assessment.models import FindingDisposition
         from amazon_connect_assessment.score_policy import is_control_failure
 
-        assert (
-            get_atomic_control_registry().get("sec-federation-001").disposition
-            == FindingDisposition.MANUAL_REVIEW
-        )
-        finding = self._run(make_check_context, sample_connect_instance, "CONNECT_MANAGED")
-        finding.disposition = FindingDisposition.MANUAL_REVIEW
+        registry = CheckRegistry()
+        register_all_checks(registry)
+        check = registry.get_check("sec-federation-001")
+        sample_connect_instance.identity_management_type = "CONNECT_MANAGED"
+        finding = check.execute(make_check_context(instance=sample_connect_instance))
         assert finding.status == CheckStatus.FAIL
+        assert finding.disposition == FindingDisposition.MANUAL_REVIEW
         assert not is_control_failure(finding)
 
-    def test_roadmap_rates_remediation_effort_high(self):
-        from amazon_connect_assessment.report.posture_roadmap import _estimate_effort
+    @pytest.mark.parametrize(
+        ("idm", "severity"),
+        [("CONNECT_MANAGED", Severity.HIGH), ("EXISTING_DIRECTORY", Severity.MEDIUM)],
+    )
+    def test_severity_separates_no_mfa_path_from_unverified_mfa(
+        self, make_check_context, sample_connect_instance, idm, severity
+    ):
+        finding = self._run(make_check_context, sample_connect_instance, idm)
+        assert finding.severity == severity
 
-        assert _estimate_effort("sec-federation-001") == "High"
+    def test_per_finding_severity_is_permitted_by_the_registry(self):
+        from amazon_connect_assessment.checks.control_registry import (
+            get_atomic_control_registry,
+        )
+
+        assert get_atomic_control_registry().get("sec-federation-001").dynamic_severity
+
+    @pytest.mark.parametrize("raw", [None, "", "saml", "SAML", "Connect_Managed"])
+    def test_evidence_records_the_raw_value(self, make_check_context, sample_connect_instance, raw):
+        finding = self._run(make_check_context, sample_connect_instance, raw)
+        assert finding.evidence["identity_management_type"] == raw
+
+    def test_lowercase_saml_still_passes(self, make_check_context, sample_connect_instance):
+        assert self._run(make_check_context, sample_connect_instance, "saml").status == (
+            CheckStatus.PASS
+        )
 
 
 class TestInstanceAnalyzerIdentityDefault:
@@ -1060,6 +1080,22 @@ class TestInstanceAnalyzerIdentityDefault:
         analyzer = self._analyzer({"Instance": {}})
         analyzer.analyze(sample_connect_instance)
         assert sample_connect_instance.identity_management_type == "SAML"
+
+    def test_missing_call_settings_do_not_clobber_observed_ones(self, sample_connect_instance):
+        # Same flaw for call settings: a missing flag defaulted to False and
+        # overwrote an observed True, misleading the outbound/toll-fraud checks.
+        sample_connect_instance.inbound_calls_enabled = True
+        sample_connect_instance.outbound_calls_enabled = True
+        self._analyzer({"Instance": {}}).analyze(sample_connect_instance)
+        assert sample_connect_instance.inbound_calls_enabled is True
+        assert sample_connect_instance.outbound_calls_enabled is True
+
+    def test_returned_call_settings_are_applied(self, sample_connect_instance):
+        sample_connect_instance.outbound_calls_enabled = True
+        self._analyzer({"Instance": {"OutboundCallsEnabled": False}}).analyze(
+            sample_connect_instance
+        )
+        assert sample_connect_instance.outbound_calls_enabled is False
 
 
 # --- Security profile audit (sec-profile-audit-001) -----------------------
