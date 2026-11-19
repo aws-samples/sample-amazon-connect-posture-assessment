@@ -16,6 +16,13 @@ was: Connect-managed password with no MFA → sign-in from an arbitrary location
 authenticated CCP session → agent-initiated outbound dialing → premium-rate
 international destinations → ten days before anyone noticed.
 
+**Status: A1–A5 are done in PR #23; A6 is open.** The controls are
+`sec-federation-001` (A1, now failable), `sec-ip-access-001` (A2),
+`sec-outbound-scope-001` (A3), `sec-outbound-dest-001` (A4, reviews observed
+destinations because the AWS-managed allowlist is unreadable), and
+`sec-fraud-alerting-001` (A5). The analysis below is kept as the record of
+why each exists.
+
 **None of the 64 controls would have caught it.** Audited 2026-11-18; the
 findings below were verified against the current code, not assumed.
 
