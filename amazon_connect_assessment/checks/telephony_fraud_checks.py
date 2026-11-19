@@ -165,6 +165,19 @@ class IpAccessControlCheck(BaseCheck):
             ],
         }
         default = next((p for p in profiles if p.get("IsDefault")), None)
+        if default is None:
+            # Every instance has a default profile; without it the coverage of
+            # most users is unknown, so no conclusion is drawn.
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                description=(
+                    f"Skipped: no default authentication profile was returned for instance "
+                    f"{instance.display_name}, so the restriction that applies to most users "
+                    "is unknown."
+                ),
+                evidence={**evidence, "evidence_complete": False},
+                **common,
+            )
         restricted_others = [
             p.get("Name") or "" for p in profiles if not p.get("IsDefault") and p.get("AllowedIps")
         ]
@@ -343,9 +356,8 @@ class OutboundPermissionScopeCheck(BaseCheck):
                 return self.skipped_for_access_denied(context, "connect:SearchUsers")
             raise
 
-        holders = [
-            u for u in users if set(u.get("SecurityProfileIds") or []) & set(outbound_profiles)
-        ]
+        outbound_ids = set(outbound_profiles)
+        holders = [u for u in users if outbound_ids.intersection(u.get("SecurityProfileIds") or [])]
         per_profile = {
             name: sum(1 for u in users if pid in (u.get("SecurityProfileIds") or []))
             for pid, name in outbound_profiles.items()
@@ -542,7 +554,8 @@ class OutboundDestinationCheck(BaseCheck):
 
         by_code: Dict[str, int] = {}
         by_method: Dict[str, int] = {}
-        unreadable = 0
+        read_failures = 0  # DescribeContact errors: the sample is incomplete
+        non_phone = 0  # VoIP, internal, or ARN endpoints: legitimately no number
         for contact in contacts:
             try:
                 detail = _connect(
@@ -554,7 +567,7 @@ class OutboundDestinationCheck(BaseCheck):
             except Exception as e:  # noqa: BLE001
                 if factory.is_access_denied(e):
                     return self.skipped_for_access_denied(context, "connect:DescribeContact")
-                unreadable += 1
+                read_failures += 1
                 continue
             endpoint = detail.get("CustomerEndpoint") or {}
             # The number is reduced to its calling code here and never kept.
@@ -564,7 +577,7 @@ class OutboundDestinationCheck(BaseCheck):
                 else None
             )
             if code is None:
-                unreadable += 1
+                non_phone += 1
                 continue
             by_code[code] = by_code.get(code, 0) + 1
             method = detail.get("InitiationMethod") or contact.get("InitiationMethod") or "?"
@@ -579,7 +592,8 @@ class OutboundDestinationCheck(BaseCheck):
             "lookback_days": _DESTINATION_LOOKBACK_DAYS,
             "outbound_contacts_in_window": total,
             "sampled_contacts": len(contacts),
-            "unreadable_destinations": unreadable,
+            "destination_read_failures": read_failures,
+            "non_telephone_endpoints": non_phone,
             "home_calling_codes": [f"+{c}" for c in home],
             "destinations_by_calling_code": {f"+{c}": n for c, n in sorted(by_code.items())},
             "contacts_by_initiation_method": dict(sorted(by_method.items())),
@@ -662,6 +676,19 @@ class OutboundDestinationCheck(BaseCheck):
                 **common,
             )
 
+        if read_failures:
+            # A clean result on a partial sample would be a false PASS.
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                description=(
+                    f"Skipped: {read_failures} of {len(contacts)} sampled outbound contact(s) "
+                    f"from instance {instance.display_name} could not be read, so the "
+                    "destination review is incomplete. No unexpected destination was seen in "
+                    "the rest."
+                ),
+                evidence={**evidence, "evidence_complete": False},
+                **common,
+            )
         if not home:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
@@ -708,8 +735,16 @@ def _monitor_covers_connect(monitor: Dict[str, Any], account_id: str) -> bool:
 
 
 def _budget_covers_connect(budget: Dict[str, Any]) -> bool:
+    """Connect-filtered budget, defined either way the Budgets API allows.
+
+    Budgets carry the legacy ``CostFilters`` map or the newer
+    ``FilterExpression``; checking only one would miss the other and report
+    a Connect budget as absent.
+    """
     services = (budget.get("CostFilters") or {}).get("Service") or []
-    return any("Amazon Connect" in s for s in services)
+    if any("Amazon Connect" in s for s in services):
+        return True
+    return "Amazon Connect" in json.dumps(budget.get("FilterExpression") or {})
 
 
 class FraudCostAlertingCheck(BaseCheck):
@@ -767,13 +802,10 @@ class FraudCostAlertingCheck(BaseCheck):
                         failures.append(f"{op}: {_error_code(e) or type(e).__name__}")
 
             covering = {m["MonitorArn"] for m in monitors if _monitor_covers_connect(m, account_id)}
-            frequencies = sorted(
-                {
-                    s.get("Frequency", "")
-                    for s in subscriptions
-                    if covering & set(s.get("MonitorArnList") or [])
-                }
-            )
+            covering_subs = [
+                s for s in subscriptions if covering.intersection(s.get("MonitorArnList") or [])
+            ]
+            frequencies = sorted({s.get("Frequency", "") for s in covering_subs})
 
             budgets: List[Dict[str, Any]] = []
             try:
@@ -796,13 +828,59 @@ class FraudCostAlertingCheck(BaseCheck):
                 else:
                     failures.append(f"describe_budgets: {_error_code(e) or type(e).__name__}")
 
+            # A budget alerts no one without a notification; one account-wide
+            # call returns them for every budget.
+            notified: Dict[str, int] = {}
+            connect_budgets = [b for b in budgets if _budget_covers_connect(b)]
+            if connect_budgets:
+                try:
+                    token = None
+                    for _ in range(50):
+                        kwargs = {"AccountId": account_id}
+                        if token:
+                            kwargs["NextToken"] = token
+                        resp = factory.call_api_with_resilience(
+                            client, "describe_budget_notifications_for_account", "budgets", **kwargs
+                        )
+                        for item in resp.get("BudgetNotificationsForAccount") or []:
+                            notified[item.get("BudgetName", "")] = len(
+                                item.get("Notifications") or []
+                            )
+                        token = resp.get("NextToken")
+                        if not token:
+                            break
+                except Exception as e:  # noqa: BLE001
+                    if factory.is_access_denied(e):
+                        denied.append("budgets:ViewBudget")
+                    else:
+                        failures.append(
+                            "describe_budget_notifications_for_account: "
+                            f"{_error_code(e) or type(e).__name__}"
+                        )
+
             evidence.update(
                 {
                     "anomaly_monitors": len(monitors),
                     "monitors_covering_connect": len(covering),
                     "alert_frequencies_for_connect": frequencies,
+                    # Recorded, not judged: a high threshold still alerts.
+                    "alert_thresholds_for_connect": [
+                        {
+                            "frequency": s.get("Frequency"),
+                            "threshold": s.get("Threshold"),
+                            "threshold_expression": s.get("ThresholdExpression"),
+                        }
+                        for s in sorted(covering_subs, key=lambda s: s.get("SubscriptionArn", ""))
+                    ],
                     "connect_budgets": sorted(
-                        b.get("BudgetName", "") for b in budgets if _budget_covers_connect(b)
+                        b.get("BudgetName", "")
+                        for b in connect_budgets
+                        if notified.get(b.get("BudgetName", ""), 0) > 0
+                    ),
+                    "connect_budgets_without_alerts": sorted(
+                        b.get("BudgetName", "")
+                        for b in connect_budgets
+                        if notified.get(b.get("BudgetName", ""), 0) == 0
                     ),
                 }
             )
@@ -834,17 +912,15 @@ class FraudCostAlertingCheck(BaseCheck):
                 evidence=evidence,
                 **common,
             )
-        # Absence can only be claimed when monitors were actually readable.
-        monitors_unreadable = any(d.startswith("ce:") for d in denied) or any(
-            f.startswith("get_anomaly") for f in failures
-        )
-        if monitors_unreadable and any(d.startswith("ce:") for d in denied):
-            return self.skipped_for_access_denied(context, ", ".join(denied))
-        if monitors_unreadable:
+        # Absence can only be claimed when every source was actually read:
+        # either missing signal could be the one that alerts.
+        if denied:
+            return self.skipped_for_access_denied(context, ", ".join(sorted(set(denied))))
+        if failures:
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 description=(
-                    "Skipped: cost alerting could not be read (" + "; ".join(failures) + ")."
+                    "Skipped: cost alerting could not be fully read (" + "; ".join(failures) + ")."
                 ),
                 evidence={**evidence, "evidence_complete": False},
                 **common,
@@ -870,6 +946,12 @@ class FraudCostAlertingCheck(BaseCheck):
                 "so a fraud-driven cost spike would surface only on the bill"
             )
             severity = Severity.HIGH
+        if evidence["connect_budgets_without_alerts"]:
+            gap += (
+                "; Connect budget(s) "
+                + ", ".join(evidence["connect_budgets_without_alerts"])
+                + " have no notifications, so they alert no one"
+            )
         return self.create_finding(
             status=CheckStatus.FAIL,
             description=gap[:1].upper() + gap[1:] + "." + org_note,

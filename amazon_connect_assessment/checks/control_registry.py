@@ -536,8 +536,8 @@ _CONTROLS = (
         _M,
         _methodology(
             "The cost of toll fraud grows with how long it runs unnoticed, so abnormal Amazon Connect spend should alert someone within a day.",
-            "Cost Explorer GetAnomalyMonitors and GetAnomalySubscriptions identify monitors covering Amazon Connect and their alert frequency; Budgets DescribeBudgets identifies budgets filtered to Amazon Connect.",
-            "Monitors and budgets in an AWS Organizations management account, and third-party cost tooling, are not visible from a member account; alert thresholds are recorded but not judged.",
+            "Cost Explorer GetAnomalyMonitors and GetAnomalySubscriptions identify monitors covering Amazon Connect and their alert frequency and thresholds; Budgets DescribeBudgets (CostFilters or FilterExpression) and DescribeBudgetNotificationsForAccount identify Connect budgets that actually notify someone.",
+            "Monitors and budgets in an AWS Organizations management account, and third-party cost tooling, are not visible from a member account; alert thresholds are recorded but not judged; any unreadable source yields SKIPPED rather than a claimed absence.",
             "A failure means no timely cost signal covers Connect: HIGH when nothing covers it, MEDIUM when alerts are weekly-only or no subscription is attached.",
             "Attach an IMMEDIATE or DAILY Cost Anomaly Detection subscription to a monitor covering Amazon Connect, add a Connect-filtered AWS Budget, and confirm the alert recipients are monitored.",
         ),

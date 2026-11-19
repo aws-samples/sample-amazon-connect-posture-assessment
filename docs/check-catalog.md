@@ -117,8 +117,8 @@ the sign-in itself. All four are read-only Manual Review records.
   list alone, or restrictions only on non-default profiles, fails. Authentication
   profiles are enabled per account by AWS: when the API reports the account "is
   not allowed to use this feature", the control fails, because no IP control is
-  possible until AWS enables it. HIGH when outbound calling is enabled, MEDIUM
-  otherwise.
+  possible until AWS enables it. If no default profile is returned, the control
+  is SKIPPED. HIGH when outbound calling is enabled, MEDIUM otherwise.
 - `sec-outbound-scope-001` finds the security profiles granting
   `OutboundCallAccess` (CCP "Make outbound calls") and fails when more than half
   of users hold it — typically because Connect's default Agent profile includes
@@ -129,13 +129,17 @@ the sign-in itself. All four are read-only Manual Review records.
   Calls to non-geographic codes commonly used for fraud (+870, +881, +882, +883,
   +979) fail at HIGH; calls to countries where the instance holds no number fail
   at MEDIUM. The outbound country allowlist itself is AWS-managed and cannot be
-  read through the API. Dialed numbers are reduced to their calling code in
+  read through the API. If any sampled contact cannot be read, the result is
+  SKIPPED rather than a pass on a partial sample. Dialed numbers are reduced to their calling code in
   memory and never stored or logged; the report records counts per code. This
   control needs `connect:SearchContacts` and `connect:DescribeContact`; disable
   it in configuration if contact-record access is not acceptable.
 - `sec-fraud-alerting-001` passes when an AWS Cost Anomaly Detection monitor
-  covering Amazon Connect has an IMMEDIATE or DAILY alert, or an AWS Budget is
-  filtered to Amazon Connect. Weekly-only alerts or a monitor with no
+  covering Amazon Connect has an IMMEDIATE or DAILY alert, or an AWS Budget
+  filtered to Amazon Connect (by `CostFilters` or `FilterExpression`) has at
+  least one notification; a budget with no notification alerts no one and does
+  not count. Alert thresholds are recorded but not judged. If any source cannot
+  be read, the result is SKIPPED rather than claiming no alerting. Weekly-only alerts or a monitor with no
   subscription fail at MEDIUM; nothing at all fails at HIGH. Monitors in an AWS
   Organizations management account are not visible from a member account, and
   the evidence is read once per account per run.
