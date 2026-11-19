@@ -263,13 +263,47 @@ def generate_journey_findings(
                 )
                 continue
             dormant_flows = sorted(result.dormant_flows)
+            traffic_flows = sorted(result.traffic_observed_flows)
+            usage_known = result.usage_metrics_status == "complete"
+            window = result.usage_window_days
             status = CheckStatus.FAIL if dormant_flows else _no_candidate_status(result)
-            description = (
-                f"{len(dormant_flows)} flow(s) are outside the discovered phone-anchored "
-                "static closure and require an ownership and usage review."
-                if dormant_flows
-                else "All parsed flows are in the discovered phone-anchored static closure."
-            )
+            if dormant_flows and usage_known:
+                description = (
+                    f"{len(dormant_flows)} flow(s) are not reachable from any phone number and "
+                    f"started no contacts in the last {window} days, so they require an "
+                    "ownership and usage review."
+                )
+            elif dormant_flows:
+                description = (
+                    f"{len(dormant_flows)} flow(s) are outside the discovered phone-anchored "
+                    "static closure and require an ownership and usage review. Usage metrics "
+                    "were unavailable, so flows in use through a non-phone entry point (chat, "
+                    "task, email, or a queue or whisper flow) may be included."
+                )
+            elif traffic_flows:
+                description = (
+                    f"No dormant flows. {len(traffic_flows)} flow(s) are not phone-reachable "
+                    f"but started contacts in the last {window} days, so they are in use "
+                    "through an entry point the journey map does not trace, such as chat, "
+                    "task, email, or a queue or whisper flow."
+                )
+            else:
+                description = (
+                    "All parsed flows are in the discovered phone-anchored static closure."
+                )
+            if traffic_flows:
+                description += (
+                    f" The {len(traffic_flows)} in-use, non-phone-reachable flow(s) are not "
+                    "enumerated as journeys, so journey controls do not cover them."
+                    if dormant_flows
+                    else " They are not enumerated as journeys, so journey controls do not "
+                    "cover them."
+                )
+            channel_mix_by_flow = {
+                t.flow_id: t.channel_mix
+                for t in result.tier_assignments
+                if t.flow_id in set(traffic_flows)
+            }
             findings.append(
                 _canonical_finding(
                     control_id,
@@ -282,6 +316,11 @@ def generate_journey_findings(
                         **coverage,
                         "dormant_flow_count": len(dormant_flows),
                         "dormant_flow_ids": dormant_flows,
+                        "traffic_observed_flow_count": len(traffic_flows),
+                        "traffic_observed_flow_ids": traffic_flows,
+                        "traffic_observed_channel_mix": channel_mix_by_flow,
+                        "usage_metrics_status": result.usage_metrics_status,
+                        "usage_window_days": window if usage_known else None,
                         "dynamic_reference_count": len(result.dynamic_edges),
                     },
                 )

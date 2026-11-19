@@ -1381,8 +1381,8 @@ _CONTROLS = (
         _M,
         _methodology(
             "Flows outside the discovered phone-anchored static closure are candidates for ownership and usage review.",
-            "Connect ListPhoneNumbersV2/ListFlowAssociations plus static flow/module transfer resolution classify non-reachable parsed flows.",
-            "No traffic metric or Tier 2 classification is implemented; dynamic references, non-phone entry points, seasonal/test/DR use, and fail-open API gaps can create false dormant labels.",
+            "Connect ListPhoneNumbersV2/ListFlowAssociations plus static flow/module transfer resolution classify non-reachable parsed flows; GetMetricDataV2 FLOWS_STARTED by flow and channel separates flows still starting contacts (in use via chat, task, email, or as queue/whisper flows) from dormant ones.",
+            "Usage is observed only over a lookback window under 35 days, so seasonal, test, and DR flows can still look dormant; without GetMetricDataV2 access the labels are reachability-only, and dynamic references and fail-open API gaps can also create false dormant labels. In-use flows that are not phone-reachable are reported but not enumerated as journeys.",
             "The result means not statically phone-reachable, never proven unused or safe to delete.",
             "Complete association discovery and inspect static/dynamic references, all channels, logs, CTRs, metrics, ownership, and seasonal/DR plans before cleanup.",
         ),

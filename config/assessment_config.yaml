@@ -49,13 +49,14 @@ journey_map:
   # pipeline (run_journey_mapping). They do not affect the rendered map above.
   max_paths_per_did: 200
   max_depth: 50
-  # Cap on how many non-phone-reachable flows are promoted to tier 2 on the
-  # strength of observed traffic (highest-volume first).
+  # Reserved; currently has no effect. Flows that are in use but not
+  # phone-reachable (tier 2) are classified and reported, not enumerated.
   max_traffic_flows: 10
-  # Lookback window for the per-flow, per-channel contact counts resolved via
-  # connect:GetMetricDataV2. This is what classifies which channels (VOICE /
-  # CHAT / TASK / EMAIL) actually use each flow — a flow's own metadata has no
-  # channel dimension. Connect retains these metrics for ~3 months.
+  # Days of connect:GetMetricDataV2 history used to see which channels
+  # (VOICE / CHAT / TASK / EMAIL) actually start each flow — a flow's own
+  # metadata has no channel dimension. Integer, 1-34: the API requires the
+  # window to be under 35 days. Out-of-range values are clamped; invalid ones
+  # fall back to 30.
   traffic_lookback_days: 30
 
 # Individual check configurations.

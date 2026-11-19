@@ -278,8 +278,10 @@ def _parse_flows(instance: ConnectInstance) -> dict:
 def _tier_assignments(instance: ConnectInstance, entry_flow_ids: set[str]) -> list[TierAssignment]:
     """Classify flows the way ``journey.topology.resolve_topology`` would.
 
-    Flows a phone number terminates on are tier 1; flows reachable only via a
-    transfer are tier 2; everything else is dormant. Assigned here rather than
+    Flows a phone number terminates on, and flows statically reachable from
+    them by transfer, are tier 1; everything else is dormant. (Tier 2 — flows
+    observed handling contacts but not phone-reachable — needs live
+    ``GetMetricDataV2`` data, so the sample has none.) Assigned here rather than
     resolved from AWS because ``resolve_topology`` is the one step of the
     pipeline that needs live ``ListPhoneNumbersV2`` / ``ListFlowAssociations``
     calls. Every downstream step below is the production code.
@@ -290,9 +292,12 @@ def _tier_assignments(instance: ConnectInstance, entry_flow_ids: set[str]) -> li
         if flow.id in entry_flow_ids:
             tier, rationale = "tier1_did", "Inbound phone number terminates on this flow"
         elif flow.id in transfer_targets:
-            tier, rationale = "tier2_traffic", "Reached by a transfer from a tier 1 flow"
+            tier, rationale = "tier1_did", "Sub-flow reachable from phone-anchored flow"
         else:
-            tier, rationale = "tier3_dormant", "No phone number association and no inbound traffic"
+            tier, rationale = (
+                "tier3_dormant",
+                "Not reachable from any phone number (usage metrics unavailable)",
+            )
         assignments.append(
             TierAssignment(flow_id=flow.id, flow_name=flow.name, tier=tier, rationale=rationale)
         )
