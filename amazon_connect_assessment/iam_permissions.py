@@ -245,17 +245,6 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             # Used by res-acgr-traffic-dist-001 to inspect the region split.
             "connect:GetTrafficDistribution",
             "connect:ListSecurityProfilePermissions",
-            "connect:ListApprovedOrigins",
-            "connect:ListPhoneNumbersV2",
-            "connect:ListContactFlowModules",
-            "connect:DescribeContactFlowModule",
-            "connect:DescribeInstanceAttribute",
-            # Resolves which contact flow each phone number is actually
-            # assigned to, for the Caller Journey Map. ListPhoneNumbersV2's
-            # TargetArn is documented as the instance/TDG ARN a number is
-            # claimed to, not the flow it's assigned to in the console —
-            # ListFlowAssociations is the API that reflects that field.
-            "connect:ListFlowAssociations",
             # Toll-fraud controls (sec-ip-access-001, sec-outbound-scope-001,
             # sec-outbound-dest-001). Authentication profiles carry the
             # instance's IP-based access control; SearchUsers maps users to
@@ -267,6 +256,17 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             "connect:SearchUsers",
             "connect:SearchContacts",
             "connect:DescribeContact",
+            "connect:ListApprovedOrigins",
+            "connect:ListPhoneNumbersV2",
+            "connect:ListContactFlowModules",
+            "connect:DescribeContactFlowModule",
+            "connect:DescribeInstanceAttribute",
+            # Resolves which contact flow each phone number is actually
+            # assigned to, for the Caller Journey Map. ListPhoneNumbersV2's
+            # TargetArn is documented as the instance/TDG ARN a number is
+            # claimed to, not the flow it's assigned to in the console —
+            # ListFlowAssociations is the API that reflects that field.
+            "connect:ListFlowAssociations",
             # Discovers Connect AI agent assistant and knowledge-base integrations
             # for the instance-level AI operations maturity checks.
             "connect:ListIntegrationAssociations",
