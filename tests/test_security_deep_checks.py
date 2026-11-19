@@ -948,35 +948,154 @@ class TestCloudTrailIntegrationCheck:
 
 
 class TestIdentityFederationCheck:
+    def _run(self, make_check_context, instance, idm):
+        instance.identity_management_type = idm
+        return IdentityFederationCheck().execute(make_check_context(instance=instance))
+
     def test_saml_passes(self, make_check_context, sample_connect_instance):
-        sample_connect_instance.identity_management_type = "SAML"
-        finding = IdentityFederationCheck().execute(
-            make_check_context(instance=sample_connect_instance)
-        )
-        assert finding.status == CheckStatus.PASS
-
-    def test_non_saml_identity_inventory_passes_expected_result(
-        self, make_check_context, sample_connect_instance
-    ):
-        # Arrange
-        sample_connect_instance.identity_management_type = "CONNECT_MANAGED"
-
-        # Act
-        finding = IdentityFederationCheck().execute(
-            make_check_context(instance=sample_connect_instance)
-        )
-
-        # Assert
+        finding = self._run(make_check_context, sample_connect_instance, "SAML")
         assert finding.status == CheckStatus.PASS
         assert finding.structured_remediation is None
-        assert "verify" in finding.description.lower()
-        assert "migrate" not in finding.description.lower()
 
-    def test_severity_is_low_not_medium(self):
-        # Reviewer feedback: SAML is one good option, not the only
-        # one -- Connect-managed identity paired with a third-party IdP
-        # (Okta, Entra ID) for MFA is also viable. Downgraded from MEDIUM.
-        assert IdentityFederationCheck().severity == Severity.LOW
+    @pytest.mark.parametrize(
+        ("idm", "must_mention", "must_not_mention"),
+        [
+            # Connect-managed: no agent MFA path, and SAML needs a new instance.
+            ("CONNECT_MANAGED", ["password", "new instance"], ["Directory Service"]),
+            # Directory-backed: MFA exists via RADIUS; advice must say so rather
+            # than reuse the Connect-managed wording.
+            ("EXISTING_DIRECTORY", ["RADIUS", "directory"], ["Connect-managed", "new instance"]),
+        ],
+    )
+    def test_non_federated_identity_fails_with_identity_specific_text(
+        self, make_check_context, sample_connect_instance, idm, must_mention, must_not_mention
+    ):
+        finding = self._run(make_check_context, sample_connect_instance, idm)
+        text = finding.description + " " + finding.remediation
+        assert finding.status == CheckStatus.FAIL
+        assert finding.structured_remediation is not None
+        assert finding.structured_remediation.references, "remediation must cite AWS docs"
+        for phrase in must_mention:
+            assert phrase.lower() in text.lower(), (idm, phrase)
+        for phrase in must_not_mention:
+            assert phrase.lower() not in text.lower(), (idm, phrase)
+
+    def test_connect_managed_does_not_suggest_in_place_migration(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Identity management cannot be changed on an existing instance, so
+        # "migrate this instance to SAML" would be impossible advice.
+        finding = self._run(make_check_context, sample_connect_instance, "CONNECT_MANAGED")
+        assert "migrate the instance to saml" not in finding.remediation.lower()
+        assert "cannot be changed" in finding.remediation.lower()
+
+    @pytest.mark.parametrize("idm", [None, "", "SOMETHING_NEW"])
+    def test_unknown_identity_is_skipped_not_failed(
+        self, make_check_context, sample_connect_instance, idm
+    ):
+        # An unobserved identity type is not evidence of weak identity, and
+        # must not become a confident HIGH "Connect-managed" finding. Matches
+        # res-acgr-identity-001.
+        finding = self._run(make_check_context, sample_connect_instance, idm)
+        assert finding.status == CheckStatus.SKIPPED
+        assert finding.evidence["evidence_complete"] is False
+        assert "connect-managed" not in finding.description.lower()
+
+    def test_severity_is_high(self):
+        # Was LOW/Informational on the reasoning that Connect-managed identity
+        # behind an external IdP is also viable. That remains true, which is
+        # why a FAIL carries the MANUAL_REVIEW disposition rather than
+        # asserting a control failure -- but it cannot be a silent PASS,
+        # because the instance shows no evidence of such a layer.
+        assert IdentityFederationCheck().severity == Severity.HIGH
+
+    def test_registered_check_is_manual_review_and_not_exported(
+        self, make_check_context, sample_connect_instance
+    ):
+        # Takes the check from a real registry rather than setting the
+        # disposition by hand, so a broken registration (which would send this
+        # to Security Hub as a HIGH failed control) fails the test.
+        from amazon_connect_assessment.checks.registration import register_all_checks
+        from amazon_connect_assessment.models import FindingDisposition
+        from amazon_connect_assessment.score_policy import is_control_failure
+
+        registry = CheckRegistry()
+        register_all_checks(registry)
+        check = registry.get_check("sec-federation-001")
+        sample_connect_instance.identity_management_type = "CONNECT_MANAGED"
+        finding = check.execute(make_check_context(instance=sample_connect_instance))
+        assert finding.status == CheckStatus.FAIL
+        assert finding.disposition == FindingDisposition.MANUAL_REVIEW
+        assert not is_control_failure(finding)
+
+    @pytest.mark.parametrize(
+        ("idm", "severity"),
+        [("CONNECT_MANAGED", Severity.HIGH), ("EXISTING_DIRECTORY", Severity.MEDIUM)],
+    )
+    def test_severity_separates_no_mfa_path_from_unverified_mfa(
+        self, make_check_context, sample_connect_instance, idm, severity
+    ):
+        finding = self._run(make_check_context, sample_connect_instance, idm)
+        assert finding.severity == severity
+
+    def test_per_finding_severity_is_permitted_by_the_registry(self):
+        from amazon_connect_assessment.checks.control_registry import (
+            get_atomic_control_registry,
+        )
+
+        assert get_atomic_control_registry().get("sec-federation-001").dynamic_severity
+
+    @pytest.mark.parametrize("raw", [None, "", "saml", "SAML", "Connect_Managed"])
+    def test_evidence_records_the_raw_value(self, make_check_context, sample_connect_instance, raw):
+        finding = self._run(make_check_context, sample_connect_instance, raw)
+        assert finding.evidence["identity_management_type"] == raw
+
+    def test_lowercase_saml_still_passes(self, make_check_context, sample_connect_instance):
+        assert self._run(make_check_context, sample_connect_instance, "saml").status == (
+            CheckStatus.PASS
+        )
+
+
+class TestInstanceAnalyzerIdentityDefault:
+    def _analyzer(self, describe_response):
+        from unittest.mock import MagicMock
+
+        from amazon_connect_assessment.analyzers.connect_instance_analyzer import (
+            ConnectInstanceAnalyzer,
+        )
+
+        factory = MagicMock()
+        analyzer = ConnectInstanceAnalyzer(factory)
+        analyzer.describe_connect_instance_resilient = MagicMock(return_value=describe_response)
+        return analyzer
+
+    def test_missing_identity_type_is_not_defaulted(self):
+        # Defaulting to CONNECT_MANAGED turned an unobserved value into a
+        # confident HIGH finding.
+        details = self._analyzer({"Instance": {}})._get_instance_details("i-1")
+        assert details["identity_management_type"] is None
+
+    def test_missing_value_does_not_clobber_an_observed_one(self, sample_connect_instance):
+        sample_connect_instance.identity_management_type = "SAML"
+        analyzer = self._analyzer({"Instance": {}})
+        analyzer.analyze(sample_connect_instance)
+        assert sample_connect_instance.identity_management_type == "SAML"
+
+    def test_missing_call_settings_do_not_clobber_observed_ones(self, sample_connect_instance):
+        # Same flaw for call settings: a missing flag defaulted to False and
+        # overwrote an observed True, misleading the outbound/toll-fraud checks.
+        sample_connect_instance.inbound_calls_enabled = True
+        sample_connect_instance.outbound_calls_enabled = True
+        self._analyzer({"Instance": {}}).analyze(sample_connect_instance)
+        assert sample_connect_instance.inbound_calls_enabled is True
+        assert sample_connect_instance.outbound_calls_enabled is True
+
+    def test_returned_call_settings_are_applied(self, sample_connect_instance):
+        sample_connect_instance.outbound_calls_enabled = True
+        self._analyzer({"Instance": {"OutboundCallsEnabled": False}}).analyze(
+            sample_connect_instance
+        )
+        assert sample_connect_instance.outbound_calls_enabled is False
 
 
 # --- Security profile audit (sec-profile-audit-001) -----------------------

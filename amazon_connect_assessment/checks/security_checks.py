@@ -36,6 +36,16 @@ Two earlier checks were removed after user feedback:
     :class:`security_deep_checks.IdentityFederationCheck`
     (``sec-federation-001``).
 
+    ``sec-federation-001`` does raise a HIGH finding for ``CONNECT_MANAGED``
+    (and ``EXISTING_DIRECTORY``) identity, which is deliberate and is not
+    the noise removed above. The removed finding was a misnamed,
+    non-actionable control FAIL ("ensure strong password policies").
+    ``sec-federation-001`` is a non-scoring Manual Review: it names the
+    concrete risk (no evidenced MFA on agent sign-in, the entry point for
+    agent-credential toll fraud), gives identity-specific remediation, and
+    is not exported to Security Hub. It is SKIPPED, not failed, when the
+    identity type is unknown.
+
 AWS Well-Architected Framework Reference:
 https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html
 """

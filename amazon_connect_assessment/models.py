@@ -226,7 +226,10 @@ class ConnectInstance:
 
     instance_id: str
     instance_arn: str
-    identity_management_type: str
+    # SAML | CONNECT_MANAGED | EXISTING_DIRECTORY, or None when DescribeInstance
+    # did not return it. Never default this: checks treat None as "not
+    # evaluated", whereas a guessed CONNECT_MANAGED raises a HIGH finding.
+    identity_management_type: Optional[str]
     inbound_calls_enabled: bool
     outbound_calls_enabled: bool
     instance_alias: Optional[str] = None

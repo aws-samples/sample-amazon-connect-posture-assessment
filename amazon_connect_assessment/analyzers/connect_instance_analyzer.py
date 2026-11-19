@@ -102,11 +102,12 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             instance_alias=instance_alias,
             service_role=service_role,
             status=status,
-            identity_management_type=detailed_info.get(
-                "identity_management_type", "CONNECT_MANAGED"
-            ),
-            inbound_calls_enabled=detailed_info.get("inbound_calls_enabled", False),
-            outbound_calls_enabled=detailed_info.get("outbound_calls_enabled", False),
+            # No default: an unobserved identity type must stay None so checks
+            # can report it as not evaluated, rather than as Connect-managed.
+            identity_management_type=detailed_info.get("identity_management_type"),
+            # No prior value exists here, so an unreturned flag reads as False.
+            inbound_calls_enabled=bool(detailed_info.get("inbound_calls_enabled")),
+            outbound_calls_enabled=bool(detailed_info.get("outbound_calls_enabled")),
         )
 
     def _get_instance_details(self, instance_id: str) -> Dict[str, Any]:
@@ -124,11 +125,11 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             instance_details = response.get("Instance", {})
 
             return {
-                "identity_management_type": instance_details.get(
-                    "IdentityManagementType", "CONNECT_MANAGED"
-                ),
-                "inbound_calls_enabled": instance_details.get("InboundCallsEnabled", False),
-                "outbound_calls_enabled": instance_details.get("OutboundCallsEnabled", False),
+                "identity_management_type": instance_details.get("IdentityManagementType"),
+                # None when not returned, so callers never mistake a missing
+                # flag for an observed False (see analyze()).
+                "inbound_calls_enabled": instance_details.get("InboundCallsEnabled"),
+                "outbound_calls_enabled": instance_details.get("OutboundCallsEnabled"),
             }
 
         except Exception as e:
@@ -155,15 +156,16 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             detailed_info = self._get_instance_details(instance.instance_id)
 
             # Update instance with any additional details
-            instance.identity_management_type = detailed_info.get(
-                "identity_management_type", instance.identity_management_type
+            # Never let a missing value clobber one the engine already observed.
+            instance.identity_management_type = (
+                detailed_info.get("identity_management_type") or instance.identity_management_type
             )
-            instance.inbound_calls_enabled = detailed_info.get(
-                "inbound_calls_enabled", instance.inbound_calls_enabled
-            )
-            instance.outbound_calls_enabled = detailed_info.get(
-                "outbound_calls_enabled", instance.outbound_calls_enabled
-            )
+            # A missing flag must not overwrite one already observed: the
+            # outbound-calling and toll-fraud checks read these.
+            for field_name in ("inbound_calls_enabled", "outbound_calls_enabled"):
+                value = detailed_info.get(field_name)
+                if value is not None:
+                    setattr(instance, field_name, value)
 
             self.logger.debug(f"Instance analysis completed for {instance.instance_id}")
             return instance

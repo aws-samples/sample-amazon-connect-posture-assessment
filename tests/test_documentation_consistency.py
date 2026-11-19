@@ -52,6 +52,10 @@ EXPECTED_IDS_BY_PILLAR = {
         "sec-cloudtrail-001",
         "sec-federation-001",
         "sec-profile-audit-001",
+        "sec-ip-access-001",
+        "sec-outbound-scope-001",
+        "sec-outbound-dest-001",
+        "sec-fraud-alerting-001",
         "ai-ops-guardrail-001",
         "ai-ops-encryption-001",
         "sec-lex-convlogs-001",
@@ -120,10 +124,10 @@ EXPECTED_IDS_BY_PILLAR = {
 }
 EXPECTED_DISPOSITIONS = {
     FindingDisposition.CONTROL: 23,
-    FindingDisposition.MANUAL_REVIEW: 25,
-    FindingDisposition.INFORMATIONAL: 16,
+    FindingDisposition.MANUAL_REVIEW: 30,
+    FindingDisposition.INFORMATIONAL: 15,
 }
-EXPECTED_EXECUTORS = {ExecutionSource.BASE_CHECK: 60, ExecutionSource.JOURNEY: 4}
+EXPECTED_EXECUTORS = {ExecutionSource.BASE_CHECK: 64, ExecutionSource.JOURNEY: 4}
 PILLAR_HEADINGS = {
     Pillar.SECURITY: "Security",
     Pillar.RESILIENCE: "Resilience",
@@ -145,7 +149,7 @@ def test_documentation_catalog_lists_exact_canonical_control_inventory():
     runtime_ids = [control.control_id for control in catalog_registry]
 
     # Assert
-    assert len(expected_ids) == 64
+    assert len(expected_ids) == 68
     assert Counter(runtime_ids) == Counter(expected_ids)
     assert Counter(documented_ids) == Counter(expected_ids)
     assert LEGACY_ALIASES.isdisjoint(documented_ids)
@@ -176,10 +180,10 @@ def test_documentation_catalog_matches_pillar_disposition_and_executor_totals():
     assert runtime_executors == EXPECTED_EXECUTORS
     assert documented_dispositions == {
         "control": 23,
-        "manual_review": 25,
-        "informational": 16,
+        "manual_review": 30,
+        "informational": 15,
     }
-    assert documented_executors == {"BaseCheck": 60, "Journey": 4}
+    assert documented_executors == {"BaseCheck": 64, "Journey": 4}
     for pillar, count in expected_pillar_counts.items():
         assert f"### {PILLAR_HEADINGS[pillar]} — {count} controls" in catalog
 
@@ -187,8 +191,8 @@ def test_documentation_catalog_matches_pillar_disposition_and_executor_totals():
 def test_current_methodology_docs_describe_unified_scoring_and_output_contracts():
     # Arrange
     required_phrases = {
-        "64 canonical controls",
-        "60 BaseCheck",
+        "68 canonical controls",
+        "64 BaseCheck",
         "4 Journey",
         "scored-control denominator",
         "MANUAL_REVIEW",
