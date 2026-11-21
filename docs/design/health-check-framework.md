@@ -610,7 +610,11 @@ content = json.loads(resp['ContactFlow']['Content'])
 | `Wait` | Delay | Excessive wait times |
 | `CreateCallback` | Callback offer | Absence when queue wait is high |
 
-### 5.3 Graph Traversal — Building the IVR Map
+### 5.3 Graph Traversal — Building the IVR Map (legacy sketch)
+
+> Legacy sketch. The current parser and `journey/path_enumerator.py` traverse
+> iteratively with bounded enumeration and follow `TransferToFlow` across flows
+> rather than treating it as terminal.
 
 ```python
 def build_flow_graph(content):
@@ -793,7 +797,10 @@ def detect_antipatterns(content):
 
 ```
 
-### 5.5 Customer Journey Mapping (Programmatic)
+### 5.5 Customer Journey Mapping (Programmatic) (legacy sketch)
+
+> Legacy sketch. The current implementation is the `journey/` pipeline
+> (`topology` → `super_graph` → `path_enumerator` → `journey_scorer`).
 
 ```python
 def build_customer_journey(content, flow_metrics):
@@ -1171,23 +1178,20 @@ The original design example follows:
 
 ```
 
-> **Least-privilege note (production).** The policy above uses service-scoped
-> action wildcards (`connect:List*`, `connect:Describe*`, `connect:Get*`,
-> `connect:Search*`) and `"Resource": "*"` for convenience during initial setup.
-> Both are read-only, but for production use you should tighten them:
->
-> - **Replace the action wildcards** with the exact operations the tool calls
->   (see the *Key APIs Summary* below), so future Connect APIs matching those
->   prefixes are not granted implicitly. For example, replace `connect:List*`,
->   `connect:Describe*`, `connect:Get*`, and `connect:Search*` with the specific
->   operations your assessment run actually invokes — e.g. `connect:ListInstances`,
->   `connect:DescribeInstance`, `connect:GetMetricData`,
->   `connect:SearchContactFlows` — and do the same for the other services.
-> - **Scope the resource** to the specific instance(s) you assess, e.g.
->   `"Resource": "arn:aws:connect:REGION:ACCOUNT:instance/INSTANCE-ID"` (and
->   `.../instance/INSTANCE-ID/*` for sub-resources), instead of `"*"`.
+> **Current least-privilege policy.** Do not derive a policy from this legacy
+> example or from the *Key APIs Summary* below. The exact actions the tool
+> calls are defined in `amazon_connect_assessment/iam_permissions.py` and
+> published in [`docs/iam-policy-template.json`](../iam-policy-template.json)
+> and [`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](../../cloudformation/AmazonConnectSelfAssessmentPolicy.yaml),
+> which drift tests keep identical. The current template intentionally uses
+> `"Resource": "*"` for account-wide discovery.
 
-### Key APIs Summary
+### Key APIs Summary (legacy design scope)
+
+> Legacy design scope, not the runtime action set. Some operations listed here
+> are not called by the current tool, and services it does call (Connect AI
+> agents, Bedrock, Service Quotas, Lambda, KMS, S3) are missing. See
+> `amazon_connect_assessment/iam_permissions.py` for the current list.
 
 | Category | Primary APIs |
 | --- | --- |

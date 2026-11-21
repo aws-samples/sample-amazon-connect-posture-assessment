@@ -63,8 +63,7 @@ examples/*
 .ash/*
 !.ash/ash.yaml
 
-# Generated documentation and local documentation-site builds
-docs/README.html
+# Local documentation-site builds
 site/
 _site/
 .jekyll-cache/

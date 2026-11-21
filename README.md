@@ -58,24 +58,11 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 
 ## Sample report
 
-Check out the sample [HTML report](https://aws-samples.github.io/sample-amazon-connect-posture-assessment/examples/sample_assessment_report.html).
+**[Open the interactive sample report →](https://aws-samples.github.io/sample-amazon-connect-posture-assessment/examples/sample_assessment_report.html)**
 
-![Sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report.png)
+[![Sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report.png)](https://aws-samples.github.io/sample-amazon-connect-posture-assessment/examples/sample_assessment_report.html)
 
-<details>
-<summary>Show the full report screenshot</summary>
-
-![Full sample Amazon Connect Customer assessment report](docs/images/sample-assessment-report-full.png)
-
-</details>
-
-A complete example is checked in at
-[`examples/sample_assessment_report.html`](examples/sample_assessment_report.html) —
-open it in a browser to see the report before you run anything. It is built from
-the unified 64-control catalog by
-[`scripts/generate_sample_report.py`](scripts/generate_sample_report.py) against
-synthetic instances. It contains one canonical outcome per control and sample
-instance, uses fixed timestamps, and contains no customer data.
+The sample uses synthetic instances and contains no customer data.
 
 ---
 
@@ -247,8 +234,9 @@ The [editable Draw.io source](docs/architecture.drawio) is included.
   encryption, then uploads the report. Review the target and permissions before
   enabling it.
 - **Reports contain configuration detail.** Findings include flow names, queue
-  and routing configuration, and masked phone numbers. Treat generated reports
-  as sensitive and store them accordingly.
+  and routing configuration, and the Caller Journey Map lists claimed phone
+  numbers in full. Treat generated reports as sensitive and store them
+  accordingly.
 
 See the [Threat Model](docs/threat-model.md) for trust boundaries, residual
 risks, and hardening recommendations.

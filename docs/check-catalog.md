@@ -57,8 +57,11 @@ backward compatibility:
 The aliases are never emitted in findings, `--list-checks`, JSON, CSV, or the
 catalog. `journey-res-001` and `journey-scope-001` are canonical IDs.
 
-Each outcome carries the catalog's pillar, default severity, disposition, and
-methodology. The methodology fields are:
+Each outcome carries the catalog's pillar, disposition, and methodology.
+Severity is the effective severity: the catalog default, or a configured
+BaseCheck override. The three `res-quota-*` controls escalate severity with
+measured utilization or growth and can emit a severity above their default (up
+to Critical). The methodology fields are:
 
 - **reason**: why the question is assessed;
 - **evidence source**: the API, configuration, or path evidence inspected;
@@ -98,8 +101,8 @@ validation. A `Pass` on an informational record means inventory completed.
 | `cx-personalization-001` | Personalization & Transfer Analysis | Low | Informational | BaseCheck |
 
 `sec-storage-001` returns PASS only when every returned destination has verified encryption
-and every storage-type read completes. A failed read or a Kinesis stream destination whose
-encryption was not inspected returns SKIPPED; an observed unencrypted destination returns
+and every storage-type read completes. A failed read or a Kinesis Data Streams or Firehose destination (whose
+encryption is not inspected) returns SKIPPED; an observed unencrypted destination returns
 FAIL. If no storage configuration is returned, the control is not applicable.
 
 ### Resilience — 18 controls
@@ -214,7 +217,7 @@ and do not inspect application internals or expose context-variable values.
 `sec-prompt-inject-001` is deliberately **not** listed here. It reviews
 potentially unsafe dynamic content in SSML and agent-facing prompts. No model is
 involved, and a review candidate is not proof of an exploit. It is a Security
-control and appears in that pillar's table.
+manual-review record and appears in that pillar's table.
 
 Amazon Lex guardrail posture is **not** covered. An earlier check that claimed
 to cover it could not read a bot's configuration, so it failed every Lex
@@ -296,7 +299,8 @@ including these four.
 Selection uses AND semantics. The tool first applies flow-analysis availability,
 then pillar, effective severity, explicit `--checks` inclusion,
 `--exclude-checks`, and config `enabled: false` settings. A control must survive
-every active filter.
+every active filter. Severity filtering uses the declared or configured
+severity, not a dynamically escalated one.
 
 `--checks`, `--exclude-checks`, config keys, and validation accept canonical IDs
 and the two legacy aliases described in [Canonical identity and evidence

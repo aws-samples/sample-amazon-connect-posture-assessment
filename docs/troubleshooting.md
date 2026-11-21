@@ -78,9 +78,11 @@ for repository runs. Do not rely on a stale global executable.
 
 ## AWS credential issues
 
-### `NoCredentialsError` or `Unable to locate credentials`
+### "No valid AWS credentials found" / `NoCredentialsError`
 
-No credentials are configured.
+No credentials are configured. The tool reports `No valid AWS credentials
+found. Please configure credentials using one of: ...` (wrapping botocore's
+`NoCredentialsError` / `Unable to locate credentials`).
 
 ```bash
 # Check what credentials are active
@@ -92,9 +94,10 @@ aws configure
 aws configure --profile my-profile
 ```
 
-### `ProfileNotFound: The config profile (name) could not be found`
+### "AWS profile '<name>' not found" / `ProfileNotFound`
 
-The profile name doesn't exist in `~/.aws/config`.
+The profile name doesn't exist in `~/.aws/config`. The tool reports
+`AWS profile '<name>' not found: The config profile (<name>) could not be found`.
 
 ```bash
 # List available profiles
@@ -104,7 +107,7 @@ aws configure list-profiles
 aws configure --profile new-profile-name
 ```
 
-### `TokenExpiredError` or `ExpiredTokenException`
+### `ExpiredTokenException`, `TokenRetrievalError`, or `UnauthorizedSSOTokenError`
 
 Temporary credentials (SSO, assumed role, CloudShell session) have expired.
 
@@ -119,9 +122,12 @@ aws sso login --profile my-sso-profile
 
 ## Assessment issues
 
-### "No Amazon Connect Customer instances found" / `InstanceSummaryList: []`
+### "No Connect instances found" / `InstanceSummaryList: []`
 
-Credentials work but no instances are returned.
+Credentials work but no instances are returned. The log shows `No Connect
+instances found`, and the report's Caller Journey Map says `No Amazon Connect
+instances were discovered in this account/region, so there is nothing to draw
+a caller journey for.`
 
 1. **Wrong region** — Amazon Connect Customer instances are region-specific. Confirm with the [AWS CLI `connect list-instances` command](https://docs.aws.amazon.com/cli/latest/reference/connect/list-instances.html):
    ```bash
@@ -163,6 +169,7 @@ If you changed `frontend/src/`, rebuild the committed bundle:
 ```bash
 cd frontend
 npm ci
+npm audit --audit-level=high
 npm test
 npm run build
 npm run check
@@ -180,7 +187,7 @@ python -m amazon_connect_assessment.cli --region us-east-1 --instance-id <id>
 # work. This excludes res-hardcoded-routing-001.
 python -m amazon_connect_assessment.cli --region us-east-1 --skip-flow-analysis
 
-# Increase parallelism (default is 2x CPU cores)
+# Increase parallelism (default is min(32, 2x CPU cores))
 python -m amazon_connect_assessment.cli --region us-east-1 --max-workers 16 --batch-size 20
 
 # Focus on one pillar
@@ -283,27 +290,29 @@ to the placeholder list in [Report Formats](report-formats.md#custom-report-shel
 
 `--s3-output` is a consequential opt-in write. Before upload, it hardens an
 existing selected bucket as well as a newly created bucket by applying Block
-Public Access and versioning and ensuring default encryption. These changes do
-not roll back automatically if the later upload fails. The assessment still
+Public Access and versioning and ensuring default encryption. If hardening a
+newly created bucket fails, the tool tries to delete that bucket. Changes to an
+existing bucket are not rolled back, including when the later upload fails. The assessment still
 succeeds and local reports are written. Common causes:
 
-- **Missing permissions** — the identity needs `s3:CreateBucket`, `s3:PutObject`, `s3:ListBucket`, and the bucket-hardening puts (`s3:PutBucketPublicAccessBlock`, `s3:PutEncryptionConfiguration`, `s3:PutBucketVersioning`) on `arn:aws:s3:::amazon-connect-assessment-report-*`. These are separate from the read-only assessment policy and must be granted explicitly when `--s3-output` is enabled.
+- **Missing permissions** — the identity needs `s3:CreateBucket`, `s3:PutObject`, `s3:ListBucket` (for `HeadBucket`), `s3:GetEncryptionConfiguration`, the bucket-hardening puts (`s3:PutBucketPublicAccessBlock`, `s3:PutEncryptionConfiguration`, `s3:PutBucketVersioning`), and `s3:DeleteBucket` if you want a failed new-bucket hardening to clean up on `arn:aws:s3:::amazon-connect-assessment-report-*`. These are separate from the read-only assessment policy and must be granted explicitly when `--s3-output` is enabled.
 - **Bucket name taken** — S3 bucket names are globally unique. If `amazon-connect-assessment-report-<account_id>` is already owned elsewhere, pass `--s3-bucket <your-unique-name>`.
-- **Wrong region** — the bucket is created in the run region (`--region`). A pre-existing bucket in another region will report a region mismatch; use `--s3-bucket` to point at the right one.
+- **Wrong region** — the bucket is created in the run region (`--region`). A pre-existing bucket in another region can make the upload fail with an S3 redirect or region error (reported as `S3 upload did not complete: ...`); use `--s3-bucket` to point at a bucket in the run region.
 
 ---
 
 ## Getting more information
 
 ```bash
-# Verbose output — shows each step
+# INFO logging (already the default unless global_settings.log_level lowers it)
 python -m amazon_connect_assessment.cli --region us-east-1 -v
 
-# Debug output — shows every API call
+# Debug output — the tool's own DEBUG logging; AWS SDK (botocore/boto3/urllib3)
+# logging stays at WARNING, so individual API calls are not logged
 python -m amazon_connect_assessment.cli --region us-east-1 -vv
 
-# Save all output to a file
-python -m amazon_connect_assessment.cli --region us-east-1 -vv --log-file debug.log 2>&1
+# Also write logs to a file
+python -m amazon_connect_assessment.cli --region us-east-1 -vv --log-file debug.log
 
 # JSON log format (useful for piping to jq or a log aggregator)
 python -m amazon_connect_assessment.cli --region us-east-1 --log-format json

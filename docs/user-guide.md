@@ -135,8 +135,9 @@ For installation failures, see [troubleshooting.md](troubleshooting.md).
 
 ## AWS Access
 
-The assessment uses read-oriented `List`, `Get`, `Describe`, and `Head`
-operations against the
+The assessment uses read-only `List`, `Get`, and `Describe` operations, plus
+`cloudtrail:LookupEvents`,
+against the
 [Amazon Connect Customer](https://docs.aws.amazon.com/connect/latest/adminguide/what-is-amazon-connect.html)
 resources and supporting services it inspects. The consequential opt-in
 `--s3-output` feature creates or hardens the selected report bucket and uploads
@@ -152,11 +153,11 @@ aws connect list-instances --region us-east-1
 AWS documents this command under the
 [`connect list-instances` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/connect/list-instances.html).
 
-If access is denied, deploy the self-assessment policy. The commands below use
-the repository path `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`. A
-`pipx` installation does not place repository files in your current directory,
-so download the template first and pass the downloaded file to
-`--template-file`:
+If access is denied, deploy the self-assessment policy. A `pipx` installation
+does not place repository files in your current directory, so download the
+template first. The commands below pass the downloaded
+`AmazonConnectSelfAssessmentPolicy.yaml`; from a repository checkout, use
+`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml` instead:
 
 ```bash
 curl --fail --location --silent --show-error \
@@ -164,12 +165,13 @@ curl --fail --location --silent --show-error \
   https://raw.githubusercontent.com/aws-samples/sample-amazon-connect-posture-assessment/main/cloudformation/AmazonConnectSelfAssessmentPolicy.yaml
 ```
 
-To attach the policy to an IAM user:
+To grant the policy to an IAM user (the template creates an IAM group that holds
+the policy and adds the user to it):
 
 ```bash
 aws cloudformation deploy \
   --stack-name amazon-connect-assessment-permissions \
-  --template-file cloudformation/AmazonConnectSelfAssessmentPolicy.yaml \
+  --template-file AmazonConnectSelfAssessmentPolicy.yaml \
   --parameter-overrides AttachToUserName=YOUR_USERNAME \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
@@ -180,7 +182,7 @@ To attach the policy to a role instead:
 ```bash
 aws cloudformation deploy \
   --stack-name amazon-connect-assessment-permissions \
-  --template-file cloudformation/AmazonConnectSelfAssessmentPolicy.yaml \
+  --template-file AmazonConnectSelfAssessmentPolicy.yaml \
   --parameter-overrides AttachToRoleName=YOUR_ROLE_NAME \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
@@ -191,14 +193,15 @@ To create the policy without attaching it:
 ```bash
 aws cloudformation deploy \
   --stack-name amazon-connect-assessment-permissions \
-  --template-file cloudformation/AmazonConnectSelfAssessmentPolicy.yaml \
+  --template-file AmazonConnectSelfAssessmentPolicy.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 
 aws cloudformation describe-stacks \
   --stack-name amazon-connect-assessment-permissions \
   --query 'Stacks[0].Outputs[?OutputKey==`PolicyArn`].OutputValue' \
-  --output text
+  --output text \
+  --region us-east-1
 ```
 
 The canonical read-permission source is
@@ -338,7 +341,7 @@ Most assessment tooling inspects resources. The Caller Journey Map inspects the
   `ListPhoneNumbersV2.TargetArn` points at a flow.
 - **Bounded static path enumeration.** Default, conditional, and error
   transitions are followed from each entry point with limits of depth 50, 200
-  paths per phone number, and 5,000 paths per run. Cycle edges are pruned
+  paths per phone number, and 5,000 paths per instance. Cycle edges are pruned
   without losing structural node reachability. A reached cap, dynamic target,
   or unresolved flow reference marks enumeration incomplete rather than
   claiming exhaustive runtime coverage.
@@ -354,8 +357,9 @@ Most assessment tooling inspects resources. The Caller Journey Map inspects the
   diagram.
 
 No separate web service or launcher is required — the map is part of the
-standard HTML report. Phone numbers are masked in report evidence, preserving
-only the last four digits.
+standard HTML report. Finding evidence masks phone numbers to the last four
+digits, but the Caller Journey Map data embedded in the HTML and JSON reports
+contains each claimed phone number in full. Treat reports as sensitive.
 
 ### Scope and drill-downs
 
@@ -423,10 +427,16 @@ The default bucket is
 `amazon-connect-assessment-report-<account_id>`. Override it with
 `--s3-bucket`. Before upload, the publisher applies Block Public Access and
 versioning to a new or existing selected bucket and preserves existing default
-encryption or adds SSE-S3 when none is configured. Enabling this option can
-therefore modify an existing bucket, and those hardening changes do not roll
-back automatically if upload later fails. Review the selected bucket and grant
-write access deliberately.
+encryption or adds SSE-S3 when none is configured. Each report object is
+uploaded with SSE-S3 (`AES256`) even when the bucket default is SSE-KMS, so a
+bucket policy that requires SSE-KMS rejects the upload. Objects are written
+under a UTC `YYYY/MM/DD/HHMMSSZ/` key prefix.
+
+Enabling this option can therefore modify an existing bucket, and those
+hardening changes do not roll back automatically if upload later fails. If
+hardening a newly created bucket fails, the publisher attempts to delete that
+bucket and reports the error. Review the selected bucket and grant write access
+deliberately.
 
 Required additional permissions include:
 
@@ -434,8 +444,11 @@ Required additional permissions include:
 - `s3:PutObject`
 - `s3:ListBucket`
 - `s3:PutBucketPublicAccessBlock`
+- `s3:GetEncryptionConfiguration`
 - `s3:PutEncryptionConfiguration`
 - `s3:PutBucketVersioning`
+- `s3:DeleteBucket` (optional; used only to roll back a newly created bucket
+  whose hardening failed)
 
 Local reports remain available if an S3 upload fails.
 
@@ -458,11 +471,23 @@ python -m amazon_connect_assessment.cli \
   --output-dir ./reports
 ```
 
-The command reports resolved, new, and persistent findings.
+The command prints resolved, new, and persistent failed controls, plus resolved
+and new manual-review candidates. Informational records are excluded. `--diff`
+always writes a current JSON report to the output directory for the comparison,
+even when `json` is not in `--output-format`.
 
 ## CI/CD
 
-The CLI exits with code `0` on success and `1` on failure.
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | The assessment completed. Failed controls and S3 upload failures do not change the exit code. |
+| `1` | Configuration, validation, initialization, or assessment error. |
+| `2` | Invalid command-line arguments. |
+| `130` | Interrupted (Ctrl-C). |
+
+Gate pipelines on the JSON or ASFF contents, not the exit code.
 
 ### GitHub Actions
 

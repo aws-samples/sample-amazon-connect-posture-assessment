@@ -278,10 +278,11 @@ def test_public_documentation_describes_bounded_and_safe_runtime_contracts():
     required_phrases = {
         "depth 50",
         "200 paths per phone number",
-        "5,000 paths per run",
+        "5,000 paths per instance",
         "exact token is `Escalation`",
         "res-hardcoded-routing-001",
-        "`List`, `Get`, `Describe`, and `Head`",
+        "`List`, `Get`, and `Describe`",
+        "`cloudtrail:LookupEvents`",
         "existing selected bucket",
         "legacy Jinja syntax",
         "UTC",
@@ -299,7 +300,7 @@ def test_public_documentation_describes_bounded_and_safe_runtime_contracts():
     assert "Every default, conditional, and error transition" not in readme
     assert re.search(r"frontend\s+source is maintained in this repository", development_guide)
     assert "maintained in the main AWS Samples repository" not in current_documentation
-    assert "[HTML report](https://aws-samples.github.io/" in readme
+    assert "sample report →](https://aws-samples.github.io/" in readme
     assert 'target="_blank"' not in readme
 
 
