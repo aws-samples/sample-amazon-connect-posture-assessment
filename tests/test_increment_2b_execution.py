@@ -54,8 +54,8 @@ def _path(number: str, action_types: list[str], terminal_type: str = "agent_queu
         for index, action_type in enumerate(action_types)
     ]
     return JourneyPath(
-        entry_number=number,
-        entry_number_type="DID",
+        entry_identifier=number,
+        entry_type="DID",
         nodes=nodes,
         terminal_type=terminal_type,
         terminal_details={"queue": "queue-1"} if terminal_type == "agent_queue" else {},

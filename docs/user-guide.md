@@ -331,20 +331,43 @@ records enter the scored-control denominator.
 Each finding includes methodology explaining why it is assessed, the evidence
 source, proof limitations, developer/admin meaning, and verification criteria.
 
-### Caller Journey Map
+### Customer Journey Map
 
-Most assessment tooling inspects resources. The Caller Journey Map inspects the
-**experience**, starting from the phone number a customer actually dials.
+Most assessment tooling inspects resources. The Customer Journey Map inspects
+the **experience**, starting from wherever a customer actually makes contact —
+on any channel.
 
-- **Accurate flow resolution.** Each inbound number is matched to its flow using
-  `connect:ListFlowAssociations`, rather than assuming
-  `ListPhoneNumbersV2.TargetArn` points at a flow.
+- **Every channel's entry points.** Journeys start from each place a contact
+  enters the instance:
+
+  | Entry point | Channel | Discovered from |
+  |---|---|---|
+  | DID / toll-free number | VOICE | `connect:ListFlowAssociations` `VOICE_PHONE_NUMBER` |
+  | SMS number | CHAT | `ListFlowAssociations` `SMS_PHONE_NUMBER` |
+  | WhatsApp number | CHAT | `ListFlowAssociations` `WHATSAPP_MESSAGING_PHONE_NUMBER` |
+  | Email address | EMAIL | `ListFlowAssociations` `INBOUND_EMAIL`, labelled via `connect:SearchEmailAddresses` |
+  | Observed entry flow | any | `connect:GetMetricDataV2` `FLOWS_STARTED` by flow and channel |
+
+  Each association is resolved with `connect:ListFlowAssociations`, rather than
+  assuming `ListPhoneNumbersV2.TargetArn` points at a flow, and is kept per
+  channel, so a number with both a voice and an SMS flow gets two journeys.
+  Web chat, tasks, and API-started contacts have no association to discover —
+  `StartChatContact` takes the flow ID from the caller — so a contact flow
+  that starts contacts on a channel without being reachable from that
+  channel's associations is mapped as an *observed* entry point. Queue, hold,
+  and whisper flows are never treated as entry points.
+- **Channel-appropriate scoring.** Each journey is scored with its channel's
+  rules. Authentication and self-service containment apply to voice and chat;
+  callback offers to voice only; dead ends to every channel. A finding names
+  the channels it evaluated, gives a per-channel breakdown, and says which
+  channels it excluded and why.
 - **Bounded static path enumeration.** Default, conditional, and error
   transitions are followed from each entry point with limits of depth 50, 200
-  paths per phone number, and 5,000 paths per instance. Cycle edges are pruned
+  paths per entry point, and 5,000 paths per instance. Cycle edges are pruned
   without losing structural node reachability. A reached cap, dynamic target,
-  or unresolved flow reference marks enumeration incomplete rather than
-  claiming exhaustive runtime coverage.
+  or unresolved flow reference marks enumeration incomplete **for the channels
+  it affects**: a dynamic transfer inside a chat flow does not make voice
+  results incomplete.
 - **Canonical Journey outcomes.** Four catalog controls use the Journey executor:
   `sec-flow-auth-001`, `cost-containment-001`, `journey-res-001`, and
   `journey-scope-001`. Each produces one aggregate outcome per selected
@@ -352,14 +375,16 @@ Most assessment tooling inspects resources. The Caller Journey Map inspects the
   [Journey-backed execution](check-catalog.md#journey-backed-execution).
 - **Interactive, offline map.** The CLI server-renders a deterministic
   caller-focused projection into the HTML report. In the browser you can switch
-  between phone numbers, zoom and fit without distorting the layout, open a
+  between entry points on any channel, zoom and fit without distorting the layout, open a
   node and connector inspector, and export SVG, PNG, or an editable draw.io
   diagram.
 
 No separate web service or launcher is required — the map is part of the
 standard HTML report. Finding evidence masks phone numbers to the last four
-digits, but the Caller Journey Map data embedded in the HTML and JSON reports
-contains each claimed phone number in full. Treat reports as sensitive.
+digits and email addresses to their domain, but the Customer Journey Map data
+embedded in the HTML and JSON reports contains each entry point in full: every
+claimed phone or SMS number, and every inbound email address. Treat reports as
+sensitive.
 
 ### Scope and drill-downs
 

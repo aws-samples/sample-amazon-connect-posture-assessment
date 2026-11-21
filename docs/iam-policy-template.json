@@ -173,6 +173,7 @@
                 "connect:DescribeContactFlowModule",
                 "connect:DescribeInstanceAttribute",
                 "connect:ListFlowAssociations",
+                "connect:SearchEmailAddresses",
                 "connect:ListIntegrationAssociations"
             ],
             "Resource": "*"

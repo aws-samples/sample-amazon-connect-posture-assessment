@@ -49,7 +49,12 @@ journey_map:
   # pipeline (run_journey_mapping). They do not affect the rendered map above.
   max_paths_per_did: 200
   max_depth: 50
-  max_traffic_flows: 10
+  # Days of connect:GetMetricDataV2 history used to see which channels
+  # (VOICE / CHAT / TASK / EMAIL) actually start each flow — a flow's own
+  # metadata has no channel dimension. Integer, 1-34: the API requires the
+  # window to be under 35 days. Out-of-range values are clamped; invalid ones
+  # fall back to 30.
+  traffic_lookback_days: 30
 
 # Individual check configurations.
 #

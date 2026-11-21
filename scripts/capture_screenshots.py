@@ -8,7 +8,7 @@ Install the optional screenshot dependencies before running this script:
 
 The default invocation captures the full length of the checked-in sample report
 (about 1440x3040 at the default viewport width) plus a crop spanning the
-Executive summary through the Caller journey map for inline use in the README:
+Executive summary through the Customer journey map for inline use in the README:
 
     python scripts/capture_screenshots.py
 """
@@ -25,7 +25,7 @@ DEFAULT_REPORT = REPO_ROOT / "examples" / "sample_assessment_report.html"
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "images" / "sample-assessment-report-full.png"
 DEFAULT_PREVIEW_OUTPUT = REPO_ROOT / "docs" / "images" / "sample-assessment-report.png"
 DEFAULT_PREVIEW_FROM = "Executive summary"
-DEFAULT_PREVIEW_TO = "Caller journey map"
+DEFAULT_PREVIEW_TO = "Customer journey map"
 # Matches the vertical gap between report sections so the crop keeps a margin.
 PREVIEW_PADDING_PX = 20
 
