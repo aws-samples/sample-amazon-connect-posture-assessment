@@ -22,6 +22,7 @@ report generation.
   - [Command Line Usage](#command-line-usage)
   - [Configuration File Search Order](#configuration-file-search-order)
   - [Environment Variable Overrides](#environment-variable-overrides)
+  - [Other top-level keys](#other-top-level-keys)
 - [Configuration Examples](#configuration-examples)
   - [Minimal Configuration](#minimal-configuration)
   - [Development Configuration](#development-configuration)
@@ -59,7 +60,7 @@ global_settings:
   parallel_execution: true        # Enable parallel check execution
   max_workers: null              # Maximum worker threads (null = auto-detect)
   batch_size: 10                 # Number of checks per batch
-  log_level: "INFO"              # Logging level (DEBUG, INFO, WARNING, ERROR)
+  log_level: "INFO"              # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 ```
 
 ### AWS Configuration
@@ -68,9 +69,17 @@ Configure AWS credentials and region settings:
 
 ```yaml
 aws:
-  region: null                   # AWS region (null = use AWS_REGION env var)
-  profile: null                  # AWS profile (null = use AWS_PROFILE env var)
+  region: null                   # AWS region
+  profile: null                  # AWS profile
 ```
+
+Region precedence: `--region` > `AWS_REGION` > `aws.region` >
+`AWS_DEFAULT_REGION` > `us-east-1`. `AWS_REGION` overrides `aws.region` even
+when the config file sets it. The resolved region is passed explicitly to
+boto3, so a region configured in an AWS profile is not used.
+
+Profile precedence: `--profile` > `AWS_PROFILE` > `aws.profile`. With no
+profile, the standard boto3 credential chain applies.
 
 ### Output Configuration
 
@@ -188,7 +197,25 @@ The tool searches for configuration files in this order:
 
 ### Environment Variable Overrides
 
-Configuration can be overridden using environment variables:
+Environment variables override config-file values; CLI flags override both.
+
+| Variable | Config key |
+|---|---|
+| `CONNECT_ASSESSMENT_LOG_LEVEL` | `global_settings.log_level` |
+| `CONNECT_ASSESSMENT_TIMEOUT` | `global_settings.timeout` |
+| `CONNECT_ASSESSMENT_MAX_RETRY_ATTEMPTS` | `global_settings.max_retry_attempts` |
+| `CONNECT_ASSESSMENT_RETRY_BASE_DELAY` | `global_settings.retry_base_delay` |
+| `CONNECT_ASSESSMENT_RETRY_MAX_DELAY` | `global_settings.retry_max_delay` |
+| `CONNECT_ASSESSMENT_PARALLEL_EXECUTION` | `global_settings.parallel_execution` (`true`, `1`, `yes`, or `on` enable it; any other value disables it) |
+| `CONNECT_ASSESSMENT_MAX_WORKERS` | `global_settings.max_workers` |
+| `CONNECT_ASSESSMENT_BATCH_SIZE` | `global_settings.batch_size` |
+| `CONNECT_ASSESSMENT_OUTPUT_DIR` | `output.directory` |
+| `AWS_REGION` | `aws.region` |
+| `AWS_PROFILE` | `aws.profile` |
+
+Numeric values that cannot be parsed are silently ignored, and the existing
+value is kept. For example, `CONNECT_ASSESSMENT_TIMEOUT=abc` leaves the timeout
+at its configured value.
 
 ```bash
 export CONNECT_ASSESSMENT_LOG_LEVEL=DEBUG
@@ -197,6 +224,12 @@ export CONNECT_ASSESSMENT_MAX_WORKERS=16
 export AWS_REGION=us-east-1
 export AWS_PROFILE=my-profile
 ```
+
+### Other top-level keys
+
+- `skip_flow_analysis: true` has the same effect as `--skip-flow-analysis`.
+- Checkpoints are written to `~/.amazon-connect-assessment/checkpoints`
+  (created `0700`) unless `--checkpoint-dir` names another directory.
 
 ## Configuration Examples
 
@@ -278,8 +311,9 @@ flow references mark enumeration incomplete.
 
 ### Required Fields
 
-- `check_id`: A canonical ID from the 64-control catalog. The two documented
-  legacy aliases are accepted as input and normalized before selection.
+Each entry under `checks:` is keyed by a canonical ID from the 64-control
+catalog. The two documented legacy aliases are accepted as keys and normalized
+before selection. There is no separate `check_id` field.
 
 ### Optional Fields
 
@@ -301,14 +335,22 @@ AWS credentials, permissions, or whether a target instance exists. An assessment
 run checks those AWS-dependent conditions by calling AWS before executing checks.
 Local validation covers:
 
-- Numeric settings: `timeout`, `max_retry_attempts`, `max_workers`, and `batch_size` must be
-  positive integers; retry delays must be non-negative, with `retry_max_delay >= retry_base_delay`.
+- Numeric settings: `timeout`, `max_retry_attempts`, and `batch_size` must be
+  positive integers, and `max_workers` must be a positive integer or `null`;
+  retry delays must be non-negative, with `retry_max_delay >= retry_base_delay`.
+- `enable_rate_limiting` and `parallel_execution` must be booleans; `log_level`
+  must be `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`.
 - Pillars, severities, and output formats must be known values.
 - `--checks` / `--exclude-checks` IDs must exist in the unified 64-control
   catalog (see `--list-checks`). Canonical IDs and the two backward-compatible
   aliases are accepted. Selection uses AND semantics, and at least one control
   must remain after `--pillars`, `--severity`, `--checks`, `--exclude-checks`,
   `--skip-flow-analysis`, and `enabled: false` entries are applied.
+- Unknown control IDs and unsupported keys under the `checks:` config section
+  are **not** validation errors. They are ignored with a warning during an
+  assessment run, and `--validate-config` suppresses that warning, so a typo in
+  a `checks:` key can pass validation silently. Confirm the effective selection
+  with `--list-checks`.
 - The output directory must be a directory, or creatable: its nearest existing parent must
   be a writable directory.
 - The filename template may only use `{timestamp}`, `{account_id}`, `{region}`, and
@@ -334,7 +376,7 @@ does not check checkpoint availability.
 4. **Use environment-specific** configurations (dev, staging, prod)
 5. **Keep sensitive data** out of configuration files (use environment variables)
 6. **Start with defaults** and only override what you need to change
-7. **Use performance config** for large-scale assessments
+7. **Tune `global_settings.max_workers` and `batch_size`** (or `--max-workers` and `--batch-size`) for large-scale assessments
 
 ## Troubleshooting
 
@@ -342,17 +384,20 @@ does not check checkpoint availability.
 
 1. **File not found**: Ensure the configuration file path is correct
 2. **Invalid YAML/JSON**: Use a validator to check file syntax
-3. **Unknown check IDs**: Verify check IDs match implemented checks
+3. **Unknown check IDs**: `--checks` / `--exclude-checks` reject unknown IDs, but unknown keys under `checks:` are ignored with only a warning. Compare against `--list-checks`
 4. **Invalid severity levels**: Use only "critical", "high", "medium", "low"
 5. **Invalid pillar names**: Use only "resilience", "security", "cost_optimization", "operational_excellence", "performance_efficiency"
-6. **Performance issues**: Adjust `max_workers` and `batch_size` in performance config
+6. **Performance issues**: Adjust `global_settings.max_workers` and `batch_size` in your main config, or use `--max-workers` and `--batch-size`
 
 ### Debug Configuration Loading
 
-Enable debug logging to see detailed configuration loading information:
+Print which configuration file was found and the merged effective
+configuration (shown even when validation fails):
 
 ```bash
-amazon-connect-assessment --config config/assessment_config.yaml --verbose --verbose
+amazon-connect-assessment --config config/assessment_config.yaml --show-config
 ```
 
-This will show detailed logging about configuration loading and any issues encountered.
+Configuration loading itself does not log. Add `-vv` to an assessment run to
+see check-registration details, such as warnings for unknown or unsupported
+`checks:` entries.

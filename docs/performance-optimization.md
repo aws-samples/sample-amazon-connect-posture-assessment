@@ -121,7 +121,8 @@ The journey mapping pipeline has its own bounds independent of the parallel engi
 |---|---|---|
 | `journey_map.max_paths_per_did` | 200 | Max paths enumerated from a single phone number. Reduce to 50 for faster runs. |
 | `journey_map.max_depth` | 50 | Max DFS depth per path. Reduce if your flows are known to be shallow. |
-| `MAX_TOTAL_PATHS` | 5000 | Hard cap on paths across an instance's phone-number entry points. Bounds path enumeration for each instance, not graph construction or a multi-instance run. |
+| `MAX_TOTAL_PATHS` (constant) | 5000 | Hard cap on paths across an instance's phone-number entry points. Bounds path enumeration for each instance, not graph construction or a multi-instance run. Defined in `journey/path_enumerator.py`; not configurable. |
+| `MAX_STEPS_PER_ENTRY` (constant) | 100,000 | Work cap on DFS node expansions per entry point, even when few paths complete. Not configurable. |
 
 Configure via `assessment_config.yaml`:
 

@@ -64,15 +64,44 @@ Key modules:
 
 1. Subclass `BaseCheck` in the appropriate `checks/<domain>_checks.py`, implement `execute(context: CheckContext) -> Finding`.
 2. Add it to that module's `register_*()` function, which is already wired into `registration.py`.
-3. Set `pillar` so `--pillars` filtering works. If the check requires parsed contact flow content, wire it behind `skip_flow_analysis` in `registration.py` or make it safe when no flow content exists. Most flow-content checks are skipped by `--skip-flow-analysis`, but `HardcodedRoutingCheck` remains registered and handles empty flow data. Note: the report's Caller Journey Map has a separate skip check in `AssessmentEngine._compute_journey_map()`; keep CLI/config plumbing aligned if you change that behavior.
+3. Add the canonical record to `checks/control_registry.py` first. The executor's `pillar` and `severity` must equal the catalog defaults, and the catalog `executor_key` must equal the class's fully qualified `module.ClassName`; catalog hydration rejects mismatches. If the check requires parsed contact flow content, register it behind `skip_flow_analysis` in `registration.py` — otherwise hydration fails with a coverage mismatch under `--skip-flow-analysis`. `res-hardcoded-routing-001` is explicitly unregistered when flow analysis is skipped. Note: the report's Caller Journey Map has a separate skip check in `AssessmentEngine._compute_journey_map()`; keep CLI/config plumbing aligned if you change that behavior.
 4. Add a test under `tests/` (suite uses `moto` to mock AWS).
 5. After adding or updating a check (including its name, description, or finding text), regenerate the sample report with `python scripts/generate_sample_report.py`, then refresh the documentation screenshots with `python scripts/capture_screenshots.py` (needs `pip install -e ".[screenshots]"` and `playwright install chromium`). Commit the updated `examples/sample_assessment_report.html` and `docs/images/*.png` with the check change.
+6. Update `docs/check-catalog.md` (row, counts, and Generative AI index if relevant) and every count in `README.md` and `docs/README.md`. See [Keeping documentation consistent](#keeping-documentation-consistent).
+
+## Keeping documentation consistent
+
+Documentation is part of the change, not a follow-up. Every PR that changes behavior must leave the docs true.
+
+**Which docs to check for which change:**
+
+| Change | Docs to review |
+|---|---|
+| CLI flags, defaults, help text, exit codes, env vars | `README.md` (Common tasks), `docs/user-guide.md`, `docs/configuration.md`, `docs/troubleshooting.md` |
+| Config keys, search paths, precedence, validation | `docs/configuration.md`, `config/assessment_config.{yaml,json}` |
+| Controls (add/remove/rename, severity, disposition, pillar, methodology) | `docs/check-catalog.md`, `README.md` and `docs/README.md` counts, sample report + screenshots |
+| JSON/CSV/ASFF/HTML fields, filenames, diff output | `docs/report-formats.md`, `docs/user-guide.md` |
+| IAM actions the code calls | `iam_permissions.py`, `cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`, `docs/iam-policy-template.json` (kept identical by drift tests), `docs/user-guide.md#aws-access` |
+| S3 publishing, file permissions, escaping/CSP, logging, data written to reports | `docs/threat-model.md`, `README.md` (Security and privacy), `docs/user-guide.md` |
+| Parallelism, retries, timeouts, traversal bounds | `docs/performance-optimization.md`, `docs/configuration.md`, the bounds bullet in this file |
+| Error or log message text | `docs/troubleshooting.md` (quote the exact string users will see) |
+| Modules, scripts, tests, CI workflows, npm scripts | `docs/development-guide.md`, this file |
+
+**Rules:**
+
+- Verify against the code, not memory or older docs. Quote real error strings, real defaults, and real flag names; run `--help`, `--list-checks`, or `--show-config` when they answer the question.
+- Never document a protection the code does not enforce. Security and privacy claims (masking, ownership checks, encryption, file modes, rollback) must match the current code path exactly; when the code falls short, document the actual behavior and record the gap as a recommendation in `docs/threat-model.md`.
+- State numbers once and precisely: say whether a limit is a default (configurable) or a fixed constant, and its scope (per phone number, per instance, per run).
+- Keep the same fact identical everywhere it appears; when you change it in one doc, search the repo (`grep -rn`) for the old wording and fix every copy, including this file.
+- Documents under `docs/design/` are historical. Mark anything that no longer matches the code as legacy and point to the current source of truth rather than rewriting history.
+- Run `pytest tests/test_documentation_consistency.py --override-ini="addopts=" -q`. It enforces catalog counts, IAM artifacts, links and anchors, and required phrases; when a correct doc change breaks a required phrase, update the test in the same change.
+- End-user docs (`README.md`, `docs/user-guide.md`) stay task-focused; put maintainer detail in `docs/development-guide.md`.
 
 ## Code conventions
 
 - Python 3.12+. Ruff (lint + format, replaces black/isort/flake8), 100-char lines. mypy is configured with `disallow_untyped_defs`, but `ignore_errors = true` is currently set as a baseline.
 - Comments only when the WHY is non-obvious.
-- **Iterative algorithms only — no recursion** for graph traversal (Python stack limits). Traversal is bounded: `max_depth=50`, `max_paths_per_entry=200`, `MAX_TOTAL_PATHS=5000`.
+- **Iterative algorithms only — no recursion** for graph traversal (Python stack limits). Traversal is bounded: `max_depth=50` and `max_paths_per_entry=200` (defaults, configurable via `journey_map`), plus fixed `MAX_TOTAL_PATHS=5000` per instance and `MAX_STEPS_PER_ENTRY=100_000`.
 - Security-conscious: validate user-controlled identifiers against regex before use; subprocess calls use list form, never `shell=True`; `@@NAME@@` placeholder values are HTML-escaped during report shell substitution (except the explicitly raw asset placeholders), and report data reaches the page only as the escaped JSON data island rendered as text by the Cloudscape UI (the only injected HTML is XSS-safe server-rendered markdown); any future file-serving path should resolve paths and check `is_relative_to()` before serving.
 
 ## Working style preferences
@@ -82,5 +111,5 @@ Key modules:
 - Always run the Python test suite after code changes; set up the environment if deps are missing. Prefer end-to-end verification (run the pipeline with dummy data), not just unit tests.
 - After changing `frontend/`, run `npm audit --audit-level=high`, `npm test`, and `npm run check`, and include the rebuilt `templates/app/` bundle.
 - After creating or modifying any Python file, always run both `ruff check .` and `ruff format --check .` before reporting completion.
-- Update related documentation in the same pass as code changes.
+- Update related documentation in the same pass as code changes, following [Keeping documentation consistent](#keeping-documentation-consistent).
 - Concise communication: results first, details after.

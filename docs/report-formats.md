@@ -3,8 +3,9 @@
 The CLI writes reports to `output.directory`, which defaults to `./reports`.
 Filename templates are basenames; directory separators are rejected.
 
-All formats use the same 64-control catalog and emit canonical IDs only.
-Migration note: the legacy input aliases `journey-sec-001` and
+All formats use the same 64-control catalog and emit canonical IDs only
+(except the ASFF finding `Id`, which keeps the historical provider IDs; see
+[ASFF](#asff)). Migration note: the legacy input aliases `journey-sec-001` and
 `journey-cost-001` remain accepted for selection, but output uses
 `sec-flow-auth-001` and `cost-containment-001`.
 
@@ -16,8 +17,9 @@ amazon-connect-assessment \
   --output-format html json csv asff
 ```
 
-With the default filename template, the ASFF file ends in `_asff.json` so it
-does not overwrite the full-assessment JSON report from the same run.
+Regardless of filename template, the ASFF file ends in `_asff.json` (a
+trailing `.json` in the template is replaced) so it does not overwrite the
+full-assessment JSON report from the same run.
 
 ## Shared result model
 
@@ -59,6 +61,8 @@ bundle, fonts, report-data JSON, and Journey Map into one offline file. It inclu
 
 The JSON and CSV export actions remain explicitly labeled as full-assessment,
 all-instance exports. Print and PDF output follow the selected report scope.
+These in-browser exports use the report's own data shape and column set; use
+`--output-format json csv` for the JSON and CSV contracts documented below.
 
 The report distinguishes measured control failures from review candidates and
 inventory. It shows **Not scored** when the denominator is zero.
@@ -74,10 +78,11 @@ JSON is the complete machine-readable result. Top-level fields are:
 | `account_id` | AWS account assessed. |
 | `region` | AWS region assessed. |
 | `summary` | Status, disposition, and scored-control totals. |
+| `posture_roadmap` | Per-pillar scored-control posture keyed by pillar: `pillar`, `total_records`, `scored_control_numerator`, `scored_control_denominator`, `pass_rate`, `maturity_level`, and `improvement_actions`. |
 | `instances` | Assessed Amazon Connect Customer instance metadata. |
 | `findings` | Canonical control outcomes. |
-| `journey_map_entries` | Phone-number and flow diagram data for the HTML map. |
-| `journey_map_status` | Reason the Journey Map is empty, or `null`. |
+| `journey_map_entries` | Phone-number and flow diagram data for the HTML map. Entries contain the claimed phone number in full (not masked), along with its type, country code, and description. |
+| `journey_map_status` | Object with `reason` (slug), `message`, and `hint` explaining why the Journey Map is empty; `null` when entries exist or the map was not computed. |
 | `metadata` | Tool version and execution metadata. |
 | `execution_errors` | Errors retained while the assessment continued. |
 
@@ -100,10 +105,15 @@ The additive `summary` fields include `total_records`, `control_findings`,
 `manual_review_findings`, `informational_findings`,
 `manual_review_candidates`, `scored_control_passes`,
 `scored_control_failures`, `unevaluated_controls`,
-`not_applicable_controls`, `scored_control_numerator`,
-`scored_control_denominator`, and `scored_control_pass_rate`. The legacy
-`total_checks`, `registered_checks`, and `journey_findings` fields remain for
-backward compatibility; use the disposition-aware fields for posture reporting.
+`not_applicable_controls`, `manual_review_non_scoring_records`,
+`informational_non_scoring_records`, `not_applicable_records`,
+`scored_control_numerator`, `scored_control_denominator`, and
+`scored_control_pass_rate`. The legacy status and severity counters
+(`total_checks`, `passed_checks`, `failed_checks`, `error_checks`,
+`skipped_checks`, `not_applicable_checks`, `critical_findings`,
+`high_findings`, `medium_findings`, `low_findings`, `registered_checks`, and
+`journey_findings`) remain for backward compatibility; use the
+disposition-aware fields for posture reporting.
 
 ## CSV
 
@@ -149,6 +159,17 @@ catalogs still use canonical IDs. Journey aggregation can change resource
 identity from a phone number to an instance, so that migration is a new logical
 finding rather than an identity collision.
 
+## Diff output
+
+`--diff BASELINE_JSON` compares the current run against a previous JSON report
+and prints the result to the console. Failed `CONTROL` records and failed
+manual-review candidates are compared separately, each as resolved, new, and
+persistent. Informational records never participate in the diff. Records match
+by canonical control ID (legacy aliases in the baseline are resolved) and
+instance, falling back to resource ID for older reports without `instance_id`.
+To produce the comparison, `--diff` always writes a current JSON report to the
+output directory, even when `json` is not in `--output-format`.
+
 ## Custom report shell templates
 
 Maintainer integrations that construct `ReportGenerator(template_dir=...)` must
@@ -162,8 +183,9 @@ than rescanned.
 
 ## Filename templates
 
-The configured template may use `{timestamp}`, `{account_id}`, `{region}`, and
-`{assessment_id}`. For example:
+Set the template with `output.filename_template` or `--output-filename`. It
+may use `{timestamp}`, `{account_id}`, `{region}`, and `{assessment_id}`. For
+example:
 
 ```yaml
 output:

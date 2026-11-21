@@ -9,7 +9,7 @@ do not describe a current artifact or supported workflow.
 **Delivered artifacts:**
 - [`cloudformation/AmazonConnectSelfAssessmentPolicy.yaml`](../../../cloudformation/AmazonConnectSelfAssessmentPolicy.yaml)
 - Drift tests in [`tests/test_iam_policy_consistency.py`](../../../tests/test_iam_policy_consistency.py)
-- README's "Setting up AWS access" section
+- README "Quick start → 3. Grant read permissions" and [User Guide → AWS access](../../user-guide.md#aws-access)
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ do not describe a current artifact or supported workflow.
   - [Resources](#resources)
   - [Outputs](#outputs)
   - [Drift with `docs/iam-policy-template.json`](#drift-with-docsiam-policy-templatejson)
-  - [README changes](#readme-changes)
+  - [README changes (historical)](#readme-changes-historical)
 - [User workflow with the new template](#user-workflow-with-the-new-template)
 - [Alternatives considered](#alternatives-considered)
 - [Testing](#testing)
@@ -169,9 +169,13 @@ def test_self_assessment_policy_matches_canonical():
 
 The existing cfn-lint CI step already validates syntax; nothing new needed there.
 
-### README changes
+### README changes (historical)
 
-Replace the existing "Step 1 — Confirm your CLI access" IAM block in **Setting up AWS access → Option B: Self-assessment**:
+> Historical. The README section named below no longer exists; current setup
+> guidance is in README "Quick start → 3. Grant read permissions" and
+> [User Guide → AWS access](../../user-guide.md#aws-access).
+
+At the time of this spec, replace the existing "Step 1 — Confirm your CLI access" IAM block in **Setting up AWS access → Option B: Self-assessment**:
 
 **Before:**
 

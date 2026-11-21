@@ -60,6 +60,7 @@ source is maintained in this repository. When `frontend/` changes, run:
 ```bash
 cd frontend
 npm ci
+npm audit --audit-level=high
 npm test
 npm run build
 npm run check
@@ -92,16 +93,14 @@ pytest
 pytest tests/test_engine.py
 
 # Specific test
-pytest tests/test_engine.py::TestAssessmentEngine::test_run_assessment
-
-# By marker
-pytest -m unit
-pytest -m property
-pytest -m integration
+pytest tests/test_engine.py::TestAssessmentEngine::test_run_assessment_integration
 
 # Without coverage (faster)
 pytest --no-cov
 ```
+
+`pytest.ini` declares `unit`, `property`, and `integration` markers, but no
+tests apply them yet, so `pytest -m <marker>` currently selects nothing.
 
 Coverage gate is 65%. The htmlcov/ report is written after each run — open `htmlcov/index.html` to browse line-level coverage.
 
@@ -115,7 +114,7 @@ All of these run in CI on every push. Fix them locally before pushing:
 # Format (replaces black + isort)
 ruff format amazon_connect_assessment/ tests/
 
-# Lint + import order (replaces flake8 + isort; --fix auto-fixes)
+# Lint + import order (replaces flake8 + isort); add --fix to auto-fix
 ruff check amazon_connect_assessment/ tests/
 
 # Types
@@ -139,7 +138,8 @@ is skipped — run `pre-commit run` manually before committing.
 Standalone utilities in `scripts/` (run directly, not part of the installed package):
 
 ```bash
-# Benchmark sequential vs. parallel engine and demo parallel features
+# Benchmark sequential vs. parallel engine and demo parallel features.
+# Calls real AWS with your resolved credentials and registers only the 5 MVP checks.
 python scripts/performance_test.py
 
 # Pre-flight environment check (Python version, deps, imports, AWS credentials)
@@ -147,10 +147,6 @@ python scripts/validate_environment.py
 
 # Regenerate the deterministic report from all 64 canonical controls
 python scripts/generate_sample_report.py
-
-# Regenerate the local HTML copy of README.md (requires: pip install markdown;
-# docs/README.html is generated and is not a source document)
-python scripts/generate_readme_html.py
 ```
 
 Regenerate the README screenshots after changing the sample report in `examples/`:
@@ -257,7 +253,15 @@ function:
 from .my_checks import register_my_checks
 
 
-def register_all_checks(registry, pillars=None, skip_flow_analysis=False):
+def register_all_checks(
+    registry,
+    pillars=None,
+    severities=None,
+    check_ids=None,
+    exclude_check_ids=None,
+    skip_flow_analysis=False,
+    checks_config=None,
+):
     # Existing registrations...
     register_my_checks(registry)
 ```
@@ -268,7 +272,16 @@ def register_my_checks(registry):
 ```
 
 `AtomicControlRegistry.hydrate_base_checks()` verifies exact catalog coverage,
-pillar, severity, and executor identity. `CheckRegistry.get_selected_controls()`
+pillar, severity, and executor identity, and raises on any mismatch:
+
+- The executor's `pillar` and `severity` must equal the catalog record's pillar
+  and default severity.
+- The catalog `executor_key` must equal the executor's `module.ClassName`
+  (for example `amazon_connect_assessment.checks.my_checks.MyNewCheck`).
+- An executor whose control has `requires_flow_analysis=True` must be
+  registered only when `skip_flow_analysis` is false (inside the
+  `if not skip_flow_analysis:` block of `register_all_checks()`). Otherwise
+  `--skip-flow-analysis` fails with `BaseCheck/catalog coverage mismatch`. `CheckRegistry.get_selected_controls()`
 is the unified execution plan used by listing and filtering. Journey-backed
 controls use the same catalog but are emitted by
 `journey.journey_scorer.generate_journey_findings()`.
@@ -329,6 +342,10 @@ condition, and methodology. Do not use it to overwrite the curated catalog.
 Update `tests/test_documentation_consistency.py` when an approved catalog change
 alters the exact canonical IDs or totals. Regenerate the deterministic sample
 through `python scripts/generate_sample_report.py`; do not hand-edit the HTML.
+Then refresh the README screenshots with `python scripts/capture_screenshots.py`
+(see [Developer scripts](#developer-scripts)) and commit
+`examples/sample_assessment_report.html` and `docs/images/*.png` with the
+change.
 
 ---
 
@@ -340,6 +357,8 @@ amazon_connect_assessment/
 ├── engine.py                 # Orchestrates discovery → analysis → checks → results
 ├── parallel_engine.py        # Parallel execution (default, extends engine.py)
 ├── aws_client_factory.py     # boto3 session management, credential handling
+├── iam_permissions.py        # Canonical IAM action list (drift-tested against the policy templates)
+├── docs_generator.py         # DocsGenerator — derived catalogs from the selected-control view
 ├── models.py                 # Dataclasses: Finding, ConnectInstance, AssessmentResult, etc.
 ├── score_policy.py           # Shared disposition-aware scored-control policy
 ├── report_generator.py       # JSON/CSV plus self-contained Cloudscape HTML data contract
@@ -359,9 +378,14 @@ amazon_connect_assessment/
 │   ├── control_registry.py   # Immutable 64-control identity, disposition, and methodology catalog
 │   ├── registry.py           # BaseCheck executors plus unified selected-control view
 │   ├── registration.py       # register_all_checks() — central loader and AND-filtered selector
+│   ├── config.py             # Per-check configuration helpers
 │   ├── mvp_checks.py         # 5 original MVP checks + register_priority_checks()
+│   │                         #   (imports executors from security_checks.py and cost_optimization_checks.py)
 │   ├── security_checks.py / security_deep_checks.py / contact_flow_security_checks.py
-│   ├── ai_agent_security_checks.py
+│   ├── lex_security_checks.py
+│   ├── ai_agent_security_checks.py / ai_ops_maturity_checks.py
+│   ├── capacity_checks.py    # Quota headroom and 90-day growth
+│   ├── contact_flow_behavior_checks.py
 │   ├── acxd_checks.py          # Connect-side Agentic CX handoff, error-route, and escalation evidence
 │   ├── resilience_advanced_checks.py  # resilience_checks.py was removed — see its module docstring history
 │   ├── cost_optimization_checks.py / cost_intelligence_checks.py / cost_containment_checks.py
@@ -380,8 +404,14 @@ amazon_connect_assessment/
 │   ├── models.py             # PhoneNumberEntry, SuperGraph, JourneyPath, JourneyScore
 │   ├── topology.py           # Phone number → flow resolution, tier classification
 │   ├── super_graph.py        # Stitches flows at transfer edges into instance-wide graph
-│   ├── path_enumerator.py    # Bounded iterative DFS, 5000 paths per instance
-│   └── journey_scorer.py     # Security/CX/cost scoring per path + finding generation
+│   ├── path_enumerator.py    # Bounded iterative DFS: depth 50 and 200 paths per entry (defaults),
+│   │                         #   5,000 paths per instance and 100,000 steps per entry (constants)
+│   ├── journey_scorer.py     # Security/CX/cost scoring per path + finding generation
+│   ├── view_model.py         # Caller-focused projection of flow graphs for the Journey Map
+│   └── renderer.py           # Journey Map renderer plus SVG / draw.io exporters
+│
+├── cost/
+│   └── cost_estimator.py     # Cost estimates for cost-optimization findings
 │
 ├── report/
 │   ├── asff_export.py        # AWS Security Finding Format for Security Hub
@@ -482,11 +512,14 @@ JSON and CSV files likewise contain the complete CLI run result; an
 
 ## CI pipeline
 
-GitHub Actions runs on every push and PR to `main`:
+GitHub Actions runs on pushes to `main` and `develop` and on pull requests to
+`main`:
 
 - **Test** — pytest on Python 3.12
 - **Lint** — `ruff check` (lint + import order) and `ruff format --check`
 - **Type check** — mypy
+- **Report UI** — `npm ci`, `npm audit --audit-level=high`, `npm test`, and
+  `npm run check` (fails when the committed bundle is stale) on Node.js 20
 - **Security audit** — pip-audit on dependencies
 
 See `.github/workflows/ci.yml` for the full definition.

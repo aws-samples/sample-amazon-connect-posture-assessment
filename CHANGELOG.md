@@ -13,6 +13,16 @@ All notable changes to this project are documented in this file.
   extra) and runs the canonical sample-report check in-process instead of
   through `subprocess`, clearing Content Security Review scanner findings.
 
+### Documentation
+
+- Corrected documentation to match current behavior: the Caller Journey Map
+  carries claimed phone numbers in full; `--s3-output` always uploads with
+  SSE-S3, deletes a newly created bucket if hardening fails, and does not verify
+  bucket ownership; ASFF output uses the process umask; exit codes, region and
+  environment-variable precedence, S3 permissions, JSON fields, and diff output
+  are now documented accurately. `AGENTS.md` gains documentation-consistency
+  guidelines.
+
 ### Upgrade notes
 
 - The unified catalog now emits 64 canonical control outcomes. The only legacy
@@ -68,7 +78,7 @@ All notable changes to this project are documented in this file.
   remediation or review actions, and evidence, independent of table filters and
   pagination.
 - Journey analysis is bounded static enumeration: depth 50, 200 paths per phone
-  number, and 5,000 paths per run. Cycle edges are pruned without reducing
+  number, and 5,000 paths per instance. Cycle edges are pruned without reducing
   structural node reachability. Reached caps, dynamic targets, and unresolved
   cross-flow references retain partial evidence and mark analysis incomplete.
 - Assessment and finding timestamps use UTC across JSON, CSV, HTML, ASFF,
