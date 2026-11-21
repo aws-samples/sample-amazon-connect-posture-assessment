@@ -296,7 +296,7 @@ Use `python -m amazon_connect_assessment.cli --help` for the complete CLI refere
 including control selection, worker controls, retries, logging, checkpoints,
 configuration inspection, and report options.
 
-The catalog contains 64 canonical controls: 60 BaseCheck executors and 4
+The catalog contains 68 canonical controls: 64 BaseCheck executors and 4
 Journey-backed executors. `--pillars`, `--severity`, `--checks`,
 `--exclude-checks`, config enablement, and `--skip-flow-analysis` form one
 AND-filtered selection. Journey-backed controls appear in `--list-checks` with

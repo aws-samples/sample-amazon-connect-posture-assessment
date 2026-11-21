@@ -179,14 +179,14 @@ findings set.
 
 | Pillar | Canonical controls | Representative coverage |
 |---|---:|---|
-| Security | 19 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
+| Security | 23 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, identity and MFA, IP-based sign-in control, outbound-calling scope and destinations, toll-fraud cost alerting, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
 | Resilience | 18 | Global Resiliency posture, quota headroom and growth, CloudWatch alarms, Agentic CX error/idle-timeout routing, flow error handling, loop detection, Lambda dependencies, and structural journey dead ends |
 | Cost Optimization | 16 | Claimed-number inventory, self-service containment, callback and data-continuity review, idle configuration, operating hours, premium features, model cost, and phone-reachability scope |
 | Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Connect AI agents knowledge-base health, and Bedrock invocation logging |
 | Performance Efficiency | 3 | Route-aware Lambda inventory, sequential Lambda review, and flow-structure inventory |
 
-Every record has one of three dispositions: 23 `CONTROL`, 25 `MANUAL_REVIEW`,
-and 16 `INFORMATIONAL`. Only passed and failed `CONTROL` records enter the
+Every record has one of three dispositions: 23 `CONTROL`, 30 `MANUAL_REVIEW`,
+and 15 `INFORMATIONAL`. Only passed and failed `CONTROL` records enter the
 posture score.
 
 Run `amazon-connect-assessment --list-checks` for the live selection, or see the

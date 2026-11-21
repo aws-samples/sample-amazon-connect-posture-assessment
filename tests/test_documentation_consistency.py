@@ -370,3 +370,36 @@ def test_readme_reference_sections_live_in_their_owning_guides():
     assert "### pipx (recommended)" in user_guide
     assert "pipx ensurepath" in user_guide
     assert "raw.githubusercontent.com" in user_guide
+
+
+def test_prose_totals_in_every_doc_match_the_registry():
+    # Totals are quoted in the README, user guide, and catalog prose. Deriving
+    # them from the registry means a new control cannot leave any of them
+    # stale, which hand-pinned literals did (a docs PR added one that no test
+    # covered).
+    from collections import Counter
+
+    from amazon_connect_assessment.checks.control_registry import get_atomic_control_registry
+
+    registry = list(get_atomic_control_registry())
+    total = len(registry)
+    by_exec = Counter(c.execution_source for c in registry)
+    by_disp = Counter(c.disposition for c in registry)
+    base, journey = by_exec[ExecutionSource.BASE_CHECK], by_exec[ExecutionSource.JOURNEY]
+    control = by_disp[FindingDisposition.CONTROL]
+    manual = by_disp[FindingDisposition.MANUAL_REVIEW]
+    info = by_disp[FindingDisposition.INFORMATIONAL]
+    security = sum(1 for c in registry if c.pillar == Pillar.SECURITY)
+
+    readme = README_PATH.read_text(encoding="utf-8")
+    guide = USER_GUIDE_PATH.read_text(encoding="utf-8")
+    catalog = CATALOG_PATH.read_text(encoding="utf-8")
+
+    assert f"{control} `CONTROL`, {manual} `MANUAL_REVIEW`,\nand {info} `INFORMATIONAL`" in readme
+    assert f"| Security | {security} |" in readme
+    assert f"**{total} canonical controls**" in readme
+    assert f"{total} canonical controls: {base} BaseCheck executors" in guide
+    assert f"**{total} canonical controls**" in catalog
+    assert f"{control} `CONTROL`, {manual} `MANUAL_REVIEW`, and {info} `INFORMATIONAL`" in catalog
+    assert f"Security {security}," in catalog
+    assert journey == 4
