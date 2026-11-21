@@ -9,90 +9,17 @@ when you walk a real incident against it.
 
 ---
 
-## A. Agent-initiated outbound toll fraud
+## A. Agent-initiated outbound toll fraud — open follow-up
 
-Source: a post-incident walkthrough of a real toll-fraud case. The attack chain
-was: Connect-managed password with no MFA → sign-in from an arbitrary location →
-authenticated CCP session → agent-initiated outbound dialing → premium-rate
-international destinations → ten days before anyone noticed.
-
-**Status: A1–A5 are done in PR #23; A6 is open.** The controls are
-`sec-federation-001` (A1, now failable), `sec-ip-access-001` (A2),
-`sec-outbound-scope-001` (A3), `sec-outbound-dest-001` (A4, reviews observed
-destinations because the AWS-managed allowlist is unreadable), and
-`sec-fraud-alerting-001` (A5). The analysis below is kept as the record of
-why each exists.
-
-**None of the 64 controls would have caught it.** Audited 2026-11-18; the
-findings below were verified against the current code, not assumed.
-
-### A1. `sec-federation-001` cannot fail (highest value, smallest change)
-
-[`security_deep_checks.py:1272`](../../amazon_connect_assessment/checks/security_deep_checks.py)
-
-This is the control closest to the root cause. It reads
-`IdentityManagementType` correctly, but it is `Severity.LOW` /
-informational and **both** branches `return CheckStatus.PASS` — the
-non-SAML path emits a PASS whose description just asks the reader to verify MFA
-themselves. On the incident account it would have sat in the report as a passing
-informational record.
-
-Connect-managed identity with no evidence of an external MFA layer is a real
-finding, not inventory. Promote to High / Manual Review and have the non-SAML
-branch return something other than PASS. Registry entry to update in parallel:
-[`control_registry.py:442`](../../amazon_connect_assessment/checks/control_registry.py)
-(`Severity.LOW`, disposition `_I`).
-
-### A2. No check for IP-based access control
-
-The customer in the incident had explicitly asked AWS to enable IP-based
-restrictions — which means it was absent, and that they now consider it the
-load-bearing control. Nothing in the catalog looks at it.
-
-Note that `sec-origins-001` is **not** this control despite "Access Control" in
-its name: it checks CCP *embedding* origins for wildcards.
-
-### A3. No visibility into who can dial out
-
-`sec-profile-audit-001` is High / Manual Review, but its `_ADMIN_PERMISSIONS`
-set is only `Users.*`, `SecurityProfiles.*`, `InstanceSettings.Edit`
-([`security_deep_checks.py:1323`](../../amazon_connect_assessment/checks/security_deep_checks.py)).
-Outbound-calling permission is not in it, so the compromised agent's profile
-would not have registered.
-
-Inventory security profiles that grant outbound calling and flag broad
-assignment. Today the only outbound signal anywhere in the codebase is
-instance-level `OutboundCallsEnabled`.
-
-### A4. No check for outbound destination restriction
-
-Country or premium-rate prefix allowlisting. **Scope this one only after
-confirming what Connect actually exposes via API for agent-initiated outbound** —
-it may not be assessable, in which case it belongs in guidance rather than as a
-check.
-
-### A5. No detection control for outbound cost/destination anomaly
-
-The ten-day dwell time was the expensive part of the incident, and nothing in
-the catalog looks for it.
-
-`res-cloudwatch-001` is the closest and may well have failed on this account,
-but it would not have helped: it requires alarms on `ConcurrentCalls`,
-`ThrottledCalls`, `MissedCalls`, `CallsPerInterval`, none of which move
-meaningfully for low-volume premium-rate dialing.
+Found by walking a real toll-fraud incident against the catalog. The controls
+that cover the attack chain itself live in the catalog; this is the one gap
+that remains.
 
 ### A6. Dormant *instances* are not flagged
 
 The incident account had a second, older Connect instance in the same Region.
 If an instance like that still has enabled users with outbound access, it is
 unmonitored attack surface. `journey-scope-001` covers dormant *flows* only.
-
-### Also worth knowing
-
-`sec-toll-fraud-001` is Critical / Manual Review and its name matches this
-incident, but it is scoped to **contact flow** transfer blocks with JSONPath
-destinations — i.e. caller-driven IVR fraud. This was an authenticated agent
-dialing out. Right name, wrong vector; don't assume it covers this.
 
 ---
 
@@ -149,10 +76,8 @@ remains is listed under "Open" below.
 
 ## Notes for whoever picks these up
 
-- **Do not put customer identifiers in this repo.** The incident behind
-  section A has been genericized deliberately — no account names, instance
+- **Do not put customer identifiers in this repo.** Incident-derived items
+  here have been genericized deliberately — no account names, instance
   aliases, user names or dollar amounts. This repository is public.
-- `connect:GetMetricDataV2` is already in the IAM policy template, so B's
-  groundwork needed no permission change. A2–A5 likely will.
-- Section A items are catalog changes and will need `docs/check-catalog.md`
-  updates; `tests/test_documentation_consistency.py` enforces that consistency.
+- Catalog changes need `docs/check-catalog.md` updates;
+  `tests/test_documentation_consistency.py` enforces that consistency.
