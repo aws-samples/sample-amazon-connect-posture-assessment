@@ -52,6 +52,10 @@ EXPECTED_IDS_BY_PILLAR = {
         "sec-cloudtrail-001",
         "sec-federation-001",
         "sec-profile-audit-001",
+        "sec-ip-access-001",
+        "sec-outbound-scope-001",
+        "sec-outbound-dest-001",
+        "sec-fraud-alerting-001",
         "ai-ops-guardrail-001",
         "ai-ops-encryption-001",
         "sec-lex-convlogs-001",
@@ -120,10 +124,10 @@ EXPECTED_IDS_BY_PILLAR = {
 }
 EXPECTED_DISPOSITIONS = {
     FindingDisposition.CONTROL: 23,
-    FindingDisposition.MANUAL_REVIEW: 25,
-    FindingDisposition.INFORMATIONAL: 16,
+    FindingDisposition.MANUAL_REVIEW: 30,
+    FindingDisposition.INFORMATIONAL: 15,
 }
-EXPECTED_EXECUTORS = {ExecutionSource.BASE_CHECK: 60, ExecutionSource.JOURNEY: 4}
+EXPECTED_EXECUTORS = {ExecutionSource.BASE_CHECK: 64, ExecutionSource.JOURNEY: 4}
 PILLAR_HEADINGS = {
     Pillar.SECURITY: "Security",
     Pillar.RESILIENCE: "Resilience",
@@ -145,7 +149,7 @@ def test_documentation_catalog_lists_exact_canonical_control_inventory():
     runtime_ids = [control.control_id for control in catalog_registry]
 
     # Assert
-    assert len(expected_ids) == 64
+    assert len(expected_ids) == 68
     assert Counter(runtime_ids) == Counter(expected_ids)
     assert Counter(documented_ids) == Counter(expected_ids)
     assert LEGACY_ALIASES.isdisjoint(documented_ids)
@@ -176,10 +180,10 @@ def test_documentation_catalog_matches_pillar_disposition_and_executor_totals():
     assert runtime_executors == EXPECTED_EXECUTORS
     assert documented_dispositions == {
         "control": 23,
-        "manual_review": 25,
-        "informational": 16,
+        "manual_review": 30,
+        "informational": 15,
     }
-    assert documented_executors == {"BaseCheck": 60, "Journey": 4}
+    assert documented_executors == {"BaseCheck": 64, "Journey": 4}
     for pillar, count in expected_pillar_counts.items():
         assert f"### {PILLAR_HEADINGS[pillar]} — {count} controls" in catalog
 
@@ -187,8 +191,8 @@ def test_documentation_catalog_matches_pillar_disposition_and_executor_totals():
 def test_current_methodology_docs_describe_unified_scoring_and_output_contracts():
     # Arrange
     required_phrases = {
-        "64 canonical controls",
-        "60 BaseCheck",
+        "68 canonical controls",
+        "64 BaseCheck",
         "4 Journey",
         "scored-control denominator",
         "MANUAL_REVIEW",
@@ -350,13 +354,13 @@ def test_readme_reference_sections_live_in_their_owning_guides():
 
     # Act
     generative_ai_section = catalog.split("## Generative AI coverage", 1)[1].split("\n## ", 1)[0]
-    journey_section = user_guide.split("### Caller Journey Map", 1)[1].split("\n### ", 1)[0]
+    journey_section = user_guide.split("### Customer Journey Map", 1)[1].split("\n### ", 1)[0]
 
     # Assert
     assert "## Generative AI coverage" not in readme
-    assert "## Caller Journey Map" not in readme
+    assert "## Customer Journey Map" not in readme
     assert "docs/check-catalog.md#generative-ai-coverage" in readme
-    assert "docs/user-guide.md#caller-journey-map" in readme
+    assert "docs/user-guide.md#customer-journey-map" in readme
     assert "docs/user-guide.md#installation" in readme
     assert "docs/user-guide.md#aws-access" in readme
     for control_id in GENERATIVE_AI_CONTROL_IDS:
@@ -366,3 +370,36 @@ def test_readme_reference_sections_live_in_their_owning_guides():
     assert "### pipx (recommended)" in user_guide
     assert "pipx ensurepath" in user_guide
     assert "raw.githubusercontent.com" in user_guide
+
+
+def test_prose_totals_in_every_doc_match_the_registry():
+    # Totals are quoted in the README, user guide, and catalog prose. Deriving
+    # them from the registry means a new control cannot leave any of them
+    # stale, which hand-pinned literals did (a docs PR added one that no test
+    # covered).
+    from collections import Counter
+
+    from amazon_connect_assessment.checks.control_registry import get_atomic_control_registry
+
+    registry = list(get_atomic_control_registry())
+    total = len(registry)
+    by_exec = Counter(c.execution_source for c in registry)
+    by_disp = Counter(c.disposition for c in registry)
+    base, journey = by_exec[ExecutionSource.BASE_CHECK], by_exec[ExecutionSource.JOURNEY]
+    control = by_disp[FindingDisposition.CONTROL]
+    manual = by_disp[FindingDisposition.MANUAL_REVIEW]
+    info = by_disp[FindingDisposition.INFORMATIONAL]
+    security = sum(1 for c in registry if c.pillar == Pillar.SECURITY)
+
+    readme = README_PATH.read_text(encoding="utf-8")
+    guide = USER_GUIDE_PATH.read_text(encoding="utf-8")
+    catalog = CATALOG_PATH.read_text(encoding="utf-8")
+
+    assert f"{control} `CONTROL`, {manual} `MANUAL_REVIEW`,\nand {info} `INFORMATIONAL`" in readme
+    assert f"| Security | {security} |" in readme
+    assert f"**{total} canonical controls**" in readme
+    assert f"{total} canonical controls: {base} BaseCheck executors" in guide
+    assert f"**{total} canonical controls**" in catalog
+    assert f"{control} `CONTROL`, {manual} `MANUAL_REVIEW`, and {info} `INFORMATIONAL`" in catalog
+    assert f"Security {security}," in catalog
+    assert journey == 4

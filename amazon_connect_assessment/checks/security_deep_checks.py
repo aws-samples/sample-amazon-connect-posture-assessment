@@ -1269,53 +1269,191 @@ class CloudTrailIntegrationCheck(BaseCheck):
         )
 
 
+_FRAUD_PREVENTION_REF = RemediationReference(
+    title="Service controls and fraud prevention in Amazon Connect",
+    url="https://docs.aws.amazon.com/connect/latest/adminguide/fraud-prevention.html",
+)
+_IDENTITY_PLANNING_REF = RemediationReference(
+    title="Plan your identity management in Amazon Connect",
+    url="https://docs.aws.amazon.com/connect/latest/adminguide/connect-identity-management.html",
+)
+
+
 class IdentityFederationCheck(BaseCheck):
-    """Assess identity management strength (Requirement 11)."""
+    """Assess whether agent sign-in has a centrally enforceable MFA path (Requirement 11).
+
+    Outcome per ``IdentityManagementType``:
+
+    * ``SAML`` — PASS. MFA is enforced at the IdP.
+    * ``EXISTING_DIRECTORY`` — FAIL (Manual Review, MEDIUM). MFA is possible through
+      RADIUS on the AWS Directory Service directory, but the Connect API does
+      not show whether it is enabled.
+    * ``CONNECT_MANAGED`` — FAIL (Manual Review). Connect-specific user names
+      and passwords; Connect's agent MFA options (SAML IdP, RADIUS-backed
+      directory) do not apply. This is the entry
+      condition for agent-credential compromise and agent-initiated outbound
+      toll fraud.
+    * missing or unrecognized — SKIPPED. An unobserved value is not evidence
+      of weak identity; reporting it as a HIGH Connect-managed finding would
+      be a false positive (matches ``res-acgr-identity-001``).
+
+    FAIL here carries the MANUAL_REVIEW disposition: identity type cannot
+    prove MFA is absent, only that the instance does not evidence it. Manual
+    reviews are non-scoring and are not exported to Security Hub (ASFF
+    exports failed CONTROL records only).
+    """
 
     def __init__(self):
         super().__init__(
             check_id="sec-federation-001",
             name="Identity Federation / MFA Check",
             pillar=Pillar.SECURITY,
-            severity=Severity.LOW,
+            severity=Severity.HIGH,
             description=(
-                "Reports the instance's identity management type so you can "
-                "confirm centralized authentication and MFA are enforced "
-                "somewhere in the sign-in path — either via SAML federation "
-                "to your enterprise IdP, or via Connect-managed identity "
-                "combined with your own SSO/MFA layer (e.g. Okta, Entra ID) "
-                "in front of it."
+                "Checks whether agent sign-in has a centrally enforceable MFA path. "
+                "SAML federation enforces MFA at your IdP. Directory-backed and "
+                "Connect-managed identity are raised for manual review, because the "
+                "instance configuration cannot show whether MFA protects agent sign-in."
             ),
         )
 
     def execute(self, context: CheckContext):
         instance = context.instance
-        idm = (instance.identity_management_type or "").upper()
-        evidence = {"identity_management_type": idm}
+        raw = instance.identity_management_type
+        idm = (raw or "").upper()
+        # Record the value exactly as returned (None stays null, case is kept)
+        # so an auditor can tell "not returned" from "returned empty".
+        evidence = {"identity_management_type": raw}
+        common = {
+            "resource_id": instance.instance_id,
+            "resource_type": "ConnectInstance",
+            "evidence": evidence,
+            "context": context,
+        }
 
         if idm == "SAML":
             return self.create_finding(
                 status=CheckStatus.PASS,
-                resource_id=instance.instance_id,
-                resource_type="ConnectInstance",
                 description=(
                     f"Instance {instance.display_name} uses SAML federation, enabling "
                     "centralized authentication and MFA enforcement at the IdP."
                 ),
-                evidence=evidence,
+                **common,
+            )
+
+        if idm == "EXISTING_DIRECTORY":
+            # MEDIUM, not HIGH: a directory-backed instance has an MFA path
+            # (RADIUS on the directory) that is merely unverified here, unlike
+            # Connect-managed identity, which has none.
+            return self.create_finding(
+                status=CheckStatus.FAIL,
+                severity=Severity.MEDIUM,
+                description=(
+                    f"Instance {instance.display_name} authenticates agents against an "
+                    "existing directory through AWS Directory Service. MFA can be enforced "
+                    "there with a RADIUS server, but the Connect configuration does not show "
+                    "whether it is. Without it, a directory password alone signs an agent in. "
+                    "Confirm RADIUS MFA is enabled on the linked directory and record it as "
+                    "the governing identity control."
+                ),
+                structured_remediation=Remediation(
+                    summary="Confirm or enable RADIUS MFA on the linked directory.",
+                    target_resources=[instance.instance_id],
+                    steps=[
+                        RemediationStep(
+                            order=1,
+                            instruction=(
+                                "In AWS Directory Service, open the directory linked to this "
+                                "instance and check whether multi-factor authentication is "
+                                "enabled against a RADIUS server."
+                            ),
+                            console_path=(
+                                "Directory Service -> Directories -> (directory) -> "
+                                "Networking & security -> Multi-factor authentication"
+                            ),
+                        ),
+                        RemediationStep(
+                            order=2,
+                            instruction=(
+                                "If MFA is not enabled, configure RADIUS MFA on the directory "
+                                "and test that agent sign-in prompts for the second factor."
+                            ),
+                        ),
+                        RemediationStep(
+                            order=3,
+                            instruction=(
+                                "Test break-glass administrator access, and confirm a "
+                                "password-only sign-in is rejected."
+                            ),
+                        ),
+                    ],
+                    references=[_FRAUD_PREVENTION_REF, _IDENTITY_PLANNING_REF],
+                ),
+                **common,
+            )
+
+        if idm == "CONNECT_MANAGED":
+            return self.create_finding(
+                status=CheckStatus.FAIL,
+                description=(
+                    f"Instance {instance.display_name} uses Connect-managed identity: agents "
+                    "sign in with a Connect-specific user name and password. Connect's MFA options "
+                    "for agent sign-in are a SAML identity provider or a RADIUS-backed "
+                    "directory, and neither applies here. A phished or reused password is "
+                    "therefore "
+                    "enough to open an agent session, which is how agent credentials get used "
+                    "for outbound toll fraud. Confirm whether any external control protects "
+                    "agent sign-in; if none does, apply compensating controls now and plan "
+                    "SAML federation, which requires a new instance."
+                ),
+                structured_remediation=Remediation(
+                    summary=(
+                        "Confirm agent sign-in protection; add compensating controls and plan "
+                        "SAML federation."
+                    ),
+                    target_resources=[instance.instance_id],
+                    steps=[
+                        RemediationStep(
+                            order=1,
+                            instruction=(
+                                "Confirm whether any control outside Connect protects agent "
+                                "sign-in, such as access only through a managed, "
+                                "MFA-protected workstation or network. If one does, record "
+                                "it as the governing identity control."
+                            ),
+                        ),
+                        RemediationStep(
+                            order=2,
+                            instruction=(
+                                "If none does, apply compensating controls now: restrict "
+                                "sign-in to approved IP ranges, limit outbound-calling "
+                                "permission to the security profiles that need it, and alert "
+                                "on unusual outbound destinations or volume."
+                            ),
+                        ),
+                        RemediationStep(
+                            order=3,
+                            instruction=(
+                                "Plan SAML 2.0 federation so MFA is enforced at your IdP. "
+                                "Identity management cannot be changed on an existing "
+                                "instance, so this means creating a new SAML instance and "
+                                "migrating configuration, numbers and users to it."
+                            ),
+                        ),
+                    ],
+                    references=[_FRAUD_PREVENTION_REF, _IDENTITY_PLANNING_REF],
+                ),
+                **common,
             )
 
         return self.create_finding(
-            status=CheckStatus.PASS,
-            resource_id=instance.instance_id,
-            resource_type="ConnectInstance",
+            status=CheckStatus.SKIPPED,
             description=(
-                f"Instance {instance.display_name} reports '{idm or 'unknown'}' identity "
-                "management. This inventory does not establish whether MFA or "
-                "centralized lifecycle controls are enforced. Verify the actual sign-in "
-                "path, identity-provider or native MFA policy, and break-glass access."
+                f"Skipped: instance {instance.display_name} did not report a recognized "
+                f"identity management type ({idm or 'none returned'}), so the sign-in MFA "
+                "path cannot be evaluated."
             ),
-            evidence=evidence,
+            **{**common, "evidence": {**evidence, "evidence_complete": False}},
         )
 
 

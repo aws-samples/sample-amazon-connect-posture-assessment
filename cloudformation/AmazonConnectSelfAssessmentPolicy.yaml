@@ -266,6 +266,15 @@ Resources:
               # Used by res-acgr-traffic-dist-001 to inspect the region split.
               - connect:GetTrafficDistribution
               - connect:ListSecurityProfilePermissions
+              # Toll-fraud controls: authentication profiles (IP-based access
+              # control), user-to-security-profile mapping, and recent outbound
+              # contact records. Dialed numbers are reduced to their country
+              # calling code in memory and never stored or reported.
+              - connect:ListAuthenticationProfiles
+              - connect:DescribeAuthenticationProfile
+              - connect:SearchUsers
+              - connect:SearchContacts
+              - connect:DescribeContact
               - connect:ListApprovedOrigins
               - connect:ListPhoneNumbersV2
               - connect:ListContactFlowModules
@@ -278,6 +287,9 @@ Resources:
               # to, for the Caller Journey Map. ListPhoneNumbersV2's
               # TargetArn is the instance/TDG ARN, not the flow ARN.
               - connect:ListFlowAssociations
+              # Labels inbound email entry points (email address ARN ->
+              # address) for the customer journey map.
+              - connect:SearchEmailAddresses
               # Discovers the Connect AI agent resources associated with the
               # instance for the AI operations maturity checks.
               - connect:ListIntegrationAssociations
@@ -322,6 +334,16 @@ Resources:
               - servicequotas:GetAWSDefaultServiceQuota
             # Service Quotas read APIs are scoped by service code rather than
             # by resource ARN, so '*' is the only value IAM accepts.
+            Resource: '*'
+          - Sid: CostAlertingReadAccess
+            Effect: Allow
+            Action:
+              # sec-fraud-alerting-001: is abnormal Amazon Connect spend alerted
+              # on within a day?
+              - ce:GetAnomalyMonitors
+              - ce:GetAnomalySubscriptions
+              - budgets:ViewBudget
+            # Account-scoped read APIs; '*' is required.
             Resource: '*'
 
   AmazonConnectAssessmentGroup:

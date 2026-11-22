@@ -63,7 +63,6 @@ _EFFORT_MAP_HIGH = {
 _EFFORT_MAP_LOW = {
     "ops-logging-001",
     "sec-origins-001",
-    "sec-federation-001",
     "ops-early-media-001",
 }
 

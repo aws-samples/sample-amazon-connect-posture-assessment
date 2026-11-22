@@ -1,10 +1,12 @@
 """
-Journey scoring — evaluates each caller path for security, containment,
-resilience, and CX maturity gaps.
+Journey scoring — evaluates each customer path for security, containment,
+resilience, and CX maturity gaps, using the rules of the channel the path
+entered on (see :mod:`journey.channels`).
 """
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional
+from collections import Counter
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..models import CheckStatus, Finding, Remediation
 from ..parsers.flow_patterns import (
@@ -12,7 +14,8 @@ from ..parsers.flow_patterns import (
     PERSONALIZATION_INDICATORS,
     SELF_SERVICE_ACTION_TYPES,
 )
-from .models import JourneyMapResult, JourneyNode, JourneyPath, JourneyScore
+from .channels import rules_for
+from .models import CHANNELS, JourneyMapResult, JourneyNode, JourneyPath, JourneyScore
 
 logger = logging.getLogger("journey.scorer")
 
@@ -35,6 +38,62 @@ def _mask_number(number: str) -> str:
     return f"***-***-{''.join(digits[-4:])}"
 
 
+# Entry types whose identifier is not a phone number. Every other type is a
+# number: voice numbers come in every ListPhoneNumbersV2 PhoneNumberType
+# (DID, TOLL_FREE, UIFN, SHARED, THIRD_PARTY_DID, THIRD_PARTY_TF, SHORT_CODE, ...),
+# so phone-ness is defined by exclusion rather than an allow list that would
+# silently drop new or less common number types.
+_NON_PHONE_ENTRY_TYPES = {"EMAIL_ADDRESS", "OBSERVED_FLOW"}
+# Messaging entries whose number was not claimed in Connect carry their
+# resource ID instead ("sms:<id>"); that is not a number and must not be
+# masked as one.
+_UNRESOLVED_PREFIXES = ("sms:", "whatsapp:", "email:")
+
+
+def _is_phone_entry(entry_type: str, identifier: str) -> bool:
+    return entry_type not in _NON_PHONE_ENTRY_TYPES and not (identifier or "").startswith(
+        _UNRESOLVED_PREFIXES
+    )
+
+
+def _mask_email(address: str) -> str:
+    """``jane@example.com`` -> ``j***@example.com``."""
+    local, _, domain = (address or "").partition("@")
+    if not domain:
+        return "***"
+    return f"{local[:1]}***@{domain}"
+
+
+def _mask_entry(entry_type: str, identifier: str) -> str:
+    """Mask an entry identifier for report evidence.
+
+    Phone numbers keep their last 4 digits and email addresses their domain.
+    Observed entry flows are labelled by flow name, and unresolved messaging
+    or email entries by resource ID; neither is customer data.
+    """
+    if entry_type == "OBSERVED_FLOW":
+        return identifier
+    if (identifier or "").startswith(_UNRESOLVED_PREFIXES):
+        return identifier
+    if entry_type == "EMAIL_ADDRESS":
+        return _mask_email(identifier)
+    return _mask_number(identifier)
+
+
+def _entry_ref(path: JourneyPath) -> Dict[str, str]:
+    return {
+        "channel": path.entry_channel,
+        "entry_type": path.entry_type,
+        "entry": _mask_entry(path.entry_type, path.entry_identifier),
+    }
+
+
+def _channel_breakdown(channels: Iterable[str]) -> str:
+    """``VOICE 2, CHAT 1`` in canonical channel order."""
+    counts = Counter(channels)
+    return ", ".join(f"{c} {counts[c]}" for c in CHANNELS if counts.get(c))
+
+
 def score_journeys(journeys: List[JourneyPath], config: Dict[str, Any]) -> Dict[str, JourneyScore]:
     """Score each journey path; return results keyed by path_hash."""
     scores: Dict[str, JourneyScore] = {}
@@ -44,12 +103,18 @@ def score_journeys(journeys: List[JourneyPath], config: Dict[str, Any]) -> Dict[
 
 
 def _score_single_path(path: JourneyPath) -> JourneyScore:
-    """Score a single journey path across all dimensions."""
-    score = JourneyScore()
+    """Score a single journey path with its channel's rules."""
+    rules = rules_for(path.entry_channel)
+    score = JourneyScore(channel=path.entry_channel)
 
     for i, node in enumerate(path.nodes):
-        # Security: authentication
-        if not score.has_authentication and _matches_indicators(node, AUTHENTICATION_INDICATORS):
+        # Security: authentication. Besides the keyword indicators, any
+        # dedicated authentication action counts — e.g. the chat
+        # "Authenticate Customer" block (Cognito-backed customer auth).
+        if not score.has_authentication and (
+            _matches_indicators(node, AUTHENTICATION_INDICATORS)
+            or "authenticat" in node.action_type.lower()
+        ):
             score.has_authentication = True
             score.auth_position = i
 
@@ -74,7 +139,7 @@ def _score_single_path(path: JourneyPath) -> JourneyScore:
         ):
             score.has_nlu_bot = True
 
-        # Returning caller detection
+        # Returning customer detection
         if not score.has_returning_caller_detection:
             if node.action_type in (
                 "CheckContactAttributes",
@@ -85,32 +150,34 @@ def _score_single_path(path: JourneyPath) -> JourneyScore:
                 if any(h in blob for h in _RETURNING_HINTS):
                     score.has_returning_caller_detection = True
 
-        # Dynamic prompt
+        # Dynamic prompt / message
         if not score.has_dynamic_prompt:
             if node.action_type in ("MessageParticipant", "PlayPrompt"):
                 text = str(node.parameters.get("Text", ""))
                 if "$." in text:
                     score.has_dynamic_prompt = True
 
-    # CX maturity
-    cx = score.cx_feature_count
-    if cx >= 4:
-        score.cx_maturity = "Advanced"
-    elif cx >= 2:
-        score.cx_maturity = "Intermediate"
-    else:
-        score.cx_maturity = "Basic"
+    # CX maturity, counted over the features meaningful on this channel.
+    score.cx_maturity = rules.maturity(score.cx_feature_count)
 
-    # Deficiencies
-    if not score.has_authentication and path.terminal_type == "agent_queue":
+    # Deficiencies — only for rules that apply on this channel.
+    if (
+        rules.authentication
+        and not score.has_authentication
+        and path.terminal_type == "agent_queue"
+    ):
         score.deficiencies.append("🔓 No authentication before agent queue")
-    if not score.has_self_service:
+    if rules.self_service and not score.has_self_service:
         score.deficiencies.append("💰 No self-service automation")
-    if not score.has_callback_offering and path.terminal_type == "agent_queue":
+    if rules.callback and not score.has_callback_offering and path.terminal_type == "agent_queue":
         score.deficiencies.append("📞 No callback offering before queue")
     if not score.has_personalization:
         score.deficiencies.append("👤 No personalization")
-    if path.terminal_type == "disconnect" and path.terminal_details.get("reason") == "dead_end":
+    if (
+        rules.dead_end
+        and path.terminal_type == "disconnect"
+        and path.terminal_details.get("reason") == "dead_end"
+    ):
         score.deficiencies.append("⚠️ Dead-end disconnect")
 
     return score
@@ -148,12 +215,15 @@ def _selected_journey_ids(selected_control_ids: Optional[Iterable[str]]) -> List
 
 
 def _representative_path(path: JourneyPath) -> Dict[str, Any]:
-    return {
-        "phone_number": _mask_number(path.entry_number),
+    rep: Dict[str, Any] = {
+        **_entry_ref(path),
         "flows": path.flows_traversed,
         "terminal_type": path.terminal_type,
         "terminal_details": path.terminal_details,
     }
+    if _is_phone_entry(path.entry_type, path.entry_identifier):
+        rep["phone_number"] = rep["entry"]
+    return rep
 
 
 def _canonical_finding(
@@ -193,13 +263,91 @@ def _no_candidate_status(result: JourneyMapResult) -> CheckStatus:
 
 
 def _coverage_evidence(result: JourneyMapResult) -> Dict[str, Any]:
-    numbers = sorted({_mask_number(path.entry_number) for path in result.journeys})
+    voice_numbers = sorted(
+        {
+            _mask_number(path.entry_identifier)
+            for path in result.journeys
+            if path.entry_channel == "VOICE"
+            and _is_phone_entry(path.entry_type, path.entry_identifier)
+        }
+    )
+    entries = sorted(
+        {tuple(_entry_ref(path).values()) for path in result.journeys},
+        key=lambda ref: (CHANNELS.index(ref[0]) if ref[0] in CHANNELS else 9, ref[1], ref[2]),
+    )
     return {
-        "evaluated_phone_numbers": numbers,
+        "evaluated_phone_numbers": voice_numbers,
+        "evaluated_entry_points": [
+            {"channel": c, "entry_type": t, "entry": i} for c, t, i in entries
+        ],
         "journey_count": len(result.journeys),
+        "journeys_by_channel": {
+            c: n for c, n in Counter(p.entry_channel for p in result.journeys).items()
+        },
         "enumeration_complete": result.enumeration_complete,
         "enumeration_limitations": result.enumeration_limitations,
+        "channel_coverage": result.channel_coverage,
+        "entry_discovery_limitations": result.entry_discovery_limitations,
     }
+
+
+def _rule_scope(
+    result: JourneyMapResult, rule: str
+) -> Tuple[List[str], Dict[str, str], List[JourneyPath], bool]:
+    """Channels a rule covers, channels it excludes (with why), its paths, completeness."""
+    seen = {p.entry_channel for p in result.journeys} | set(result.channel_coverage)
+    ordered = [c for c in CHANNELS if c in seen]
+    in_scope = [c for c in ordered if rules_for(c).applies(rule)]
+    excluded = {
+        c: rules_for(c).not_applicable.get(rule, "")
+        for c in ordered
+        if not rules_for(c).applies(rule)
+    }
+    paths = [p for p in result.journeys if rules_for(p.entry_channel).applies(rule)]
+    if in_scope:
+        complete = all(result.channel_complete(c) for c in in_scope)
+    else:
+        complete = result.enumeration_complete
+    return in_scope, excluded, paths, complete
+
+
+def _excluded_note(excluded: Dict[str, str]) -> str:
+    if not excluded:
+        return ""
+    parts = [f"{channel} ({reason})" if reason else channel for channel, reason in excluded.items()]
+    return " Not evaluated for " + "; ".join(parts) + "."
+
+
+def _affected_refs(paths: List[JourneyPath]) -> List[Dict[str, str]]:
+    seen: Dict[str, Dict[str, str]] = {}
+    for path in paths:
+        seen.setdefault(path.entry_key, _entry_ref(path))
+    return [seen[key] for key in sorted(seen)]
+
+
+def _representatives(paths: List[JourneyPath]) -> List[Dict[str, Any]]:
+    first: Dict[str, JourneyPath] = {}
+    for path in paths:
+        first.setdefault(path.entry_key, path)
+    return [_representative_path(first[key]) for key in sorted(first)]
+
+
+def _affected_phone_numbers(paths: List[JourneyPath]) -> List[str]:
+    return sorted(
+        {
+            _mask_number(p.entry_identifier)
+            for p in paths
+            if _is_phone_entry(p.entry_type, p.entry_identifier)
+        }
+    )
+
+
+# Which channel rule each path-based Journey control evaluates.
+_CONTROL_RULE = {
+    "sec-flow-auth-001": "authentication",
+    "cost-containment-001": "self_service",
+    "journey-res-001": "dead_end",
+}
 
 
 def generate_journey_findings(
@@ -224,9 +372,6 @@ def generate_journey_findings(
         ]
 
     findings: List[Finding] = []
-    paths_by_number: Dict[str, List[JourneyPath]] = {}
-    for path in result.journeys:
-        paths_by_number.setdefault(path.entry_number, []).append(path)
 
     for control_id in selected_ids:
         coverage = _coverage_evidence(result)
@@ -244,11 +389,11 @@ def generate_journey_findings(
                         instance_id,
                         status,
                         (
-                            "No parsed flow inventory was available for a phone-reachability "
-                            "review."
+                            "No parsed flow inventory was available for an entry-point "
+                            "reachability review."
                             if result.enumeration_complete
-                            else "Flow inventory coverage was incomplete, so phone-reachability "
-                            "scope could not be fully evaluated."
+                            else "Flow inventory coverage was incomplete, so entry-point "
+                            "reachability could not be fully evaluated."
                         ),
                         "Provide readable contact flow inventory and rerun the assessment.",
                         {
@@ -263,13 +408,65 @@ def generate_journey_findings(
                 )
                 continue
             dormant_flows = sorted(result.dormant_flows)
-            status = CheckStatus.FAIL if dormant_flows else _no_candidate_status(result)
-            description = (
-                f"{len(dormant_flows)} flow(s) are outside the discovered phone-anchored "
-                "static closure and require an ownership and usage review."
-                if dormant_flows
-                else "All parsed flows are in the discovered phone-anchored static closure."
+            # Tier 2 is always queue, hold, whisper, or transfer flows: any
+            # entry-capable flow with observed traffic either is reachable on
+            # that channel or becomes an observed entry (tier 1). They run
+            # inside other contacts' journeys rather than starting one, so
+            # they are listed, and they cannot make this control fail.
+            traffic_flows = sorted(result.traffic_observed_flows)
+            discovery_gaps = list(result.discovery_incomplete_channels)
+            usage_known = result.usage_metrics_status == "complete"
+            window = result.usage_window_days
+            if dormant_flows:
+                status = CheckStatus.FAIL
+            elif discovery_gaps:
+                # A failed association or phone-number lookup leaves flows
+                # unreachable that really are entry flows, so "no dormant
+                # flows" cannot be trusted.
+                status = CheckStatus.SKIPPED
+            else:
+                status = _no_candidate_status(result)
+            gap_text = (
+                f"entry-point discovery failed for {', '.join(discovery_gaps)}"
+                f" ({'; '.join(result.entry_discovery_limitations)})"
             )
+            if dormant_flows and usage_known:
+                description = (
+                    f"{len(dormant_flows)} flow(s) are not reachable from any entry point "
+                    "(phone, SMS, WhatsApp, email, or an observed entry flow) and started no "
+                    f"contacts in the last {window} days, so they require an ownership and "
+                    "usage review."
+                )
+            elif dormant_flows:
+                description = (
+                    f"{len(dormant_flows)} flow(s) are not reachable from any discovered entry "
+                    "point and require an ownership and usage review. Usage metrics were "
+                    "unavailable, so flows started only by web chat, tasks, or the API, and "
+                    "queue or whisper flows, may be included."
+                )
+            elif discovery_gaps:
+                description = (
+                    f"No dormant flow was found, but {gap_text}. Reachability, and every "
+                    "dormant or in-use label, is unreliable until discovery succeeds."
+                )
+            elif traffic_flows:
+                description = "No dormant flows."
+            else:
+                description = "Every parsed flow is reachable from a discovered entry point."
+            if dormant_flows and discovery_gaps:
+                description += f" Because {gap_text}, some of these flows may be reachable."
+            if traffic_flows:
+                description += (
+                    f" {len(traffic_flows)} in-use flow(s) are queue, hold, whisper, or transfer "
+                    "flows: they run inside other contacts' journeys rather than starting one, "
+                    "so they are listed here rather than enumerated as journeys."
+                )
+            traffic_flow_set = set(traffic_flows)
+            channel_mix_by_flow = {
+                t.flow_id: t.channel_mix
+                for t in result.tier_assignments
+                if t.flow_id in traffic_flow_set
+            }
             findings.append(
                 _canonical_finding(
                     control_id,
@@ -282,35 +479,51 @@ def generate_journey_findings(
                         **coverage,
                         "dormant_flow_count": len(dormant_flows),
                         "dormant_flow_ids": dormant_flows,
+                        "traffic_observed_flow_count": len(traffic_flows),
+                        "traffic_observed_flow_ids": traffic_flows,
+                        "traffic_observed_channel_mix": channel_mix_by_flow,
+                        "usage_metrics_status": result.usage_metrics_status,
+                        "usage_window_days": window if usage_known else None,
+                        "discovery_incomplete_channels": discovery_gaps,
                         "dynamic_reference_count": len(result.dynamic_edges),
                     },
                 )
             )
             continue
 
-        if not result.journeys:
-            incomplete = not result.enumeration_complete
+        rule = _CONTROL_RULE.get(control_id)
+        if rule is None:
+            continue
+        in_scope, excluded, paths, complete = _rule_scope(result, rule)
+        scope_evidence = {
+            **coverage,
+            "evaluated_channels": in_scope,
+            "excluded_channels": excluded,
+        }
+        note = _excluded_note(excluded)
+        pass_or_skip = CheckStatus.PASS if complete else CheckStatus.SKIPPED
+
+        if not paths:
             findings.append(
                 _canonical_finding(
                     control_id,
                     instance_id,
-                    CheckStatus.SKIPPED if incomplete else CheckStatus.NOT_APPLICABLE,
+                    CheckStatus.NOT_APPLICABLE if complete else CheckStatus.SKIPPED,
                     (
-                        "Journey coverage was incomplete, so this control could not be fully "
-                        "evaluated."
-                        if incomplete
-                        else "No phone-number journeys made this control applicable."
-                    ),
-                    "Resolve traversal limitations and rerun the assessment."
-                    if incomplete
-                    else "Associate an inbound phone number with a readable contact flow to "
-                    "evaluate it.",
+                        "No entry-point journeys made this control applicable."
+                        if complete
+                        else "Journey coverage was incomplete, so this control could not be "
+                        "fully evaluated."
+                    )
+                    + note,
+                    "Associate a phone number, messaging number, or email address with a "
+                    "readable contact flow to evaluate it."
+                    if complete
+                    else "Resolve traversal limitations and rerun the assessment.",
                     {
-                        **coverage,
+                        **scope_evidence,
                         "reason": (
-                            "incomplete_journey_coverage"
-                            if incomplete
-                            else "no_phone_number_journeys"
+                            "no_entry_point_journeys" if complete else "incomplete_journey_coverage"
                         ),
                     },
                 )
@@ -320,105 +533,97 @@ def generate_journey_findings(
         if control_id == "sec-flow-auth-001":
             candidates = [
                 path
-                for path in result.journeys
+                for path in paths
                 if path.terminal_type == "agent_queue"
                 and not result.scores.get(path.path_hash, JourneyScore()).has_authentication
             ]
-            affected_numbers = sorted({_mask_number(path.entry_number) for path in candidates})
-            status = CheckStatus.FAIL if candidates else _no_candidate_status(result)
-            evidence = {
-                **coverage,
-                "affected_phone_numbers": affected_numbers,
-                "candidate_path_count": len(candidates),
-                "representative_paths": [
-                    _representative_path(paths[0])
-                    for _, paths in sorted(
-                        {
-                            number: [path for path in candidates if path.entry_number == number]
-                            for number in {path.entry_number for path in candidates}
-                        }.items()
-                    )
-                ],
-            }
-            description = (
-                (
-                    f"{len(candidates)} agent-queue path(s) across {len(affected_numbers)} inbound "
-                    "phone number(s) have no recognized authentication step. This is called out "
-                    "because those routes may reach staff who can access or change "
-                    "customer-specific information before caller identity is established. If a "
-                    "destination handles sensitive requests, a missing verified gate can increase "
-                    "unauthorized disclosure or account-change risk; queue sensitivity and "
-                    "agent-side verification still require review."
+            affected = _affected_refs(candidates)
+            status = CheckStatus.FAIL if candidates else pass_or_skip
+            if candidates:
+                description = (
+                    f"{len(candidates)} agent-queue path(s) across {len(affected)} entry "
+                    f"point(s) ({_channel_breakdown(a['channel'] for a in affected)}) have no "
+                    "recognized authentication step. This is called out because those routes "
+                    "may reach staff who can access or change customer-specific information "
+                    "before the customer's identity is established. If a destination handles "
+                    "sensitive requests, a missing verified gate can increase unauthorized "
+                    "disclosure or account-change risk; queue sensitivity and agent-side "
+                    "verification still require review."
                 )
-                if candidates
-                else (
+            elif complete:
+                description = (
                     "No enumerated agent-queue path lacks a recognized authentication step. This "
-                    "matters because sensitive queues should not be reachable before caller "
-                    "identity is established where authentication is required; static recognition "
-                    "still does not prove that authentication is effective."
-                    if result.enumeration_complete
-                    else "No candidate was found, but bounded path enumeration was incomplete. "
-                    "Unexamined paths may still reach sensitive queues before caller identity is "
-                    "established, so this result cannot close the authentication review."
+                    "matters because sensitive queues should not be reachable before customer "
+                    "identity is established where authentication is required; static "
+                    "recognition still does not prove that authentication is effective."
                 )
-            )
+            else:
+                description = (
+                    "No candidate was found, but bounded path enumeration was incomplete. "
+                    "Unexamined paths may still reach sensitive queues before customer identity "
+                    "is established, so this result cannot close the authentication review."
+                )
             findings.append(
                 _canonical_finding(
                     control_id,
                     instance_id,
                     status,
-                    description,
+                    description + note,
                     "Classify queue sensitivity and add tested fail-closed authentication before "
                     "agent transfer where required.",
-                    evidence,
+                    {
+                        **scope_evidence,
+                        "affected_phone_numbers": _affected_phone_numbers(candidates),
+                        "affected_entry_points": affected,
+                        "candidate_path_count": len(candidates),
+                        "representative_paths": _representatives(candidates),
+                    },
                 )
             )
             continue
 
         if control_id == "cost-containment-001":
-            affected_paths_by_number: Dict[str, List[JourneyPath]] = {}
-            for number, number_paths in paths_by_number.items():
-                agent_paths = [path for path in number_paths if path.terminal_type == "agent_queue"]
+            by_entry: Dict[str, List[JourneyPath]] = {}
+            for path in paths:
+                by_entry.setdefault(path.entry_key, []).append(path)
+            affected_paths = []
+            for key in sorted(by_entry):
+                agent_paths = [p for p in by_entry[key] if p.terminal_type == "agent_queue"]
                 if agent_paths and all(
-                    not result.scores.get(path.path_hash, JourneyScore()).has_self_service
-                    for path in agent_paths
+                    not result.scores.get(p.path_hash, JourneyScore()).has_self_service
+                    for p in agent_paths
                 ):
-                    affected_paths_by_number[number] = agent_paths
-            affected_paths = [
-                path
-                for number in sorted(affected_paths_by_number)
-                for path in affected_paths_by_number[number]
-            ]
-            affected_numbers = sorted({_mask_number(number) for number in affected_paths_by_number})
-            status = CheckStatus.FAIL if affected_paths else _no_candidate_status(result)
-            evidence = {
-                **coverage,
-                "affected_phone_numbers": affected_numbers,
-                "candidate_path_count": len(affected_paths),
-                "representative_paths": [
-                    _representative_path(affected_paths_by_number[number][0])
-                    for number in sorted(affected_paths_by_number)
-                ],
-            }
-            description = (
-                f"{len(affected_numbers)} inbound phone number(s) have agent-bound journeys "
-                "without recognized menu/input, Lambda lookup, or Lex self-service."
-                if affected_paths
-                else (
-                    "Every evaluated agent-bound journey includes recognized self-service."
-                    if result.enumeration_complete
-                    else "No candidate was found, but bounded path enumeration was incomplete."
+                    affected_paths.extend(agent_paths)
+            affected = _affected_refs(affected_paths)
+            status = CheckStatus.FAIL if affected_paths else pass_or_skip
+            if affected_paths:
+                description = (
+                    f"{len(affected)} entry point(s) "
+                    f"({_channel_breakdown(a['channel'] for a in affected)}) have agent-bound "
+                    "journeys without recognized menu/input, Lambda lookup, or bot "
+                    "self-service."
                 )
-            )
+            elif complete:
+                description = (
+                    "Every evaluated agent-bound journey includes recognized self-service."
+                )
+            else:
+                description = "No candidate was found, but bounded path enumeration was incomplete."
             findings.append(
                 _canonical_finding(
                     control_id,
                     instance_id,
                     status,
-                    description,
-                    "Validate a suitable DTMF, Lambda, or Lex resolution opportunity with "
-                    "production demand and fallback testing.",
-                    evidence,
+                    description + note,
+                    "Validate a suitable DTMF, chat input, Lambda, or Lex resolution opportunity "
+                    "with production demand and fallback testing.",
+                    {
+                        **scope_evidence,
+                        "affected_phone_numbers": _affected_phone_numbers(affected_paths),
+                        "affected_entry_points": affected,
+                        "candidate_path_count": len(affected_paths),
+                        "representative_paths": _representatives(affected_paths),
+                    },
                 )
             )
             continue
@@ -426,45 +631,36 @@ def generate_journey_findings(
         if control_id == "journey-res-001":
             candidates = [
                 path
-                for path in result.journeys
+                for path in paths
                 if path.terminal_type == "disconnect"
                 and path.terminal_details.get("reason") == "dead_end"
             ]
-            affected_numbers = sorted({_mask_number(path.entry_number) for path in candidates})
-            status = CheckStatus.FAIL if candidates else _no_candidate_status(result)
-            evidence = {
-                **coverage,
-                "affected_phone_numbers": affected_numbers,
-                "dead_end_path_count": len(candidates),
-                "representative_paths": [
-                    _representative_path(paths[0])
-                    for _, paths in sorted(
-                        {
-                            number: [path for path in candidates if path.entry_number == number]
-                            for number in {path.entry_number for path in candidates}
-                        }.items()
-                    )
-                ],
-            }
-            description = (
-                f"{len(candidates)} structural dead-end path(s) affect "
-                f"{len(affected_numbers)} inbound phone number(s)."
-                if candidates
-                else (
-                    "No structural dead-end path was found in complete enumeration."
-                    if result.enumeration_complete
-                    else "No dead end was found, but bounded path enumeration was incomplete."
+            affected = _affected_refs(candidates)
+            status = CheckStatus.FAIL if candidates else pass_or_skip
+            if candidates:
+                description = (
+                    f"{len(candidates)} structural dead-end path(s) affect {len(affected)} entry "
+                    f"point(s) ({_channel_breakdown(a['channel'] for a in affected)})."
                 )
-            )
+            elif complete:
+                description = "No structural dead-end path was found in complete enumeration."
+            else:
+                description = "No dead end was found, but bounded path enumeration was incomplete."
             findings.append(
                 _canonical_finding(
                     control_id,
                     instance_id,
                     status,
-                    description,
-                    "Trace each recorded path and add a caller-safe terminal outcome or document "
-                    "the intended behavior.",
-                    evidence,
+                    description + note,
+                    "Trace each recorded path and add a customer-safe terminal outcome or "
+                    "document the intended behavior.",
+                    {
+                        **scope_evidence,
+                        "affected_phone_numbers": _affected_phone_numbers(candidates),
+                        "affected_entry_points": affected,
+                        "dead_end_path_count": len(candidates),
+                        "representative_paths": _representatives(candidates),
+                    },
                 )
             )
 

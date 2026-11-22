@@ -440,20 +440,22 @@ _CONTROLS = (
     ),
     _control(
         "sec-federation-001",
-        "connect.identity_management_type.inventory",
+        "connect.identity_management_type.mfa_administration_unproven",
         "Identity Federation / MFA Check",
         _S,
-        Severity.LOW,
-        _I,
+        Severity.HIGH,
+        _M,
         _methodology(
-            "Identity-management type is useful context for deciding where agent MFA and lifecycle controls must be administered.",
-            "Connect DescribeInstance reports IdentityManagementType.",
-            "The value cannot prove MFA enforcement, IdP availability, conditional access, native-identity controls, or a successful sign-in path.",
-            "This is identity architecture inventory; SAML and Connect-managed identities can both be viable with external MFA controls.",
-            "Review the actual IdP or native sign-in policy, test MFA and break-glass access, and record the governing identity control.",
+            "Without SAML federation, agent sign-in has no MFA path the instance can evidence: Connect-managed accounts use Connect-specific passwords, and directory-backed accounts rely on RADIUS MFA configured outside Connect. That is the entry condition for agent-credential compromise and agent-initiated outbound toll fraud.",
+            "Connect DescribeInstance reports IdentityManagementType. A missing or unrecognized value is reported as SKIPPED, never guessed.",
+            "The value cannot prove MFA enforcement, RADIUS configuration, IdP availability, conditional access, or a successful sign-in path. It equally cannot prove their absence, which is why this is a manual review rather than a control failure.",
+            "SAML federation places MFA at the IdP, where it is centrally enforceable and auditable. EXISTING_DIRECTORY can enforce MFA through RADIUS on the AWS Directory Service directory. CONNECT_MANAGED has neither, and identity management cannot be changed on an existing instance, so moving to SAML means a new instance; compensating controls (IP restrictions, scoped outbound-calling permission, outbound alerting) apply in the meantime.",
+            "Confirm the MFA control that actually protects agent sign-in (IdP policy, directory RADIUS MFA, or an external control), test MFA and break-glass access, and record where it is administered so the next assessment does not re-litigate it.",
         ),
         _base_executor("security_deep_checks", "IdentityFederationCheck"),
         False,
+        # MEDIUM for EXISTING_DIRECTORY (MFA possible, unverified); HIGH otherwise.
+        dynamic_severity=True,
     ),
     _control(
         "sec-profile-audit-001",
@@ -471,6 +473,77 @@ _CONTROLS = (
         ),
         _base_executor("security_deep_checks", "SecurityProfileAuditCheck"),
         False,
+    ),
+    _control(
+        "sec-ip-access-001",
+        "connect.authentication_profile.ip_allow_list_absent",
+        "IP-Based Access Control for Agent Sign-In",
+        _S,
+        Severity.HIGH,
+        _M,
+        _methodology(
+            "Without an IP allow list, a stolen or phished agent password can open a CCP session from any network, which is how agent credentials become an outbound toll-fraud path.",
+            "Connect ListAuthenticationProfiles and DescribeAuthenticationProfile report allowed and blocked IP ranges per profile; an InvalidRequestException stating the account is not allowed to use the feature means authentication profiles are not enabled for the account. AWS documents the default profile as applying to all users, and the API exposes no profile-to-user assignment, so a pass requires every profile to carry an allow list.",
+            "Network conditions enforced by a SAML identity provider, VDI, or VPN are not visible here, and the IP ranges themselves are not evaluated for breadth.",
+            "A failure means Connect itself does not restrict where agents sign in from. Severity is MEDIUM when outbound calling is disabled and HIGH otherwise, including when the setting is not reported.",
+            "Confirm the networks agents legitimately use, add them as allowed ranges on the default authentication profile, restrict the emergency admin login with an IAM SourceIp condition, and verify a sign-in from an unlisted network is rejected.",
+        ),
+        _base_executor("telephony_fraud_checks", "IpAccessControlCheck"),
+        False,
+        dynamic_severity=True,
+    ),
+    _control(
+        "sec-outbound-scope-001",
+        "connect.security_profile.outbound_calling_broadly_granted",
+        "Outbound Calling Permission Scope",
+        _S,
+        Severity.MEDIUM,
+        _M,
+        _methodology(
+            "Every user who can place outbound calls is an account a stolen password can turn into toll fraud, so the permission should be held only by agents with an outbound role.",
+            "Connect ListSecurityProfilePermissions identifies profiles granting OutboundCallAccess (CCP 'Make outbound calls'); SearchUsers maps users to those profiles.",
+            "Business need is not visible: an outbound-heavy contact center can legitimately grant most users the permission. The 50 percent threshold indicates the default-on Agent grant has not been scoped.",
+            "A failure means most users can dial out, typically because Connect's default Agent profile includes the permission. It is not applicable when outbound calling is disabled, and SKIPPED when the setting is not reported.",
+            "Confirm which roles need outbound calling, move the permission to a dedicated profile assigned only to them, and review that assignment regularly.",
+        ),
+        _base_executor("telephony_fraud_checks", "OutboundPermissionScopeCheck"),
+        False,
+    ),
+    _control(
+        "sec-outbound-dest-001",
+        "connect.contact.outbound_destination_unexpected",
+        "Outbound Call Destination Review",
+        _S,
+        Severity.HIGH,
+        _M,
+        _methodology(
+            "Toll fraud shows up as outbound calls or external transfers to countries the business does not serve, to Caribbean NANP area codes that look domestic under +1, or to premium-rate and satellite codes; the outbound country allowlist is AWS-managed and cannot be read through the API, so observed destinations are the available evidence.",
+            "Connect SearchContacts (VOICE; OUTBOUND, CALLBACK, API, and EXTERNAL_OUTBOUND initiation; last 14 days, most recent first) and DescribeContact CustomerEndpoint, plus ListQuickConnects/DescribeQuickConnect phone-number quick connects, reduced in memory to E.164 country calling codes (with +1 split into US/Canada and each Caribbean/Atlantic NANP member) and compared with those of the instance's own numbers. TRANSFER contacts are excluded: their endpoint is the original caller, not a destination.",
+            "Only the 100 most recent outbound calls are sampled, so older or low-volume fraud can be missed; an unreadable sampled contact or phone-number quick connect yields SKIPPED unless a flagged destination was already found; numbers are never stored or reported, only per-code counts; legitimate international business looks the same as fraud.",
+            "A failure is direct evidence of calls to a high-risk non-geographic code (HIGH) or to a country where the instance holds no number (MEDIUM); someone must confirm each was legitimate.",
+            "Trace the flagged calls to agents, callbacks, or API callers; revoke and rotate credentials behind any illegitimate ones; and ask AWS Support to remove uncalled countries from the outbound allowlist.",
+        ),
+        _base_executor("telephony_fraud_checks", "OutboundDestinationCheck"),
+        False,
+        dynamic_severity=True,
+    ),
+    _control(
+        "sec-fraud-alerting-001",
+        "account.cost_anomaly.connect_alerting_untimely",
+        "Toll-Fraud Cost Alerting",
+        _S,
+        Severity.HIGH,
+        _M,
+        _methodology(
+            "The cost of toll fraud grows with how long it runs unnoticed, so abnormal Amazon Connect spend should alert someone within a day.",
+            "Cost Explorer GetAnomalyMonitors and GetAnomalySubscriptions identify monitors covering Amazon Connect and their alert frequency and thresholds; Budgets DescribeBudgets (CostFilters or FilterExpression) and DescribeBudgetNotificationsForAccount identify Connect budgets that actually notify someone.",
+            "Monitors and budgets in an AWS Organizations management account, and third-party cost tooling, are not visible from a member account; alert thresholds are recorded but not judged; any unreadable source yields SKIPPED rather than a claimed absence. Both services are partition-global (us-east-1, or cn-northwest-1 in China) and absent from AWS GovCloud (US), where the control is SKIPPED because billing lives in the associated standard account.",
+            "A failure means no timely cost signal covers Connect: HIGH when nothing covers it, MEDIUM when alerts are weekly-only or no subscription is attached.",
+            "Attach an IMMEDIATE or DAILY Cost Anomaly Detection subscription to a monitor covering Amazon Connect, add a Connect-filtered AWS Budget, and confirm the alert recipients are monitored.",
+        ),
+        _base_executor("telephony_fraud_checks", "FraudCostAlertingCheck"),
+        False,
+        dynamic_severity=True,
     ),
     _control(
         "cost-usage-metrics-001",
@@ -1044,8 +1117,8 @@ _CONTROLS = (
         Severity.HIGH,
         _M,
         _methodology(
-            "Phone-reachable agent routes without effective automation are candidates for a business-specific containment opportunity review.",
-            "Phone associations, stitched flow topology, bounded caller paths, and recognized DTMF, Lambda, Lex, or Agentic CX actions identify routes without self-service.",
+            "Agent-bound voice and chat routes without effective automation are candidates for a business-specific containment opportunity review.",
+            "Entry points on every channel, stitched flow topology, bounded customer paths, and recognized DTMF or chat input, Lambda, Lex, or Agentic CX actions identify routes without self-service. Email and task journeys are excluded and named in the finding, because neither can prompt the customer for input.",
             "Path enumeration is bounded and static analysis cannot prove intent suitability, production volume, successful containment, or savings.",
             "The result asks flow owners to investigate viable automation; it is not a failed cost control or a guaranteed deflection benefit.",
             "Trace each material inbound queue route, validate a real Lex, Agentic CX, DTMF, or Lambda resolution opportunity with production volume, and test success/fallback outcomes.",
@@ -1165,11 +1238,14 @@ _CONTROLS = (
         Severity.LOW,
         _M,
         _methodology(
-            "Agent-bound caller routes need an authentication review when their destination "
-            "supports sensitive account operations because an unverified caller may obtain "
-            "protected information or request unauthorized changes.",
-            "Phone associations, stitched flow topology, and bounded path evidence identify queue "
-            "routes without recognized authentication indicators.",
+            "Agent-bound voice and chat routes need an authentication review when their "
+            "destination supports sensitive account operations because an unverified customer may "
+            "obtain protected information or request unauthorized changes.",
+            "Entry points on every channel (voice, SMS, and WhatsApp numbers, email addresses, and "
+            "traffic-observed entry flows), stitched flow topology, and bounded path evidence "
+            "identify queue routes without recognized authentication indicators. Email and task "
+            "journeys are excluded and named in the finding: neither has an interactive step in "
+            "which an unverified customer could be authenticated.",
             "Hints do not prove successful fail-closed authentication, queue sensitivity, complete "
             "path enumeration, or dynamic cross-flow targets.",
             "A finding means a route may reach an agent without a recognized gate. If the queue "
@@ -1362,8 +1438,8 @@ _CONTROLS = (
         Severity.HIGH,
         _C,
         _methodology(
-            "A phone-anchored path that reaches an unrecognized successorless action has no modeled route to a supported caller outcome.",
-            "Connect phone-number/flow associations, parsed flows, static cross-flow stitching, and bounded iterative path enumeration identify disconnect/dead_end terminals.",
+            "A path from any entry point that reaches an unrecognized successorless action has no modeled route to a supported customer outcome; on email and task channels that silently drops the contact.",
+            "Entry points on every channel (phone, SMS, WhatsApp, email, and traffic-observed entry flows), parsed flows, static cross-flow stitching, and bounded iterative path enumeration identify disconnect/dead_end terminals.",
             "Explicit DisconnectParticipant is not this predicate; dynamic transfers, parse/API gaps, cycles, depth limits, and path caps can hide paths, so missing findings cannot prove absence.",
             "A finding is direct evidence of one enumerated structural sink; the flow owner must still decide whether the outcome is intentional.",
             "Trace each recorded path in the current published flow, add a caller-safe terminal or document intent, and rerun with complete uncapped discovery.",
@@ -1380,10 +1456,10 @@ _CONTROLS = (
         Severity.LOW,
         _M,
         _methodology(
-            "Flows outside the discovered phone-anchored static closure are candidates for ownership and usage review.",
-            "Connect ListPhoneNumbersV2/ListFlowAssociations plus static flow/module transfer resolution classify non-reachable parsed flows.",
-            "No traffic metric or Tier 2 classification is implemented; dynamic references, non-phone entry points, seasonal/test/DR use, and fail-open API gaps can create false dormant labels.",
-            "The result means not statically phone-reachable, never proven unused or safe to delete.",
+            "Flows not reachable from any discovered entry point, and not observed starting contacts, are candidates for ownership and usage review.",
+            "Connect ListPhoneNumbersV2/ListFlowAssociations (voice, SMS, WhatsApp, inbound email) plus static flow/module transfer resolution classify non-reachable parsed flows; GetMetricDataV2 FLOWS_STARTED by flow and channel adds observed entry flows and separates in-use queue/whisper flows from dormant ones.",
+            "Usage is observed only over a lookback window under 35 days, so seasonal, test, and DR flows can still look dormant; without GetMetricDataV2 access the labels are reachability-only, and dynamic references and fail-open API gaps can also create false dormant labels. In-use flows that are not reachable from an entry point are reported but not enumerated as journeys.",
+            "The result means not reachable from a discovered entry point and not observed in use, never proven unused or safe to delete.",
             "Complete association discovery and inspect static/dynamic references, all channels, logs, CTRs, metrics, ownership, and seasonal/DR plans before cleanup.",
         ),
         _JOURNEY_EXECUTOR_KEY,

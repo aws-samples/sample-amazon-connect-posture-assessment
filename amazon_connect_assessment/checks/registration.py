@@ -148,9 +148,11 @@ def register_all_checks(
     from .performance_efficiency_checks import register_performance_efficiency_checks
     from .resilience_advanced_checks import register_advanced_resilience_checks
     from .security_deep_checks import register_security_deep_checks
+    from .telephony_fraud_checks import register_telephony_fraud_checks
 
     register_mvp_checks(registry)
     register_security_deep_checks(registry)
+    register_telephony_fraud_checks(registry)
     register_cost_intelligence_checks(registry)
     register_operational_excellence_checks(registry)
     register_ai_ops_maturity_checks(registry)

@@ -46,11 +46,11 @@ def test_sample_result_contains_each_canonical_control_once_per_instance():
         ids_by_instance[finding.instance_id].append(finding.check_id)
 
     # Assert
-    assert len(canonical_ids) == 64
+    assert len(canonical_ids) == 68
     assert set(ids_by_instance) == {instance.instance_id for instance in result.instances}
     for instance_ids in ids_by_instance.values():
         assert Counter(instance_ids) == Counter(canonical_ids)
-    assert len(result.findings) == 64 * len(result.instances)
+    assert len(result.findings) == 68 * len(result.instances)
     assert "journey-sec-001" not in {finding.check_id for finding in result.findings}
     assert "journey-cost-001" not in {finding.check_id for finding in result.findings}
     structure_findings = [

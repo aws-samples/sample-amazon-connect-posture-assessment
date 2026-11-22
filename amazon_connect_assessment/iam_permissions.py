@@ -245,6 +245,17 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             # Used by res-acgr-traffic-dist-001 to inspect the region split.
             "connect:GetTrafficDistribution",
             "connect:ListSecurityProfilePermissions",
+            # Toll-fraud controls (sec-ip-access-001, sec-outbound-scope-001,
+            # sec-outbound-dest-001). Authentication profiles carry the
+            # instance's IP-based access control; SearchUsers maps users to
+            # security profiles. SearchContacts/DescribeContact read recent
+            # outbound contact records: dialed numbers are reduced to their
+            # country calling code in memory and never stored or reported.
+            "connect:ListAuthenticationProfiles",
+            "connect:DescribeAuthenticationProfile",
+            "connect:SearchUsers",
+            "connect:SearchContacts",
+            "connect:DescribeContact",
             "connect:ListApprovedOrigins",
             "connect:ListPhoneNumbersV2",
             "connect:ListContactFlowModules",
@@ -256,6 +267,11 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
             # claimed to, not the flow it's assigned to in the console —
             # ListFlowAssociations is the API that reflects that field.
             "connect:ListFlowAssociations",
+            # Resolves inbound email address ARNs (from ListFlowAssociations
+            # INBOUND_EMAIL) to addresses, so email entry points in the
+            # customer journey map are labelled. Optional: without it email
+            # entries are still mapped, labelled by address ID.
+            "connect:SearchEmailAddresses",
             # Discovers Connect AI agent assistant and knowledge-base integrations
             # for the instance-level AI operations maturity checks.
             "connect:ListIntegrationAssociations",
@@ -309,6 +325,19 @@ POLICY_STATEMENTS: List[Dict[str, object]] = [
         ],
         # "*": Service Quotas read APIs are scoped by service code, not by a
         # resource ARN, so "*" is the only value IAM accepts. Read-only.
+        "*",
+    ),
+    _statement(
+        "CostAlertingReadAccess",
+        [
+            # sec-fraud-alerting-001: would a fraud-driven spike in Amazon
+            # Connect spend alert anyone? Read once per account per run.
+            "ce:GetAnomalyMonitors",
+            "ce:GetAnomalySubscriptions",
+            "budgets:ViewBudget",
+        ],
+        # "*": Cost Explorer anomaly and Budgets read APIs are account-scoped
+        # and do not accept narrower resource ARNs for these actions. Read-only.
         "*",
     ),
 ]

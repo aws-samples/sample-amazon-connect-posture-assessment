@@ -162,12 +162,18 @@
                 "connect:DescribeTrafficDistributionGroup",
                 "connect:GetTrafficDistribution",
                 "connect:ListSecurityProfilePermissions",
+                "connect:ListAuthenticationProfiles",
+                "connect:DescribeAuthenticationProfile",
+                "connect:SearchUsers",
+                "connect:SearchContacts",
+                "connect:DescribeContact",
                 "connect:ListApprovedOrigins",
                 "connect:ListPhoneNumbersV2",
                 "connect:ListContactFlowModules",
                 "connect:DescribeContactFlowModule",
                 "connect:DescribeInstanceAttribute",
                 "connect:ListFlowAssociations",
+                "connect:SearchEmailAddresses",
                 "connect:ListIntegrationAssociations"
             ],
             "Resource": "*"
@@ -202,6 +208,16 @@
                 "servicequotas:GetServiceQuota",
                 "servicequotas:ListAWSDefaultServiceQuotas",
                 "servicequotas:GetAWSDefaultServiceQuota"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "CostAlertingReadAccess",
+            "Effect": "Allow",
+            "Action": [
+                "ce:GetAnomalyMonitors",
+                "ce:GetAnomalySubscriptions",
+                "budgets:ViewBudget"
             ],
             "Resource": "*"
         }

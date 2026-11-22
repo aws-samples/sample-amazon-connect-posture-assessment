@@ -45,9 +45,9 @@ amazon-connect-assessment --region us-east-1 --output-dir ./reports
 
 | | |
 |---|---|
-| **Caller Journey Map** | Starts from the phone number a customer dials, resolves it to the flow it is actually associated with, performs bounded static path enumeration, and renders an interactive map you can zoom, inspect, and export. Most tooling audits resources; this audits the experience. See [Caller Journey Map](docs/user-guide.md#caller-journey-map). |
+| **Customer Journey Map** | Starts from wherever a customer makes contact — a phone or SMS number, an email address, or a web chat or task flow observed in your traffic — resolves it to the flow it actually reaches, scores each journey with its channel's rules, and renders an interactive map you can zoom, inspect, and export. Most tooling audits resources; this audits the experience. See [Customer Journey Map](docs/user-guide.md#customer-journey-map). |
 | **Contact flow analysis** | Parses published flow content to find dead-end error paths, unreachable blocks, infinite loops, toll-fraud exposure, prompt-injection risk, and Lambda branching with no fallback path — issues that are invisible from the console. |
-| **64 canonical controls** | One catalog across all five Well-Architected pillars: 60 BaseCheck executors and 4 Journey-backed executors. Every record carries status, disposition, evidence, and methodology so measured controls stay distinct from review candidates and inventory. |
+| **68 canonical controls** | One catalog across all five Well-Architected pillars: 64 BaseCheck executors and 4 Journey-backed executors. Every record carries status, disposition, evidence, and methodology so measured controls stay distinct from review candidates and inventory. |
 | **Generative AI coverage** | 9 checks spanning Agentic CX Designer, Connect AI agents (formerly Amazon Q in Connect), and Bedrock. Three Connect-side Agentic CX records inventory the handoff, review escalation intent, and validate error routing without calling Agentic CX APIs or inspecting application internals. See [Generative AI coverage](docs/check-catalog.md#generative-ai-coverage). |
 | **Quota headroom** | Concurrent-call and configuration-object utilization against your real Service Quotas ceilings, with a 90-day growth trend projecting how long the current rate leaves before you hit one. |
 | **Four output formats** | HTML, JSON, CSV, and ASFF for direct ingestion into AWS Security Hub. |
@@ -172,21 +172,21 @@ options in a YAML or JSON config file.
 
 ## What it assesses
 
-The unified catalog contains **64 canonical controls**: 60 BaseCheck executors
+The unified catalog contains **68 canonical controls**: 64 BaseCheck executors
 and 4 Journey-backed executors. The Journey-backed controls are listed with
 their owning pillars and appear in `--list-checks`; they are not a separate
 findings set.
 
 | Pillar | Canonical controls | Representative coverage |
 |---|---:|---|
-| Security | 19 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
+| Security | 23 | Storage and KMS encryption, CloudTrail coverage, IAM policy inspection, security profiles, approved origins, identity and MFA, IP-based sign-in control, outbound-calling scope and destinations, toll-fraud cost alerting, toll-fraud review, prompt safety, Lex logs, sensitive data, and journey authentication patterns |
 | Resilience | 18 | Global Resiliency posture, quota headroom and growth, CloudWatch alarms, Agentic CX error/idle-timeout routing, flow error handling, loop detection, Lambda dependencies, and structural journey dead ends |
 | Cost Optimization | 16 | Claimed-number inventory, self-service containment, callback and data-continuity review, idle configuration, operating hours, premium features, model cost, and phone-reachability scope |
 | Operational Excellence | 8 | Flow logging, early media, voice fallback, Agentic CX handoff inventory and escalation review, unreachable blocks, Connect AI agents knowledge-base health, and Bedrock invocation logging |
 | Performance Efficiency | 3 | Route-aware Lambda inventory, sequential Lambda review, and flow-structure inventory |
 
-Every record has one of three dispositions: 23 `CONTROL`, 25 `MANUAL_REVIEW`,
-and 16 `INFORMATIONAL`. Only passed and failed `CONTROL` records enter the
+Every record has one of three dispositions: 23 `CONTROL`, 30 `MANUAL_REVIEW`,
+and 15 `INFORMATIONAL`. Only passed and failed `CONTROL` records enter the
 posture score.
 
 Run `amazon-connect-assessment --list-checks` for the live selection, or see the
@@ -247,9 +247,9 @@ risks, and hardening recommendations.
 
 | Guide | Covers |
 |---|---|
-| [User Guide](docs/user-guide.md) | Installation paths, AWS access, CLI usage, Caller Journey Map, S3 publishing, run comparison, CI/CD |
+| [User Guide](docs/user-guide.md) | Installation paths, AWS access, CLI usage, Customer Journey Map, S3 publishing, run comparison, CI/CD |
 | [Configuration](docs/configuration.md) | YAML and JSON settings, precedence, output naming, execution tuning |
-| [Check Catalog](docs/check-catalog.md) | All 64 canonical controls, dispositions, methodology, generative AI coverage, executor ownership, aliases, and filter behavior |
+| [Check Catalog](docs/check-catalog.md) | All 68 canonical controls, dispositions, methodology, generative AI coverage, executor ownership, aliases, and filter behavior |
 | [Report Formats](docs/report-formats.md) | HTML, JSON, CSV, and ASFF output contracts |
 | [Performance Guide](docs/performance-optimization.md) | Parallel execution, retry tuning, journey-scoring bounds |
 | [Troubleshooting](docs/troubleshooting.md) | Installation, credentials, permissions, runtime, and report issues |

@@ -52,13 +52,13 @@ _ACXD_OUTCOME_MEANINGS = {
     "NoMatchingError": "The Agentic CX action used its configured catch-all error route.",
 }
 _OUTCOME_MEANINGS = {
-    "NoMatchingCondition": "The caller's response did not match a configured choice.",
+    "NoMatchingCondition": "The customer's response did not match a configured choice.",
     "NoMatchingError": (
         "A configured catch-all route used only if the action fails and no specific error "
         "condition matches. This does not mean an error was observed."
     ),
     "QueueAtCapacity": "The destination queue cannot accept another contact.",
-    "InputTimeLimitExceeded": "The caller did not respond before the input timer expired.",
+    "InputTimeLimitExceeded": "The customer did not respond before the input timer expired.",
     "InvalidPhoneNumber": "The captured value is not a valid phone number.",
     "ContactNotLinked": "The contact could not be linked to the requested record.",
 }
@@ -195,7 +195,7 @@ def build_journey_view_model(
     scope_action: ActionScopeLabeler,
     describe_ai: ActionAIDescriber,
 ) -> JourneyViewModel:
-    """Project ``graph`` into a deterministic caller-facing journey model."""
+    """Project ``graph`` into a deterministic customer-facing journey model."""
     action_order = {action_id: index for index, action_id in enumerate(graph.actions)}
     raw_edges = _collect_raw_edges(graph)
     primary_actions = _select_primary_action_path(graph, raw_edges, label_action)
@@ -568,13 +568,13 @@ def _build_node(
     if is_group:
         if entry_id in action_ids:
             label = f"System setup · {len(actions)} internal actions"
-            summary = "Prepares the contact before the caller-facing journey begins."
+            summary = "Prepares the contact before the customer-facing journey begins."
         elif any("queue" in action.action_type.casefold() for action in actions):
             label = f"Prepare queue transfer · {len(actions)} actions"
             summary = "Selects and prepares the destination used for the handoff."
         else:
             label = f"System work · {len(actions)} internal actions"
-            summary = "Groups consecutive internal actions that are invisible to the caller."
+            summary = "Groups consecutive internal actions that are invisible to the customer."
     else:
         category, label = categories_and_labels[0]
         if category == "processing" and "queue" in actions[0].action_type.casefold():
