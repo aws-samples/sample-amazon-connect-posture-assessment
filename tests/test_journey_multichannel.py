@@ -501,20 +501,30 @@ class TestPipeline:
 
 
 class TestHtmlMapTargets:
-    def test_cached_entries_drive_the_map(self):
-        from amazon_connect_assessment.engine import AssessmentEngine, _journey_entry_label
+    def _engine(self, cached=None):
+        from amazon_connect_assessment.engine import AssessmentEngine
 
         engine = AssessmentEngine.__new__(AssessmentEngine)
-        instance = MagicMock(instance_id=IID)
-        engine._journey_entry_points = {
-            IID: [
+        engine.logger = MagicMock()
+        if cached is not None:
+            engine._journey_entry_points = {IID: cached}
+        return engine
+
+    def test_discovered_non_voice_entries_are_added_to_voice_numbers(self):
+        from amazon_connect_assessment.engine import _journey_entry_label
+
+        engine = self._engine(
+            [
                 EntryPoint("VOICE", "DID", "+12065550101", "flow-ivr"),
                 EntryPoint("CHAT", "SMS", "+18885550202", "flow-sms"),
                 EntryPoint("EMAIL", "EMAIL_ADDRESS", "support@example.com", "flow-email"),
                 EntryPoint("CHAT", "OBSERVED_FLOW", "Web chat", "flow-webchat"),
             ]
-        }
-        targets, non_flow = engine._journey_map_targets(instance, [], {})
+        )
+        numbers = [{"PhoneNumberArn": "a", "PhoneNumber": "+12065550101", "PhoneNumberType": "DID"}]
+        targets, non_flow = engine._journey_map_targets(
+            MagicMock(instance_id=IID), numbers, {"a": "flow-ivr"}
+        )
         assert [(t["channel"], t["entry_type"]) for t in targets] == [
             ("VOICE", "DID"),
             ("CHAT", "SMS"),
@@ -528,16 +538,55 @@ class TestHtmlMapTargets:
             "Web chat · CHAT (observed)",
         ]
 
-    def test_without_cache_the_map_is_voice_only(self):
-        from amazon_connect_assessment.engine import AssessmentEngine
+    def test_voice_lookup_error_in_discovery_does_not_drop_voice_numbers(self):
+        # Review: one voice lookup failure inside discovery left the cache with
+        # no voice entries, and the map replaced its own voice lookup with it.
+        engine = self._engine([EntryPoint("EMAIL", "EMAIL_ADDRESS", "a@example.com", "flow-email")])
+        numbers = [{"PhoneNumberArn": "a", "PhoneNumber": "+1", "PhoneNumberType": "DID"}]
+        targets, _ = engine._journey_map_targets(MagicMock(instance_id=IID), numbers, {"a": "f"})
+        assert ("VOICE", "f") in [(t["channel"], t["flow_id"]) for t in targets]
 
-        engine = AssessmentEngine.__new__(AssessmentEngine)
-        numbers = [{"PhoneNumberArn": "arn-a", "PhoneNumber": "+1", "PhoneNumberType": "DID"}]
+    def test_map_discovers_entries_when_journey_findings_did_not_run(self):
+        # Review: with no journey control selected (e.g. --checks
+        # sec-ip-access-001) nothing was cached, hiding SMS-only numbers.
+        engine = self._engine()
+        engine.aws_client_factory = _factory(traffic=[])
+        engine.config = {}
+        engine._parse_journey_flows = lambda instance, parser: (_flows(), [])
+        instance = MagicMock(instance_id=IID, instance_arn=INSTANCE_ARN, display_name="x")
+        targets, _ = engine._journey_map_targets(instance, [], {})
+        assert ("CHAT", "SMS") in [(t["channel"], t["entry_type"]) for t in targets]
+
+    def test_discovery_failure_falls_back_to_voice_only(self):
+        engine = self._engine()
+        engine._parse_journey_flows = MagicMock(side_effect=RuntimeError("boom"))
+        numbers = [{"PhoneNumberArn": "a", "PhoneNumber": "+1", "PhoneNumberType": "DID"}]
         targets, non_flow = engine._journey_map_targets(
-            MagicMock(instance_id=IID), numbers, {"arn-a": "flow-ivr"}
+            MagicMock(instance_id=IID, display_name="x"), numbers, {"a": "flow-ivr"}
         )
         assert [(t["channel"], t["flow_id"]) for t in targets] == [("VOICE", "flow-ivr")]
         assert non_flow == 0
+
+
+class TestPhoneEntryEvidence:
+    @pytest.mark.parametrize(
+        "number_type", ["UIFN", "SHARED", "THIRD_PARTY_DID", "THIRD_PARTY_TF", "SHORT_CODE"]
+    )
+    def test_every_voice_number_type_is_reported(self, number_type):
+        # Review: only DID and TOLL_FREE reached the phone-number fields.
+        path = _path("VOICE", number_type, ["MessageParticipant"], "disconnect", "dead_end")
+        finding = _finding(_result([path]), "journey-res-001")
+        assert finding.evidence["evaluated_phone_numbers"] == ["***-***-0101"]
+        assert finding.evidence["affected_phone_numbers"] == ["***-***-0101"]
+
+    def test_unresolved_messaging_ids_are_not_masked_as_numbers(self):
+        path = _path("CHAT", "SMS", ["MessageParticipant"], "disconnect", "dead_end")
+        path.entry_identifier = "sms:abc123def456"
+        finding = _finding(_result([path]), "journey-res-001")
+        assert finding.evidence["affected_phone_numbers"] == []
+        assert finding.evidence["affected_entry_points"] == [
+            {"channel": "CHAT", "entry_type": "SMS", "entry": "sms:abc123def456"}
+        ]
 
 
 @pytest.mark.parametrize("channel", ["VOICE", "CHAT", "EMAIL", "TASK"])

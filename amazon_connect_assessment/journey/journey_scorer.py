@@ -38,7 +38,22 @@ def _mask_number(number: str) -> str:
     return f"***-***-{''.join(digits[-4:])}"
 
 
-_PHONE_ENTRY_TYPES = {"DID", "TOLL_FREE", "SMS", "WHATSAPP"}
+# Entry types whose identifier is not a phone number. Every other type is a
+# number: voice numbers come in every ListPhoneNumbersV2 PhoneNumberType
+# (DID, TOLL_FREE, UIFN, SHARED, THIRD_PARTY_DID, THIRD_PARTY_TF, SHORT_CODE, ...),
+# so phone-ness is defined by exclusion rather than an allow list that would
+# silently drop new or less common number types.
+_NON_PHONE_ENTRY_TYPES = {"EMAIL_ADDRESS", "OBSERVED_FLOW"}
+# Messaging entries whose number was not claimed in Connect carry their
+# resource ID instead ("sms:<id>"); that is not a number and must not be
+# masked as one.
+_UNRESOLVED_PREFIXES = ("sms:", "whatsapp:", "email:")
+
+
+def _is_phone_entry(entry_type: str, identifier: str) -> bool:
+    return entry_type not in _NON_PHONE_ENTRY_TYPES and not (identifier or "").startswith(
+        _UNRESOLVED_PREFIXES
+    )
 
 
 def _mask_email(address: str) -> str:
@@ -58,7 +73,7 @@ def _mask_entry(entry_type: str, identifier: str) -> str:
     """
     if entry_type == "OBSERVED_FLOW":
         return identifier
-    if (identifier or "").startswith(("sms:", "whatsapp:", "email:")):
+    if (identifier or "").startswith(_UNRESOLVED_PREFIXES):
         return identifier
     if entry_type == "EMAIL_ADDRESS":
         return _mask_email(identifier)
@@ -206,7 +221,7 @@ def _representative_path(path: JourneyPath) -> Dict[str, Any]:
         "terminal_type": path.terminal_type,
         "terminal_details": path.terminal_details,
     }
-    if path.entry_type in _PHONE_ENTRY_TYPES:
+    if _is_phone_entry(path.entry_type, path.entry_identifier):
         rep["phone_number"] = rep["entry"]
     return rep
 
@@ -252,7 +267,8 @@ def _coverage_evidence(result: JourneyMapResult) -> Dict[str, Any]:
         {
             _mask_number(path.entry_identifier)
             for path in result.journeys
-            if path.entry_type in ("DID", "TOLL_FREE")
+            if path.entry_channel == "VOICE"
+            and _is_phone_entry(path.entry_type, path.entry_identifier)
         }
     )
     entries = sorted(
@@ -318,7 +334,11 @@ def _representatives(paths: List[JourneyPath]) -> List[Dict[str, Any]]:
 
 def _affected_phone_numbers(paths: List[JourneyPath]) -> List[str]:
     return sorted(
-        {_mask_number(p.entry_identifier) for p in paths if p.entry_type in _PHONE_ENTRY_TYPES}
+        {
+            _mask_number(p.entry_identifier)
+            for p in paths
+            if _is_phone_entry(p.entry_type, p.entry_identifier)
+        }
     )
 
 

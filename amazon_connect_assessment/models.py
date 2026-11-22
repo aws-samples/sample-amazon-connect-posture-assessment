@@ -230,8 +230,10 @@ class ConnectInstance:
     # did not return it. Never default this: checks treat None as "not
     # evaluated", whereas a guessed CONNECT_MANAGED raises a HIGH finding.
     identity_management_type: Optional[str]
-    inbound_calls_enabled: bool
-    outbound_calls_enabled: bool
+    # None when DescribeInstance did not report the flag: unknown, which checks
+    # must treat as not evaluated rather than as disabled.
+    inbound_calls_enabled: Optional[bool]
+    outbound_calls_enabled: Optional[bool]
     instance_alias: Optional[str] = None
     service_role: Optional[str] = None
     status: Optional[str] = None

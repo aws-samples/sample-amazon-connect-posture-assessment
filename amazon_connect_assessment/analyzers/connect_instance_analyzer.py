@@ -105,9 +105,10 @@ class ConnectInstanceAnalyzer(BaseAnalyzer):
             # No default: an unobserved identity type must stay None so checks
             # can report it as not evaluated, rather than as Connect-managed.
             identity_management_type=detailed_info.get("identity_management_type"),
-            # No prior value exists here, so an unreturned flag reads as False.
-            inbound_calls_enabled=bool(detailed_info.get("inbound_calls_enabled")),
-            outbound_calls_enabled=bool(detailed_info.get("outbound_calls_enabled")),
+            # An unreturned flag stays None (unknown); coercing it to False would
+            # make outbound checks report "disabled" instead of "not evaluated".
+            inbound_calls_enabled=detailed_info.get("inbound_calls_enabled"),
+            outbound_calls_enabled=detailed_info.get("outbound_calls_enabled"),
         )
 
     def _get_instance_details(self, instance_id: str) -> Dict[str, Any]:

@@ -49,6 +49,25 @@ def _connect(factory, operation: str, **kwargs) -> Dict[str, Any]:
     )
 
 
+def _outbound_unknown(check: BaseCheck, instance, common: Dict[str, Any]):
+    """SKIPPED when DescribeInstance did not report OutboundCallsEnabled.
+
+    An unreported setting is not evidence that outbound calling is off, so it
+    must not become "not applicable".
+    """
+    if instance.outbound_calls_enabled is not None:
+        return None
+    return check.create_finding(
+        status=CheckStatus.SKIPPED,
+        description=(
+            f"Skipped: instance {instance.display_name} did not report whether outbound calling "
+            "is enabled, so outbound exposure cannot be evaluated."
+        ),
+        evidence={"outbound_calls_enabled": None, "evidence_complete": False},
+        **common,
+    )
+
+
 def _account_id_from_arn(arn: str) -> str:
     parts = (arn or "").split(":")
     return parts[4] if len(parts) > 4 else ""
@@ -90,8 +109,9 @@ class IpAccessControlCheck(BaseCheck):
     def execute(self, context: CheckContext):
         instance = context.instance
         factory = context.aws_client_factory
-        # A stolen login is a toll-fraud path only when the instance can dial out.
-        severity = Severity.HIGH if instance.outbound_calls_enabled else Severity.MEDIUM
+        # A stolen login is a toll-fraud path when the instance can dial out; an
+        # unreported setting cannot rule that out.
+        severity = Severity.MEDIUM if instance.outbound_calls_enabled is False else Severity.HIGH
         common = {
             "resource_id": instance.instance_id,
             "resource_type": "ConnectInstance",
@@ -181,20 +201,35 @@ class IpAccessControlCheck(BaseCheck):
         restricted_others = [
             p.get("Name") or "" for p in profiles if not p.get("IsDefault") and p.get("AllowedIps")
         ]
+        # AWS documents the default profile as applying to every user, and the
+        # API exposes no profile-to-user assignment. So a non-default profile
+        # without an allow list cannot be ruled out as covering some users:
+        # PASS requires every profile to restrict.
+        unrestricted_others = sorted(
+            p.get("Name") or p.get("Id") or ""
+            for p in profiles
+            if not p.get("IsDefault") and not p.get("AllowedIps")
+        )
 
-        if default and default.get("AllowedIps"):
+        if default.get("AllowedIps") and not unrestricted_others:
             return self.create_finding(
                 status=CheckStatus.PASS,
                 description=(
-                    f"Instance {instance.display_name}'s default authentication profile "
-                    f"allows sign-in only from {len(default['AllowedIps'])} approved IP "
-                    "range(s)."
+                    f"Every authentication profile on instance {instance.display_name} allows "
+                    "sign-in only from approved IP ranges; the default profile, which applies to "
+                    f"all users, allows {len(default['AllowedIps'])} range(s)."
                 ),
                 evidence=evidence,
                 **common,
             )
 
-        if default and default.get("BlockedIps"):
+        if default.get("AllowedIps"):
+            gap = (
+                f"the default profile restricts sign-in, but profile(s) "
+                f"{', '.join(unrestricted_others)} have no IP allow list, and the API does not "
+                "show which users they apply to"
+            )
+        elif default.get("BlockedIps"):
             gap = (
                 "the default authentication profile only blocks listed ranges, so every "
                 "other network can still sign in"
@@ -302,6 +337,9 @@ class OutboundPermissionScopeCheck(BaseCheck):
             "resource_type": "ConnectInstance",
             "context": context,
         }
+        skipped = _outbound_unknown(self, instance, common)
+        if skipped:
+            return skipped
         if not instance.outbound_calls_enabled:
             return self.create_finding(
                 status=CheckStatus.NOT_APPLICABLE,
@@ -457,11 +495,46 @@ HIGH_RISK_CALLING_CODES = {
     "979": "international premium-rate service",
 }
 
-# Initiation methods where the instance chose the destination: agent-dialed,
-# scheduled callbacks (the click-to-dial fraud vector), and API-started.
-_OUTBOUND_INITIATION_METHODS = ["OUTBOUND", "CALLBACK", "API"]
+# Initiation methods where the destination is an outside number the instance
+# dialed: agent-dialed (OUTBOUND), scheduled callbacks (the click-to-dial fraud
+# vector), API-started, and EXTERNAL_OUTBOUND — an agent bringing an external
+# participant onto a call through a quick connect or flow block.
+#
+# TRANSFER is deliberately excluded: AWS defines it as an agent-to-agent or
+# agent-to-queue transfer, and its customer endpoint is the original caller,
+# so an international inbound caller would be misreported as a destination.
+_OUTBOUND_INITIATION_METHODS = ["OUTBOUND", "CALLBACK", "API", "EXTERNAL_OUTBOUND"]
 _DESTINATION_LOOKBACK_DAYS = 14
 _DESTINATION_SAMPLE_SIZE = 100
+
+# North American Numbering Plan members other than the US and Canada. They
+# share calling code +1 but are separate countries billed at international
+# rates, and several (notably +1-876, +1-809, +1-284, +1-473, +1-649, +1-268)
+# are frequent toll-fraud and one-ring-scam targets. US territories (+1-340,
+# +1-670, +1-671, +1-684, +1-787, +1-939) are domestic and are not listed.
+NANP_NON_US_CA_AREA_CODES = {
+    "242": "Bahamas",
+    "246": "Barbados",
+    "264": "Anguilla",
+    "268": "Antigua and Barbuda",
+    "284": "British Virgin Islands",
+    "345": "Cayman Islands",
+    "441": "Bermuda",
+    "473": "Grenada",
+    "649": "Turks and Caicos Islands",
+    "658": "Jamaica",
+    "664": "Montserrat",
+    "721": "Sint Maarten",
+    "758": "Saint Lucia",
+    "767": "Dominica",
+    "784": "Saint Vincent and the Grenadines",
+    "809": "Dominican Republic",
+    "829": "Dominican Republic",
+    "849": "Dominican Republic",
+    "868": "Trinidad and Tobago",
+    "869": "Saint Kitts and Nevis",
+    "876": "Jamaica",
+}
 
 
 def calling_code(e164: str) -> Optional[str]:
@@ -479,6 +552,30 @@ def calling_code(e164: str) -> Optional[str]:
     return digits[:3] or None
 
 
+def destination_key(e164: str) -> Optional[str]:
+    """Country identity of a number: its calling code, split within +1.
+
+    ``+1`` is shared by the US, Canada and the Caribbean/Atlantic NANP
+    members. Those members get their own key (``1-876``) so a Jamaican or
+    Dominican number is not mistaken for a domestic call from a US or
+    Canadian instance.
+    """
+    code = calling_code(e164)
+    if code == "1":
+        area = e164.strip()[2:5]
+        if area in NANP_NON_US_CA_AREA_CODES:
+            return f"1-{area}"
+    return code
+
+
+def _key_label(key: str) -> str:
+    if key.startswith("1-"):
+        return f"+{key} ({NANP_NON_US_CA_AREA_CODES[key[2:]]})"
+    if key in HIGH_RISK_CALLING_CODES:
+        return f"+{key} ({HIGH_RISK_CALLING_CODES[key]})"
+    return f"+{key}"
+
+
 class OutboundDestinationCheck(BaseCheck):
     """A4: did recent outbound calls go somewhere they should not?"""
 
@@ -489,10 +586,11 @@ class OutboundDestinationCheck(BaseCheck):
             pillar=Pillar.SECURITY,
             severity=Severity.HIGH,
             description=(
-                "Samples recent agent-dialed, callback, and API-started outbound calls and "
-                "flags destinations outside the countries of the instance's own numbers, or "
-                "on non-geographic codes commonly used for toll fraud. The outbound country "
-                "allowlist itself is managed by AWS and cannot be read through the API."
+                "Samples recent agent-dialed, callback, API-started, and external-participant "
+                "calls, and the instance's phone-number quick connects, and flags destinations "
+                "outside the countries of the instance's own numbers or on non-geographic codes "
+                "commonly used for toll fraud. The outbound country allowlist itself is managed "
+                "by AWS and cannot be read through the API."
             ),
         )
 
@@ -504,6 +602,9 @@ class OutboundDestinationCheck(BaseCheck):
             "resource_type": "ConnectInstance",
             "context": context,
         }
+        skipped = _outbound_unknown(self, instance, common)
+        if skipped:
+            return skipped
         if not instance.outbound_calls_enabled:
             return self.create_finding(
                 status=CheckStatus.NOT_APPLICABLE,
@@ -512,7 +613,7 @@ class OutboundDestinationCheck(BaseCheck):
                 **common,
             )
 
-        # Home calling codes: the countries the instance holds numbers in.
+        # Home destinations: the countries the instance holds numbers in.
         try:
             numbers = _paginate_connect(
                 lambda **kw: _connect(
@@ -528,7 +629,44 @@ class OutboundDestinationCheck(BaseCheck):
             if factory.is_access_denied(e):
                 return self.skipped_for_access_denied(context, "connect:ListPhoneNumbersV2")
             raise
-        home = sorted({c for c in (calling_code(n.get("PhoneNumber", "")) for n in numbers) if c})
+        home = sorted(
+            {k for k in (destination_key(n.get("PhoneNumber", "")) for n in numbers) if k}
+        )
+
+        # Configured external destinations agents can transfer to, whether or
+        # not anyone has dialed them yet. Names are recorded, numbers are not.
+        quick_connect_keys: Dict[str, List[str]] = {}
+        try:
+            summaries = _paginate_connect(
+                lambda **kw: _connect(
+                    factory,
+                    "list_quick_connects",
+                    InstanceId=instance.instance_id,
+                    QuickConnectTypes=["PHONE_NUMBER"],
+                    MaxResults=1000,
+                    **kw,
+                ),
+                "QuickConnectSummaryList",
+            )
+            for summary in summaries:
+                detail = _connect(
+                    factory,
+                    "describe_quick_connect",
+                    InstanceId=instance.instance_id,
+                    QuickConnectId=summary["Id"],
+                ).get("QuickConnect", {})
+                config = (detail.get("QuickConnectConfig") or {}).get("PhoneConfig") or {}
+                key = destination_key(config.get("PhoneNumber", ""))
+                if key:
+                    quick_connect_keys.setdefault(key, []).append(
+                        detail.get("Name") or summary.get("Name") or summary["Id"]
+                    )
+        except Exception as e:  # noqa: BLE001
+            if factory.is_access_denied(e):
+                return self.skipped_for_access_denied(
+                    context, "connect:ListQuickConnects, connect:DescribeQuickConnect"
+                )
+            raise
 
         end = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(second=0, microsecond=0)
         start = end - timedelta(days=_DESTINATION_LOOKBACK_DAYS)
@@ -552,7 +690,7 @@ class OutboundDestinationCheck(BaseCheck):
         contacts = page.get("Contacts") or []
         total = page.get("TotalCount", len(contacts))
 
-        by_code: Dict[str, int] = {}
+        by_key: Dict[str, int] = {}
         by_method: Dict[str, int] = {}
         read_failures = 0  # DescribeContact errors: the sample is incomplete
         non_phone = 0  # VoIP, internal, or ARN endpoints: legitimately no number
@@ -570,90 +708,90 @@ class OutboundDestinationCheck(BaseCheck):
                 read_failures += 1
                 continue
             endpoint = detail.get("CustomerEndpoint") or {}
-            # The number is reduced to its calling code here and never kept.
-            code = (
-                calling_code(endpoint.get("Address", ""))
+            # The number is reduced to its destination key here and never kept.
+            key = (
+                destination_key(endpoint.get("Address", ""))
                 if endpoint.get("Type") == "TELEPHONE_NUMBER"
                 else None
             )
-            if code is None:
+            if key is None:
                 non_phone += 1
                 continue
-            by_code[code] = by_code.get(code, 0) + 1
+            by_key[key] = by_key.get(key, 0) + 1
             method = detail.get("InitiationMethod") or contact.get("InitiationMethod") or "?"
             by_method[method] = by_method.get(method, 0) + 1
 
-        high_risk = {c: n for c, n in by_code.items() if c in HIGH_RISK_CALLING_CODES}
-        foreign = {
-            c: n for c, n in by_code.items() if home and c not in home and c not in high_risk
-        }
+        def _flag(keys: Iterable[str]) -> Tuple[List[str], List[str]]:
+            risky = sorted(k for k in keys if k in HIGH_RISK_CALLING_CODES)
+            foreign = sorted(
+                k for k in keys if home and k not in home and k not in HIGH_RISK_CALLING_CODES
+            )
+            return risky, foreign
+
+        call_risky, call_foreign = _flag(by_key)
+        qc_risky, qc_foreign = _flag(quick_connect_keys)
         evidence = {
             "outbound_calls_enabled": True,
             "lookback_days": _DESTINATION_LOOKBACK_DAYS,
+            "initiation_methods_sampled": _OUTBOUND_INITIATION_METHODS,
             "outbound_contacts_in_window": total,
             "sampled_contacts": len(contacts),
             "destination_read_failures": read_failures,
             "non_telephone_endpoints": non_phone,
-            "home_calling_codes": [f"+{c}" for c in home],
-            "destinations_by_calling_code": {f"+{c}": n for c, n in sorted(by_code.items())},
+            "home_destinations": [_key_label(k) for k in home],
+            "destinations_by_country": {_key_label(k): n for k, n in sorted(by_key.items())},
             "contacts_by_initiation_method": dict(sorted(by_method.items())),
+            "quick_connect_destinations": {
+                _key_label(k): sorted(v) for k, v in sorted(quick_connect_keys.items())
+            },
             "country_allowlist_readable": False,
         }
 
-        if not contacts:
-            return self.create_finding(
-                status=CheckStatus.PASS,
-                description=(
-                    f"No outbound voice contacts were placed from instance "
-                    f"{instance.display_name} in the last {_DESTINATION_LOOKBACK_DAYS} days. The "
-                    "outbound country allowlist is managed by AWS and cannot be read here."
-                ),
-                evidence=evidence,
-                **common,
-            )
-
-        if high_risk or foreign:
+        if call_risky or call_foreign or qc_risky or qc_foreign:
             parts = []
-            if high_risk:
+            if call_risky or call_foreign:
                 parts.append(
-                    "high-risk non-geographic codes "
-                    + ", ".join(
-                        f"+{c} ({HIGH_RISK_CALLING_CODES[c]}): {n}"
-                        for c, n in sorted(high_risk.items())
-                    )
+                    f"of the {len(contacts)} most recent outbound calls ({total} in the last "
+                    f"{_DESTINATION_LOOKBACK_DAYS} days), some went to "
+                    + ", ".join(f"{_key_label(k)}: {by_key[k]}" for k in call_risky + call_foreign)
                 )
-            if foreign:
+            if qc_risky or qc_foreign:
                 parts.append(
-                    "countries where the instance holds no number "
-                    + ", ".join(f"+{c}: {n}" for c, n in sorted(foreign.items()))
+                    "phone-number quick connects point to "
+                    + ", ".join(
+                        f"{_key_label(k)} ({', '.join(sorted(quick_connect_keys[k]))})"
+                        for k in qc_risky + qc_foreign
+                    )
                 )
             return self.create_finding(
                 status=CheckStatus.FAIL,
                 description=(
-                    f"Of the {len(contacts)} most recent outbound calls from instance "
-                    f"{instance.display_name} ({total} in the last {_DESTINATION_LOOKBACK_DAYS} "
-                    f"days), some went to {'; and '.join(parts)}. Confirm each destination is "
-                    "legitimate business; unexpected international or premium-rate calls are "
-                    "the signature of toll fraud."
+                    f"On instance {instance.display_name}, {'; and '.join(parts)}. These are "
+                    "high-risk non-geographic codes or countries where the instance holds no "
+                    "number. Confirm each is legitimate business; unexpected international or "
+                    "premium-rate destinations are the signature of toll fraud."
                 ),
                 evidence=evidence,
-                severity=Severity.HIGH if high_risk else Severity.MEDIUM,
+                severity=Severity.HIGH if (call_risky or qc_risky) else Severity.MEDIUM,
                 structured_remediation=Remediation(
                     summary="Verify unexpected outbound destinations and narrow the allowlist.",
-                    target_resources=[instance.instance_id],
+                    target_resources=[instance.instance_id]
+                    + sorted({n for k in qc_risky + qc_foreign for n in quick_connect_keys[k]}),
                     steps=[
                         RemediationStep(
                             order=1,
                             instruction=(
-                                "Pull the contact records for the flagged calling codes and "
-                                "identify the agents, callbacks, or API callers behind them."
+                                "Pull the contact records for the flagged destinations and "
+                                "identify the agents, callbacks, API callers, or quick connects "
+                                "behind them."
                             ),
                         ),
                         RemediationStep(
                             order=2,
                             instruction=(
                                 "If any were not legitimate, revoke the agent's sessions, reset "
-                                "credentials, and review the outbound permission scope."
+                                "credentials, review the outbound permission scope, and remove "
+                                "unneeded phone-number quick connects."
                             ),
                         ),
                         RemediationStep(
@@ -689,7 +827,7 @@ class OutboundDestinationCheck(BaseCheck):
                 evidence={**evidence, "evidence_complete": False},
                 **common,
             )
-        if not home:
+        if not home and (by_key or quick_connect_keys):
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 description=(
@@ -700,16 +838,24 @@ class OutboundDestinationCheck(BaseCheck):
                 evidence={**evidence, "evidence_complete": False},
                 **common,
             )
+        if not contacts:
+            description = (
+                f"No outbound voice contacts were placed from instance {instance.display_name} "
+                f"in the last {_DESTINATION_LOOKBACK_DAYS} days"
+            )
+        else:
+            description = (
+                f"All {sum(by_key.values())} readable outbound destination(s) among the "
+                f"{len(contacts)} most recent calls from instance {instance.display_name} are in "
+                "countries where it holds numbers"
+            )
+        description += (
+            f", and none of its {sum(len(v) for v in quick_connect_keys.values())} phone-number "
+            "quick connect(s) points to a high-risk or foreign destination. The outbound "
+            "country allowlist is managed by AWS and cannot be read here."
+        )
         return self.create_finding(
-            status=CheckStatus.PASS,
-            description=(
-                f"All {sum(by_code.values())} readable outbound destination(s) among the "
-                f"{len(contacts)} most recent calls from instance {instance.display_name} are "
-                "in countries where it holds numbers. The outbound country allowlist is managed "
-                "by AWS and cannot be read here."
-            ),
-            evidence=evidence,
-            **common,
+            status=CheckStatus.PASS, description=description, evidence=evidence, **common
         )
 
 
@@ -732,6 +878,36 @@ def _monitor_covers_connect(monitor: Dict[str, Any], account_id: str) -> bool:
         return monitor.get("MonitorDimension") in ("SERVICE", "LINKED_ACCOUNT")
     spec = json.dumps(monitor.get("MonitorSpecification") or {})
     return "Amazon Connect" in spec or (bool(account_id) and account_id in spec)
+
+
+def _partition_from_arn(arn: str) -> str:
+    parts = (arn or "").split(":")
+    return parts[1] if len(parts) > 1 and parts[1] else "aws"
+
+
+def _billing_region(service: str, partition: str) -> Optional[str]:
+    """Signing region of a partition-global billing service, or None if absent.
+
+    Cost Explorer and Budgets are global per partition: us-east-1 in the
+    standard partition, cn-northwest-1 in China, and absent in AWS GovCloud
+    (US), whose billing lives in the associated standard account. Read from
+    botocore's endpoint data rather than hardcoded.
+    """
+    import botocore.session
+
+    data = botocore.session.get_session().get_data("endpoints")
+    for entry in data.get("partitions", []):
+        if entry.get("partition") != partition:
+            continue
+        svc = entry.get("services", {}).get(service)
+        if not svc:
+            return None
+        endpoints = svc.get("endpoints", {})
+        name = svc.get("partitionEndpoint") or next(iter(endpoints), None)
+        if not name:
+            return None
+        return (endpoints.get(name, {}).get("credentialScope") or {}).get("region") or name
+    return None
 
 
 def _budget_covers_connect(budget: Dict[str, Any]) -> bool:
@@ -762,141 +938,166 @@ class FraudCostAlertingCheck(BaseCheck):
                 "fraud is expensive in proportion to how long it runs unnoticed."
             ),
         )
-        self._lock = threading.Lock()
-        self._by_account: Dict[str, Tuple[Dict[str, Any], List[str], List[str]]] = {}
+        self._locks_guard = threading.Lock()
+        self._locks: Dict[Tuple[str, str], threading.Lock] = {}
+        self._by_account: Dict[Tuple[str, str], Tuple[Dict[str, Any], List[str], List[str]]] = {}
 
-    def _collect(self, factory, account_id: str):
-        """Account-level evidence, fetched once per account per run."""
-        with self._lock:
-            if account_id in self._by_account:
-                return self._by_account[account_id]
-            evidence: Dict[str, Any] = {}
-            denied: List[str] = []
-            failures: List[str] = []
+    def _collect(self, factory, partition: str, account_id: str):
+        """Account-level evidence, fetched once per account per run.
 
-            ce = factory.get_client("ce", region_name="us-east-1")
-            monitors: List[Dict[str, Any]] = []
-            subscriptions: List[Dict[str, Any]] = []
-            for op, key, sink in (
-                ("get_anomaly_monitors", "AnomalyMonitors", monitors),
-                ("get_anomaly_subscriptions", "AnomalySubscriptions", subscriptions),
-            ):
-                token: Optional[str] = None
-                try:
-                    for _ in range(50):
-                        resp = factory.call_api_with_resilience(
-                            ce, op, "ce", **({"NextPageToken": token} if token else {})
-                        )
-                        sink.extend(resp.get(key) or [])
-                        token = resp.get("NextPageToken")
-                        if not token:
-                            break
-                except Exception as e:  # noqa: BLE001
-                    if factory.is_access_denied(e):
-                        denied.append(
-                            "ce:GetAnomalyMonitors"
-                            if op == "get_anomaly_monitors"
-                            else "ce:GetAnomalySubscriptions"
-                        )
-                    else:
-                        failures.append(f"{op}: {_error_code(e) or type(e).__name__}")
+        The lock is per account: instances of the same account wait for the
+        one fetch already in flight (rather than each repeating it), and other
+        accounts are never blocked.
+        """
+        key = (partition, account_id)
+        with self._locks_guard:
+            lock = self._locks.setdefault(key, threading.Lock())
+        with lock:
+            if key not in self._by_account:
+                self._by_account[key] = self._fetch(factory, partition, account_id)
+            return self._by_account[key]
 
-            covering = {m["MonitorArn"] for m in monitors if _monitor_covers_connect(m, account_id)}
-            covering_subs = [
-                s for s in subscriptions if covering.intersection(s.get("MonitorArnList") or [])
-            ]
-            frequencies = sorted({s.get("Frequency", "") for s in covering_subs})
+    @staticmethod
+    def _fetch(factory, partition: str, account_id: str):
+        denied: List[str] = []
+        failures: List[str] = []
 
-            budgets: List[Dict[str, Any]] = []
+        def _client(service: str):
+            region = _billing_region(service, partition)
             try:
-                client = factory.get_client("budgets", region_name="us-east-1")
-                token = None
+                return factory.get_client(service, region_name=region)
+            except Exception as e:  # noqa: BLE001
+                failures.append(f"{service} client: {_error_code(e) or type(e).__name__}")
+                return None
+
+        def _pages(client, service, op, key, permission, token_in, token_out, **base):
+            items: List[Dict[str, Any]] = []
+            token: Optional[str] = None
+            try:
                 for _ in range(50):
-                    kwargs: Dict[str, Any] = {"AccountId": account_id}
-                    if token:
-                        kwargs["NextToken"] = token
-                    resp = factory.call_api_with_resilience(
-                        client, "describe_budgets", "budgets", **kwargs
-                    )
-                    budgets.extend(resp.get("Budgets") or [])
-                    token = resp.get("NextToken")
+                    kwargs = {**base, **({token_in: token} if token else {})}
+                    resp = factory.call_api_with_resilience(client, op, service, **kwargs)
+                    items.extend(resp.get(key) or [])
+                    token = resp.get(token_out)
                     if not token:
                         break
             except Exception as e:  # noqa: BLE001
                 if factory.is_access_denied(e):
-                    denied.append("budgets:ViewBudget")
+                    denied.append(permission)
                 else:
-                    failures.append(f"describe_budgets: {_error_code(e) or type(e).__name__}")
+                    failures.append(f"{op}: {_error_code(e) or type(e).__name__}")
+            return items
 
+        ce_client = _client("ce")
+        monitors: List[Dict[str, Any]] = []
+        subscriptions: List[Dict[str, Any]] = []
+        if ce_client is not None:
+            monitors = _pages(
+                ce_client,
+                "ce",
+                "get_anomaly_monitors",
+                "AnomalyMonitors",
+                "ce:GetAnomalyMonitors",
+                "NextPageToken",
+                "NextPageToken",
+            )
+            subscriptions = _pages(
+                ce_client,
+                "ce",
+                "get_anomaly_subscriptions",
+                "AnomalySubscriptions",
+                "ce:GetAnomalySubscriptions",
+                "NextPageToken",
+                "NextPageToken",
+            )
+        covering = {m["MonitorArn"] for m in monitors if _monitor_covers_connect(m, account_id)}
+        covering_subs = [
+            s for s in subscriptions if covering.intersection(s.get("MonitorArnList") or [])
+        ]
+
+        budgets_client = _client("budgets")
+        budgets: List[Dict[str, Any]] = []
+        notified: Dict[str, int] = {}
+        if budgets_client is not None:
+            budgets = _pages(
+                budgets_client,
+                "budgets",
+                "describe_budgets",
+                "Budgets",
+                "budgets:ViewBudget",
+                "NextToken",
+                "NextToken",
+                AccountId=account_id,
+            )
             # A budget alerts no one without a notification; one account-wide
             # call returns them for every budget.
-            notified: Dict[str, int] = {}
-            connect_budgets = [b for b in budgets if _budget_covers_connect(b)]
-            if connect_budgets:
-                try:
-                    token = None
-                    for _ in range(50):
-                        kwargs = {"AccountId": account_id}
-                        if token:
-                            kwargs["NextToken"] = token
-                        resp = factory.call_api_with_resilience(
-                            client, "describe_budget_notifications_for_account", "budgets", **kwargs
-                        )
-                        for item in resp.get("BudgetNotificationsForAccount") or []:
-                            notified[item.get("BudgetName", "")] = len(
-                                item.get("Notifications") or []
-                            )
-                        token = resp.get("NextToken")
-                        if not token:
-                            break
-                except Exception as e:  # noqa: BLE001
-                    if factory.is_access_denied(e):
-                        denied.append("budgets:ViewBudget")
-                    else:
-                        failures.append(
-                            "describe_budget_notifications_for_account: "
-                            f"{_error_code(e) or type(e).__name__}"
-                        )
+            if any(_budget_covers_connect(b) for b in budgets):
+                for item in _pages(
+                    budgets_client,
+                    "budgets",
+                    "describe_budget_notifications_for_account",
+                    "BudgetNotificationsForAccount",
+                    "budgets:ViewBudget",
+                    "NextToken",
+                    "NextToken",
+                    AccountId=account_id,
+                ):
+                    notified[item.get("BudgetName", "")] = len(item.get("Notifications") or [])
+        connect_budgets = [b for b in budgets if _budget_covers_connect(b)]
 
-            evidence.update(
+        evidence = {
+            "anomaly_monitors": len(monitors),
+            "monitors_covering_connect": len(covering),
+            "alert_frequencies_for_connect": sorted(
+                {s.get("Frequency", "") for s in covering_subs}
+            ),
+            # Recorded, not judged: a high threshold still alerts.
+            "alert_thresholds_for_connect": [
                 {
-                    "anomaly_monitors": len(monitors),
-                    "monitors_covering_connect": len(covering),
-                    "alert_frequencies_for_connect": frequencies,
-                    # Recorded, not judged: a high threshold still alerts.
-                    "alert_thresholds_for_connect": [
-                        {
-                            "frequency": s.get("Frequency"),
-                            "threshold": s.get("Threshold"),
-                            "threshold_expression": s.get("ThresholdExpression"),
-                        }
-                        for s in sorted(covering_subs, key=lambda s: s.get("SubscriptionArn", ""))
-                    ],
-                    "connect_budgets": sorted(
-                        b.get("BudgetName", "")
-                        for b in connect_budgets
-                        if notified.get(b.get("BudgetName", ""), 0) > 0
-                    ),
-                    "connect_budgets_without_alerts": sorted(
-                        b.get("BudgetName", "")
-                        for b in connect_budgets
-                        if notified.get(b.get("BudgetName", ""), 0) == 0
-                    ),
+                    "frequency": s.get("Frequency"),
+                    "threshold": s.get("Threshold"),
+                    "threshold_expression": s.get("ThresholdExpression"),
                 }
-            )
-            self._by_account[account_id] = (evidence, denied, failures)
-            return self._by_account[account_id]
+                for s in sorted(covering_subs, key=lambda s: s.get("SubscriptionArn", ""))
+            ],
+            "connect_budgets": sorted(
+                b.get("BudgetName", "")
+                for b in connect_budgets
+                if notified.get(b.get("BudgetName", ""), 0) > 0
+            ),
+            "connect_budgets_without_alerts": sorted(
+                b.get("BudgetName", "")
+                for b in connect_budgets
+                if notified.get(b.get("BudgetName", ""), 0) == 0
+            ),
+        }
+        return evidence, sorted(set(denied)), failures
 
     def execute(self, context: CheckContext):
         instance = context.instance
         account_id = _account_id_from_arn(instance.instance_arn)
-        evidence, denied, failures = self._collect(context.aws_client_factory, account_id)
-        evidence = {**evidence, "denied_permissions": denied, "source_failures": failures}
+        partition = _partition_from_arn(instance.instance_arn)
         common = {
             "resource_id": instance.instance_id,
             "resource_type": "ConnectInstance",
             "context": context,
         }
+        unavailable = [s for s in ("ce", "budgets") if _billing_region(s, partition) is None]
+        if unavailable:
+            return self.create_finding(
+                status=CheckStatus.SKIPPED,
+                description=(
+                    f"Skipped: Cost Explorer and AWS Budgets are not available in the {partition} "
+                    "partition. For AWS GovCloud (US), billing and cost alerting are managed from "
+                    "the associated standard AWS account; run this control there."
+                ),
+                evidence={"partition": partition, "evidence_complete": False},
+                **common,
+            )
+        evidence, denied, failures = self._collect(
+            context.aws_client_factory, partition, account_id
+        )
+        evidence = {**evidence, "denied_permissions": denied, "source_failures": failures}
         timely = set(evidence["alert_frequencies_for_connect"]) & _TIMELY_FREQUENCIES
         if timely or evidence["connect_budgets"]:
             how = []

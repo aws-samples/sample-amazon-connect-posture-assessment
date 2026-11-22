@@ -116,19 +116,29 @@ dial premium-rate destinations — alongside `sec-federation-001`, which covers
 the sign-in itself. All four are read-only Manual Review records.
 
 - `sec-ip-access-001` reads the instance's authentication profiles and passes
-  when the default profile allows sign-in only from listed IP ranges. A block
-  list alone, or restrictions only on non-default profiles, fails. Authentication
+  when every profile allows sign-in only from listed IP ranges. AWS documents the
+  default profile as applying to all users, and the API does not expose which
+  users any other profile applies to, so an unrestricted non-default profile
+  fails too. A block list alone, or restrictions only on non-default profiles,
+  fails. Authentication
   profiles are enabled per account by AWS: when the API reports the account "is
   not allowed to use this feature", the control fails, because no IP control is
   possible until AWS enables it. If no default profile is returned, the control
-  is SKIPPED. HIGH when outbound calling is enabled, MEDIUM otherwise.
+  is SKIPPED. MEDIUM when outbound calling is disabled, HIGH otherwise
+  (including when the setting is not reported).
 - `sec-outbound-scope-001` finds the security profiles granting
   `OutboundCallAccess` (CCP "Make outbound calls") and fails when more than half
   of users hold it — typically because Connect's default Agent profile includes
-  it. Not applicable when outbound calling is disabled.
+  it. Not applicable when outbound calling is disabled; SKIPPED when the
+  instance does not report the setting.
 - `sec-outbound-dest-001` samples the 100 most recent agent-dialed, callback,
-  and API-started voice contacts from the last 14 days and compares each
-  destination's country calling code with those of the instance's own numbers.
+  API-started, and external-participant (`EXTERNAL_OUTBOUND`) voice contacts from
+  the last 14 days, plus every phone-number quick connect, and compares each
+  destination's country with those of the instance's own numbers. `+1` is split
+  into US/Canada and each Caribbean/Atlantic NANP member (for example `+1-876`
+  Jamaica, `+1-809` Dominican Republic), so those calls are not mistaken for
+  domestic ones. `TRANSFER` contacts are excluded because their endpoint is the
+  original caller, not a destination.
   Calls to non-geographic codes commonly used for fraud (+870, +881, +882, +883,
   +979) fail at HIGH; calls to countries where the instance holds no number fail
   at MEDIUM. The outbound country allowlist itself is AWS-managed and cannot be
@@ -145,7 +155,9 @@ the sign-in itself. All four are read-only Manual Review records.
   be read, the result is SKIPPED rather than claiming no alerting. Weekly-only alerts or a monitor with no
   subscription fail at MEDIUM; nothing at all fails at HIGH. Monitors in an AWS
   Organizations management account are not visible from a member account, and
-  the evidence is read once per account per run.
+  the evidence is read once per account per run. Both services are
+  partition-global; in AWS GovCloud (US), where neither exists, the control is
+  SKIPPED.
 
 `sec-federation-001` returns PASS for SAML federation, where MFA is centrally
 enforceable and auditable at the IdP. `EXISTING_DIRECTORY` and `CONNECT_MANAGED`

@@ -220,7 +220,13 @@ class TestCallingCode:
         assert calling_code(number) == code
 
 
-def _dest_factory(destinations: List[str], numbers=("+12065550100",), calls=None, total=None):
+def _dest_factory(
+    destinations: List[str],
+    numbers=("+12065550100",),
+    calls=None,
+    total=None,
+    quick_connects: Optional[Dict[str, str]] = None,
+):
     contacts = [{"Id": f"c{i}", "InitiationMethod": "OUTBOUND"} for i in range(len(destinations))]
     by_id = {c["Id"]: d for c, d in zip(contacts, destinations)}
     return _factory(
@@ -229,6 +235,19 @@ def _dest_factory(destinations: List[str], numbers=("+12065550100",), calls=None
                 "ListPhoneNumbersSummaryList": [{"PhoneNumber": n} for n in numbers]
             },
             "search_contacts": {"Contacts": contacts, "TotalCount": total or len(contacts)},
+            "list_quick_connects": {
+                "QuickConnectSummaryList": [
+                    {"Id": name, "Name": name} for name in (quick_connects or {})
+                ]
+            },
+            "describe_quick_connect": lambda QuickConnectId, **_: {
+                "QuickConnect": {
+                    "Name": QuickConnectId,
+                    "QuickConnectConfig": {
+                        "PhoneConfig": {"PhoneNumber": (quick_connects or {})[QuickConnectId]}
+                    },
+                }
+            },
             "describe_contact": lambda ContactId, **_: {
                 "Contact": {
                     "InitiationMethod": "OUTBOUND",
@@ -262,7 +281,7 @@ class TestOutboundDestination:
             _ctx(_dest_factory(["+12065550111", "+14155550100"]))
         )
         assert finding.status == CheckStatus.PASS
-        assert finding.evidence["destinations_by_calling_code"] == {"+1": 2}
+        assert finding.evidence["destinations_by_country"] == {"+1": 2}
 
     def test_dialed_numbers_never_reach_the_finding(self):
         dialed = ["+33612345678", "+979123456789"]
@@ -282,7 +301,7 @@ class TestOutboundDestination:
         )
         assert search["SearchCriteria"] == {
             "Channels": ["VOICE"],
-            "InitiationMethods": ["OUTBOUND", "CALLBACK", "API"],
+            "InitiationMethods": ["OUTBOUND", "CALLBACK", "API", "EXTERNAL_OUTBOUND"],
         }
         assert search["Sort"] == {"FieldName": "INITIATION_TIMESTAMP", "Order": "DESCENDING"}
         assert search["MaxResults"] == 100
@@ -533,3 +552,132 @@ def test_policy_grants_every_permission_the_controls_call():
         "budgets:ViewBudget",
     }
     assert required <= granted, sorted(required - granted)
+
+
+# --- PR #23 third review ---------------------------------------------------------
+
+
+class TestThirdReview:
+    def test_unrestricted_non_default_profile_fails(self):
+        # The API exposes no profile-to-user assignment, so an unrestricted
+        # non-default profile cannot be ruled out as covering some users.
+        factory = _factory(
+            _profiles(
+                {"Id": "d", "IsDefault": True, "AllowedIps": ["10.0.0.0/8"]},
+                {"Id": "o", "Name": "Contractors"},
+            )
+        )
+        finding = IpAccessControlCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.FAIL
+        assert "Contractors" in finding.description
+        assert "does not show which users" in finding.description
+
+    def test_every_profile_restricted_passes(self):
+        factory = _factory(
+            _profiles(
+                {"Id": "d", "IsDefault": True, "AllowedIps": ["10.0.0.0/8"]},
+                {"Id": "o", "Name": "Office", "AllowedIps": ["192.168.0.0/16"]},
+            )
+        )
+        assert IpAccessControlCheck().execute(_ctx(factory)).status == CheckStatus.PASS
+
+    @pytest.mark.parametrize(
+        ("number", "key"),
+        [
+            ("+18765550100", "1-876"),  # Jamaica
+            ("+18095550100", "1-809"),  # Dominican Republic
+            ("+12845550100", "1-284"),  # British Virgin Islands
+            ("+12065550100", "1"),  # US
+            ("+14165550100", "1"),  # Canada
+            ("+17875550100", "1"),  # Puerto Rico (US territory)
+        ],
+    )
+    def test_nanp_caribbean_codes_are_separate_countries(self, number, key):
+        from amazon_connect_assessment.checks.telephony_fraud_checks import destination_key
+
+        assert destination_key(number) == key
+
+    def test_caribbean_premium_calls_from_a_us_instance_fail(self):
+        finding = OutboundDestinationCheck().execute(
+            _ctx(_dest_factory(["+18765550111", "+12065550112"]))
+        )
+        assert finding.status == CheckStatus.FAIL
+        assert "+1-876 (Jamaica): 1" in finding.description
+
+    def test_caribbean_instance_treats_its_own_area_code_as_home(self):
+        finding = OutboundDestinationCheck().execute(
+            _ctx(_dest_factory(["+18765550111"], numbers=("+18765550100",)))
+        )
+        assert finding.status == CheckStatus.PASS
+
+    def test_quick_connect_to_satellite_number_fails_without_any_calls(self):
+        # Review: transfers to a +881 number would still PASS.
+        finding = OutboundDestinationCheck().execute(
+            _ctx(_dest_factory([], quick_connects={"Remote site": "+8816123456"}))
+        )
+        assert finding.status == CheckStatus.FAIL
+        assert finding.severity == Severity.HIGH
+        assert "Remote site" in finding.description
+        assert "+8816123456" not in str(finding.evidence) + finding.description
+
+    @pytest.mark.parametrize("check_cls", [OutboundPermissionScopeCheck, OutboundDestinationCheck])
+    def test_unreported_outbound_setting_skips_rather_than_not_applicable(self, check_cls):
+        instance = _instance()
+        instance.outbound_calls_enabled = None
+        finding = check_cls().execute(_ctx(_factory({}), instance))
+        assert finding.status == CheckStatus.SKIPPED
+
+    def test_unreported_outbound_setting_keeps_ip_access_at_high(self):
+        instance = _instance()
+        instance.outbound_calls_enabled = None
+        factory = _factory(_profiles({"Id": "d", "IsDefault": True}))
+        assert IpAccessControlCheck().execute(_ctx(factory, instance)).severity == Severity.HIGH
+
+    @pytest.mark.parametrize(
+        ("partition", "region"), [("aws", "us-east-1"), ("aws-cn", "cn-northwest-1")]
+    )
+    def test_billing_clients_use_the_partition_region(self, partition, region):
+        instance = _instance()
+        instance.instance_arn = f"arn:{partition}:connect:x:{ACCOUNT}:instance/i-1"
+        factory = _cost_factory()
+        FraudCostAlertingCheck().execute(_ctx(factory, instance))
+        regions = {c.kwargs.get("region_name") for c in factory.get_client.call_args_list}
+        assert regions == {region}
+
+    def test_govcloud_skips_with_an_explanation_and_no_calls(self):
+        instance = _instance()
+        instance.instance_arn = f"arn:aws-us-gov:connect:us-gov-west-1:{ACCOUNT}:instance/i-1"
+        factory = _cost_factory()
+        finding = FraudCostAlertingCheck().execute(_ctx(factory, instance))
+        assert finding.status == CheckStatus.SKIPPED
+        assert "GovCloud" in finding.description
+        factory.call_api_with_resilience.assert_not_called()
+
+    def test_client_creation_failure_skips_rather_than_errors(self):
+        factory = _cost_factory()
+        factory.get_client.side_effect = RuntimeError("no credentials")
+        finding = FraudCostAlertingCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+
+    def test_other_accounts_are_not_blocked_by_an_in_flight_fetch(self):
+        import threading
+
+        check = FraudCostAlertingCheck()
+        release = threading.Event()
+        slow = _cost_factory()
+        inner = slow.call_api_with_resilience.side_effect
+        slow.call_api_with_resilience.side_effect = lambda *a, **k: (
+            release.wait(5),
+            inner(*a, **k),
+        )[1]
+        other = _instance()
+        other.instance_arn = "arn:aws:connect:us-east-1:999999999999:instance/i-2"
+        worker = threading.Thread(target=check.execute, args=(_ctx(slow),))
+        worker.start()
+        done = threading.Event()
+        threading.Thread(
+            target=lambda: (check.execute(_ctx(_cost_factory(), other)), done.set())
+        ).start()
+        assert done.wait(2), "a second account waited behind the first account's fetch"
+        release.set()
+        worker.join(5)

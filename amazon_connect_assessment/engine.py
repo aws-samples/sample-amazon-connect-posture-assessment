@@ -540,8 +540,8 @@ class AssessmentEngine:
                         instance_id=instance_id,
                         instance_arn=instance_detail["Arn"],
                         identity_management_type=instance_detail.get("IdentityManagementType"),
-                        inbound_calls_enabled=instance_detail["InboundCallsEnabled"],
-                        outbound_calls_enabled=instance_detail["OutboundCallsEnabled"],
+                        inbound_calls_enabled=instance_detail.get("InboundCallsEnabled"),
+                        outbound_calls_enabled=instance_detail.get("OutboundCallsEnabled"),
                         instance_alias=instance_detail.get("InstanceAlias"),
                         service_role=instance_detail.get("ServiceRole"),
                         status=instance_detail.get("InstanceStatus"),
@@ -672,47 +672,7 @@ class AssessmentEngine:
         findings: List[Finding] = []
 
         for instance in instances:
-            parsed_flows: Dict[str, Any] = {}
-            unusable_flow_ids: List[str] = []
-            for flow in instance.contact_flows:
-                if not flow.content:
-                    unusable_flow_ids.append(flow.id)
-                    continue
-                try:
-                    graph = parser.parse(flow.content)
-                    if (
-                        not graph.actions
-                        or not graph.entry_point_id
-                        or graph.entry_point_id not in graph.actions
-                    ):
-                        unusable_flow_ids.append(flow.id)
-                        continue
-                    # ContactFlowParser reads flow_id/flow_name from the
-                    # parsed JSON's "Identifier"/"Name" keys, but the raw
-                    # Content blob returned by DescribeContactFlow never
-                    # carries those fields — Id and Name live on the outer
-                    # ContactFlow API object, not inside Content. Left
-                    # unset, graph.flow_id is "" for every flow, which
-                    # collapses every flow's nodes onto the same
-                    # "::action_id" key in the super-graph (a real
-                    # cross-flow collision, not just a cosmetic label
-                    # gap) and makes every flow's entry point overwrite
-                    # the same "" dict key. Backfill both from the
-                    # ContactFlow object we already have.
-                    graph.flow_id = flow.id
-                    graph.flow_name = flow.name
-                    # Content carries no Type either; entry discovery needs it
-                    # to tell entry-capable flows from queue/whisper flows.
-                    graph.flow_type = flow.type or ""
-                    parsed_flows[flow.id] = graph
-                except Exception as e:  # noqa: BLE001
-                    unusable_flow_ids.append(flow.id)
-                    self.logger.debug(
-                        "Journey mapping: skipping unparseable flow %s (%s): %s",
-                        flow.id,
-                        flow.name,
-                        e,
-                    )
+            parsed_flows, unusable_flow_ids = self._parse_journey_flows(instance, parser)
 
             if not parsed_flows:
                 findings.extend(
@@ -1214,6 +1174,48 @@ class AssessmentEngine:
         )
         return entries, status
 
+    def _parse_journey_flows(
+        self, instance: ConnectInstance, parser: Any
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        """Parse an instance's flows for journey mapping.
+
+        Returns ``(parsed_flows, unusable_flow_ids)``. Shared by journey findings
+        and the HTML journey map so both see the same flow graphs.
+        """
+        parsed_flows: Dict[str, Any] = {}
+        unusable_flow_ids: List[str] = []
+        for flow in instance.contact_flows:
+            if not flow.content:
+                unusable_flow_ids.append(flow.id)
+                continue
+            try:
+                graph = parser.parse(flow.content)
+                if (
+                    not graph.actions
+                    or not graph.entry_point_id
+                    or graph.entry_point_id not in graph.actions
+                ):
+                    unusable_flow_ids.append(flow.id)
+                    continue
+                # Content never carries Identifier/Name/Type — they live on the
+                # outer ContactFlow object. Without the backfill every flow
+                # collapses onto the same "::action_id" super-graph key, and
+                # entry discovery cannot tell entry-capable flows from
+                # queue/whisper flows.
+                graph.flow_id = flow.id
+                graph.flow_name = flow.name
+                graph.flow_type = flow.type or ""
+                parsed_flows[flow.id] = graph
+            except Exception as e:  # noqa: BLE001
+                unusable_flow_ids.append(flow.id)
+                self.logger.debug(
+                    "Journey mapping: skipping unparseable flow %s (%s): %s",
+                    flow.id,
+                    flow.name,
+                    e,
+                )
+        return parsed_flows, unusable_flow_ids
+
     def _journey_map_targets(
         self,
         instance: ConnectInstance,
@@ -1244,10 +1246,13 @@ class AssessmentEngine:
                     "flow_id": flow_id,
                 }
             )
-        cached = getattr(self, "_journey_entry_points", {}).get(instance.instance_id)
-        if not cached:
-            return voice_targets, non_flow
-        return [
+        # Voice numbers always come from this method's own lookup, so a voice
+        # lookup error inside entry discovery cannot remove them from the map.
+        # Discovery adds everything else: SMS, WhatsApp, email, and observed
+        # entry flows on any channel.
+        discovered = self._journey_entry_points_for_map(instance)
+        seen = {(t["channel"], t["entry_type"], t["identifier"]) for t in voice_targets}
+        extra = [
             {
                 "channel": e.channel,
                 "entry_type": e.entry_type,
@@ -1256,8 +1261,44 @@ class AssessmentEngine:
                 "description": e.description,
                 "flow_id": e.contact_flow_id,
             }
-            for e in cached
-        ], non_flow
+            for e in discovered
+            if not (e.channel == "VOICE" and e.entry_type != "OBSERVED_FLOW")
+            and (e.channel, e.entry_type, e.identifier) not in seen
+        ]
+        return voice_targets + extra, non_flow
+
+    def _journey_entry_points_for_map(self, instance: ConnectInstance) -> List[Any]:
+        """Entry points for the map, discovering them if journey findings did not.
+
+        Journey findings cache what they discover. When no journey control was
+        selected (for example ``--checks sec-ip-access-001``) nothing is cached,
+        and the map would otherwise fall back to voice only, hiding SMS,
+        WhatsApp and email entries. Fails open to an empty list.
+        """
+        cache = getattr(self, "_journey_entry_points", None)
+        if cache is None:
+            cache = self._journey_entry_points = {}
+        if instance.instance_id in cache:
+            return cache[instance.instance_id]
+        try:
+            from .journey.topology import discover_entry_points
+            from .parsers import ContactFlowParser
+
+            parsed_flows, _ = self._parse_journey_flows(instance, ContactFlowParser())
+            entries = discover_entry_points(
+                instance.instance_id,
+                instance.instance_arn,
+                self.aws_client_factory,
+                parsed_flows,
+                self.config,
+            ).entry_points
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(
+                "Journey map entry discovery failed for %s: %s", instance.display_name, e
+            )
+            entries = []
+        cache[instance.instance_id] = entries
+        return entries
 
     def _enrich_journey_resource_details(
         self,

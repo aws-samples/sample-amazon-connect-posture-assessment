@@ -84,4 +84,16 @@ notifies someone.
   API answers that the account "is not allowed to use this feature", which
   `sec-ip-access-001` reports as a finding.
 - Cost Anomaly Detection monitors and Budgets in an AWS Organizations
-  management account are not visible from a member account.
+  management account are not visible from a member account. Both services are
+  absent from AWS GovCloud (US), whose billing lives in the associated standard
+  account.
+- The default authentication profile applies to all users, and the API exposes
+  no profile-to-user assignment, so `sec-ip-access-001` passes only when every
+  profile carries an allow list.
+- `+1` covers the US, Canada, and the Caribbean/Atlantic NANP members, which are
+  billed internationally and are frequent fraud targets; `sec-outbound-dest-001`
+  treats each member's area code as its own country.
+- `TRANSFER` contacts are agent-to-agent or agent-to-queue transfers whose
+  endpoint is the original caller, so they are not sampled. External legs are
+  `EXTERNAL_OUTBOUND` contacts, which are sampled, and configured external
+  destinations are read from phone-number quick connects.
