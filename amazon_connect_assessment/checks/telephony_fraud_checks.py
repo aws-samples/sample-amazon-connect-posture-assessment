@@ -636,6 +636,11 @@ class OutboundDestinationCheck(BaseCheck):
         # Configured external destinations agents can transfer to, whether or
         # not anyone has dialed them yet. Names are recorded, numbers are not.
         quick_connect_keys: Dict[str, List[str]] = {}
+        # Unreadable quick connects make the review incomplete, like unreadable
+        # contacts below: a later FAIL still stands, but a PASS becomes SKIPPED.
+        quick_connect_read_failures = 0
+        quick_connect_list_failed = False
+        summaries: List[Dict[str, Any]] = []
         try:
             summaries = _paginate_connect(
                 lambda **kw: _connect(
@@ -648,25 +653,29 @@ class OutboundDestinationCheck(BaseCheck):
                 ),
                 "QuickConnectSummaryList",
             )
-            for summary in summaries:
+        except Exception as e:  # noqa: BLE001
+            if factory.is_access_denied(e):
+                return self.skipped_for_access_denied(context, "connect:ListQuickConnects")
+            quick_connect_list_failed = True
+        for summary in summaries:
+            try:
                 detail = _connect(
                     factory,
                     "describe_quick_connect",
                     InstanceId=instance.instance_id,
                     QuickConnectId=summary["Id"],
                 ).get("QuickConnect", {})
-                config = (detail.get("QuickConnectConfig") or {}).get("PhoneConfig") or {}
-                key = destination_key(config.get("PhoneNumber", ""))
-                if key:
-                    quick_connect_keys.setdefault(key, []).append(
-                        detail.get("Name") or summary.get("Name") or summary["Id"]
-                    )
-        except Exception as e:  # noqa: BLE001
-            if factory.is_access_denied(e):
-                return self.skipped_for_access_denied(
-                    context, "connect:ListQuickConnects, connect:DescribeQuickConnect"
+            except Exception as e:  # noqa: BLE001
+                if factory.is_access_denied(e):
+                    return self.skipped_for_access_denied(context, "connect:DescribeQuickConnect")
+                quick_connect_read_failures += 1
+                continue
+            config = (detail.get("QuickConnectConfig") or {}).get("PhoneConfig") or {}
+            key = destination_key(config.get("PhoneNumber", ""))
+            if key:
+                quick_connect_keys.setdefault(key, []).append(
+                    detail.get("Name") or summary.get("Name") or summary["Id"]
                 )
-            raise
 
         end = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(second=0, microsecond=0)
         start = end - timedelta(days=_DESTINATION_LOOKBACK_DAYS)
@@ -737,6 +746,8 @@ class OutboundDestinationCheck(BaseCheck):
             "outbound_contacts_in_window": total,
             "sampled_contacts": len(contacts),
             "destination_read_failures": read_failures,
+            "quick_connect_read_failures": quick_connect_read_failures,
+            "quick_connect_list_failed": quick_connect_list_failed,
             "non_telephone_endpoints": non_phone,
             "home_destinations": [_key_label(k) for k in home],
             "destinations_by_country": {_key_label(k): n for k, n in sorted(by_key.items())},
@@ -814,14 +825,26 @@ class OutboundDestinationCheck(BaseCheck):
                 **common,
             )
 
-        if read_failures:
+        if read_failures or quick_connect_read_failures or quick_connect_list_failed:
             # A clean result on a partial sample would be a false PASS.
+            gaps = []
+            if read_failures:
+                gaps.append(
+                    f"{read_failures} of {len(contacts)} sampled outbound contact(s) could not "
+                    "be read"
+                )
+            if quick_connect_list_failed:
+                gaps.append("the phone-number quick connects could not be listed")
+            elif quick_connect_read_failures:
+                gaps.append(
+                    f"{quick_connect_read_failures} of {len(summaries)} phone-number quick "
+                    "connect(s) could not be read"
+                )
             return self.create_finding(
                 status=CheckStatus.SKIPPED,
                 description=(
-                    f"Skipped: {read_failures} of {len(contacts)} sampled outbound contact(s) "
-                    f"from instance {instance.display_name} could not be read, so the "
-                    "destination review is incomplete. No unexpected destination was seen in "
+                    f"Skipped: on instance {instance.display_name}, {'; and '.join(gaps)}, so "
+                    "the destination review is incomplete. No unexpected destination was seen in "
                     "the rest."
                 ),
                 evidence={**evidence, "evidence_complete": False},

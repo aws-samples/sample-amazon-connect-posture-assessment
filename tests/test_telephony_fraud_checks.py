@@ -620,6 +620,65 @@ class TestThirdReview:
         assert "Remote site" in finding.description
         assert "+8816123456" not in str(finding.evidence) + finding.description
 
+    @staticmethod
+    def _failing(factory, operation, code, only_ids=None):
+        """Make ``operation`` raise ``code`` (optionally only for some quick connects)."""
+        orig = factory.call_api_with_resilience.side_effect
+
+        def _call(client, op, service=None, **kwargs):
+            if op == operation and (only_ids is None or kwargs.get("QuickConnectId") in only_ids):
+                raise _client_error(code)
+            return orig(client, op, service, **kwargs)
+
+        factory.call_api_with_resilience.side_effect = _call
+        return factory
+
+    def test_unreadable_quick_connect_skips_rather_than_errors(self):
+        factory = self._failing(
+            _dest_factory(
+                ["+12065550111"],
+                quick_connects={"Office": "+12065550199", "Broken": "+12065550198"},
+            ),
+            "describe_quick_connect",
+            "InternalServiceException",
+            {"Broken"},
+        )
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+        assert "1 of 2 phone-number quick connect(s) could not be read" in finding.description
+        assert finding.evidence["quick_connect_read_failures"] == 1
+        assert finding.evidence["evidence_complete"] is False
+
+    def test_unreadable_quick_connect_does_not_hide_a_flagged_one(self):
+        factory = self._failing(
+            _dest_factory([], quick_connects={"Remote site": "+8816123456", "Broken": "+1206"}),
+            "describe_quick_connect",
+            "InternalServiceException",
+            {"Broken"},
+        )
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.FAIL
+        assert finding.evidence["quick_connect_read_failures"] == 1
+
+    def test_quick_connect_list_failure_skips_rather_than_errors(self):
+        factory = self._failing(
+            _dest_factory(["+12065550111"]), "list_quick_connects", "InternalServiceException"
+        )
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+        assert "quick connects could not be listed" in finding.description
+        assert finding.evidence["quick_connect_list_failed"] is True
+
+    def test_quick_connect_describe_access_denied_names_the_permission(self):
+        factory = self._failing(
+            _dest_factory([], quick_connects={"Office": "+12065550199"}),
+            "describe_quick_connect",
+            "AccessDeniedException",
+        )
+        finding = OutboundDestinationCheck().execute(_ctx(factory))
+        assert finding.status == CheckStatus.SKIPPED
+        assert "connect:DescribeQuickConnect" in str(finding.evidence) + finding.description
+
     @pytest.mark.parametrize("check_cls", [OutboundPermissionScopeCheck, OutboundDestinationCheck])
     def test_unreported_outbound_setting_skips_rather_than_not_applicable(self, check_cls):
         instance = _instance()
